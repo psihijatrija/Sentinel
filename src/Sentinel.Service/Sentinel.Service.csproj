@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>2.9.4</Version>
+    <Company>Sentinel Security</Company>
+    <Product>Sentinel Endpoint Detection and Response</Product>
+    <Description>Sentinel EDR Windows Service Host</Description>
+    <Copyright>Copyright (c) 2026 Sentinel Contributors</Copyright>
+    <Authors>Sentinel</Authors>
+    <Platforms>AnyCPU;x64</Platforms>
+    <ApplicationIcon>..\..\installer\assets\Sentinel.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sentinel.Core\Sentinel.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+
+</Project>

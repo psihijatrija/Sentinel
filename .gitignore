@@ -1,0 +1,69 @@
+# Build outputs
+**/bin/
+**/obj/
+
+# IDE
+.idea/
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# Claude / AI
+.claude/
+
+# NuGet
+*.nupkg
+**/packages/
+
+# Installer build outputs (keep setup.iss, not the compiled exes)
+installer/output/
+installer/publish/
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Debug outputs
+*.log
+stderr.txt
+stdout.txt
+
+# Scan output files (ephemeral debug artifacts)
+*.out
+
+# Build/CI marker files
+qc
+qfailure
+query
+installer/stop
+
+# Release binaries (use GitHub Releases for distribution)
+releases/
+
+# GIDE history (AI tool artifact)
+.gide_history.json
+publish/
+installer/*.exe
+
+# Large files (>25MB)
+installer/WindowsSentinelSetup-1.2.5.exe
+publish/service/WindowsSentinel.Service.exe
+publish/agent/WindowsSentinel.Agent.exe
+
+# Kiro workspace config (steering, specs, hooks) is tracked so it travels with the repo.
+
+# Semantic review artifacts (not source)
+semantic-review/
+
+# Test result artifacts
+**/TestResults/
