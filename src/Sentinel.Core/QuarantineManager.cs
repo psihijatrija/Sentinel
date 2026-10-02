@@ -146,8 +146,22 @@ namespace Sentinel.Core
                 throw new FileNotFoundException("File not found for quarantine", filePath);
             }
 
-            // v1.6.3 CRITICAL: Never quarantine OS / WRP paths - production FP quarantined
-            // C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe after an AMSI false positive,
+            // Also avoid quarantining known installer executables (e.g., git.exe) which are legitimate installers.
+// Use InstallerHeuristics.IsLikelyInstallerPath to whitelist such installer paths.
+if (InstallerHeuristics.IsLikelyInstallerPath(filePath))
+    return null; // skip quarantine for installer-like paths
+// Whitelist specific Git executable paths (exact matches)
+            var trustedGitPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                @"C:\Program Files\Git\mingw64\bin\git.exe",
+                @"C:\Program Files\Git\mingw64\libexec\git-core\git-remote-https.exe",
+                @"C:\Program Files\Git\mingw64\libexec\git-core\git.exe",
+                @"C:\Program Files\Git\cmd\git.exe"
+            };
+
+            if (trustedGitPaths.Contains(Path.GetFullPath(filePath)))
+                return null;
+
             // removing the host binary and breaking PowerShell / shell integrations system-wide.
             // forceQuarantineSigned cannot override this gate.
             if (SecurityValidation.IsOsCriticalPath(filePath))
