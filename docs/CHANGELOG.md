@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.9.5] - 2026-10-02
+
+### Changed
+- Bump version to 2.9.5.
+- Extend QuarantineManager with installer path whitelist and trusted Git executable paths.
+- Update project files (installer/setup.iss and .csproj files) for build adjustments.
+
 
 
 ## [2.9.4] - 2026-10-01
