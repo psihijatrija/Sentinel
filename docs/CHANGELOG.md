@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.9.7] - 2026-10-04
+
+### Added
+- **Opt-in aggressive unsigned-DLL sweep** (`AggressiveUnsignedDllSweepMonitor`, gated behind `SentinelConfig.EnableAggressiveUnsignedDllSweep`, compiled default **false**). Walks ready Fixed/Removable/Network drives plus a System32 pass for `*.dll`/`*.winmd`, skips OS-critical/system/GAC/install/quarantine paths, verifies Authenticode, and quarantines unsigned candidates via the existing encrypted-vault `QuarantineManager`. Routed through SystemIntegrity (not Critical); no shelling out, no process-kill.
+- **IDS command-line detection rule** (`IdsCommandLineRule`, Tier2Indicator / LogOnly). Matches process command lines against 18 compiled LOLBin/evasion patterns (certutil download, encoded PowerShell, bitsadmin, mshta remote, etc.). Observe-only; never triggers a response.
+- **Pseudo-HIPS Phase 1** (userland, within hard constraints):
+  - *Audit-first ASR tier* in `HardeningModule` — new lockout-capable ASR rules ship in Audit (`2`) before enforcement; `c1db55ab` stays out of Block, Safe-Mode-reboot rule excluded.
+  - *Self-process mitigations* via `SetProcessMitigationPolicy` (CFG, DEP, strict-handle, extension-point-disable, image-load policy); `BlockNonMicrosoftBinaries` gated on a signed build. All fail-soft.
+  - *Terminal-class fast lane* in `DetectionEngine` — a priority `Channel<T>` routes `IsAttackClassTerminal` events to response ahead of the normal queue; Tier2-never-acts and the mandatory pre-action audit are preserved.
+- **SentinelAutoRotate** — a standalone net48 tool (fully decoupled from the EDR runtime; no project references in either direction) that rotates a local account's password to a strong random value every 10 minutes and keeps the host auto-logged-in via the LSA `DefaultPassword` secret. Bundled in the installer behind an **unchecked-by-default** opt-in checkbox with a label stating the autologon + machine-recoverable-credential tradeoff. Never blanks the password.
+
+### Changed
+- **Quarantine git allowlist is now signer-based.** Replaced the hardcoded list of absolute `git.exe` paths in `QuarantineManager` with a trusted-publisher check (valid Authenticode signature + signer in a `TrustedPublishers` set, e.g. `Johannes Schindelin`). Path-independent and not attacker-controllable, per the "no attacker-controllable trust" constraint.
+- Removed stale build/test scratch files from the repo root; `*.trx` now git-ignored.
+- Version stamp 2.9.6 → 2.9.7.
+
+### Notes
+- Investigation of a historical (several Windows installs ago) `git push` hang found **no current-code bug**: Tier2 observe-only network signals cannot drive an egress block. A possible future consistency improvement (a shared trusted-publisher gate before `NetworkIsolate`) is noted but not required for this release.
+
 ## [2.9.5] - 2026-10-02
 
 ### Changed
