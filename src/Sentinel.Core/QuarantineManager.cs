@@ -22,6 +22,21 @@ namespace Sentinel.Core
         /// <summary>v1.8.1 RT-NEW-5: refuse multi-GB in-memory quarantine (OOM / service death).</summary>
         public const long MaxQuarantineFileBytes = 128L * 1024 * 1024;
 
+        /// <summary>
+        /// Authenticode signer common-names (as returned by
+        /// <see cref="SecurityValidation.TryGetAuthenticodePublisher"/>) that are never quarantined
+        /// when the file carries a VALID signature. Signer identity is the non-attacker-controllable
+        /// anchor required by constraints.md ("no attacker-controllable trust") - a filename or path
+        /// must never self-authorize, but a forged publisher subject on a validly-signed binary is
+        /// not achievable. Extend this set rather than reintroducing per-path allowlists.
+        ///   - "Johannes Schindelin": the Git for Windows release signer.
+        /// </summary>
+        private static readonly HashSet<string> TrustedPublishers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                "Johannes Schindelin",
+            };
+
         public string QuarantineDirectory => _quarantineDir;
 
         public QuarantineManager(string? customPath = null)
@@ -146,21 +161,32 @@ namespace Sentinel.Core
                 throw new FileNotFoundException("File not found for quarantine", filePath);
             }
 
-            // Also avoid quarantining known installer executables (e.g., git.exe) which are legitimate installers.
-// Use InstallerHeuristics.IsLikelyInstallerPath to whitelist such installer paths.
-if (InstallerHeuristics.IsLikelyInstallerPath(filePath))
-    return null; // skip quarantine for installer-like paths
-// Whitelist specific Git executable paths (exact matches)
-            var trustedGitPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                @"C:\Program Files\Git\mingw64\bin\git.exe",
-                @"C:\Program Files\Git\mingw64\libexec\git-core\git-remote-https.exe",
-                @"C:\Program Files\Git\mingw64\libexec\git-core\git.exe",
-                @"C:\Program Files\Git\cmd\git.exe"
-            };
+            // Avoid quarantining known installer executables (e.g. ChromeSetup) which are legitimate.
+            if (InstallerHeuristics.IsLikelyInstallerPath(filePath))
+                return null; // skip quarantine for installer-like paths
 
-            if (trustedGitPaths.Contains(Path.GetFullPath(filePath)))
-                return null;
+            // Trusted-publisher allowlist (signer-based, path-independent).
+            //
+            // Replaces an older hardcoded list of absolute git.exe paths. Four literal paths
+            // were fragile (broke for Git installed to D:\, Program Files (x86), %LOCALAPPDATA%
+            // per-user, winget/scoop/choco, or the Git \bin\ dir the list didn't even cover) and,
+            // worse, path-only trust is attacker-controllable: a planted git.exe at one of those
+            // paths would self-authorize, violating "no attacker-controllable trust" (constraints.md).
+            //
+            // The non-attacker-controllable anchor is the Authenticode signer. We require a VALID
+            // signature (so the subject can't be forged) AND a signer in the trusted set. This holds
+            // at any install location and even on forceQuarantineSigned callers (impostor /
+            // dashboard-remediate), where the generic signed-file refusal below is intentionally
+            // bypassed but a genuine Git binary must still be spared.
+            if (SecurityValidation.VerifyAuthenticodeSignature(filePath))
+            {
+                var publisher = SecurityValidation.TryGetAuthenticodePublisher(filePath);
+                if (!string.IsNullOrWhiteSpace(publisher) &&
+                    TrustedPublishers.Contains(publisher!))
+                {
+                    return null; // signed by a trusted publisher - never quarantine
+                }
+            }
 
             // removing the host binary and breaking PowerShell / shell integrations system-wide.
             // forceQuarantineSigned cannot override this gate.
