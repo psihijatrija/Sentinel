@@ -351,6 +351,304 @@ namespace Sentinel.Core
     }
 
     /// <summary>
+    /// OPT-IN AGGRESSIVE unsigned-DLL drive sweep. Mirrors the PS script's
+    /// Invoke-UnsignedDLLRemover: walks ready Fixed/Removable/Network drive roots (plus an
+    /// explicit System32 pass) for *.dll/*.winmd (capped per drive), verifies Authenticode, and
+    /// quarantines validly-unsigned candidates through Sentinel's EXISTING QuarantineManager
+    /// (delete-on-reboot handles locked files - NO process-kill, NO shelling out).
+    ///
+    /// Entirely gated behind SentinelConfig.EnableAggressiveUnsignedDllSweep (compiled default
+    /// FALSE). When the flag is false the monitor returns immediately. Registered in the Service
+    /// SystemIntegrity group only. Modeled on <see cref="LnkUncGuard"/>.
+    /// </summary>
+    public sealed class AggressiveUnsignedDllSweepMonitor : BackgroundService
+    {
+        private readonly DetectionEngine _detectionEngine;
+        private readonly QuarantineManager _quarantine;
+        private readonly ILogger<AggressiveUnsignedDllSweepMonitor> _logger;
+        private readonly SentinelConfig _config;
+
+        // No static mutable state: per-instance cooldown + quarantined-hash caches.
+        private readonly ConcurrentDictionary<string, DateTime> _alerted = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, byte> _quarantinedHashes = new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly TimeSpan ScanInterval = TimeSpan.FromMinutes(30);
+        private static readonly TimeSpan SettleDelay = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan AlertCooldown = TimeSpan.FromHours(1);
+        private const int MaxFilesPerDrive = 500;
+
+        public AggressiveUnsignedDllSweepMonitor(
+            DetectionEngine de,
+            QuarantineManager quarantine,
+            ILogger<AggressiveUnsignedDllSweepMonitor> logger,
+            SentinelConfig config)
+        {
+            _detectionEngine = de;
+            _quarantine = quarantine;
+            _logger = logger;
+            _config = config;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken ct)
+        {
+            if (!_config.EnableAggressiveUnsignedDllSweep)
+            {
+                _logger.LogInformation("[AggressiveUnsignedDllSweep] disabled (EnableAggressiveUnsignedDllSweep=false)");
+                return;
+            }
+
+            _logger.LogInformation("[AggressiveUnsignedDllSweep] Started - aggressive unsigned *.dll/*.winmd quarantine sweep ARMED");
+
+            try { await Task.Delay(SettleDelay, ct); } catch (OperationCanceledException) { return; }
+
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await ScanAllAsync(ct);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[AggressiveUnsignedDllSweep] Scan error");
+                }
+
+                try { await Task.Delay(ScanInterval, ct); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+
+        /// <summary>
+        /// Enumerates ready Fixed/Removable/Network drive roots (plus an explicit System32 pass
+        /// for parity with the script - those files are skipped by <see cref="ShouldSkipPath"/>),
+        /// walks *.dll/*.winmd capped per drive, and quarantines validly-unsigned candidates.
+        /// Returns the number of files quarantined.
+        /// </summary>
+        internal async Task<int> ScanAllAsync(CancellationToken ct = default)
+        {
+            int findings = 0;
+
+            foreach (var root in GetScanRoots())
+            {
+                if (ct.IsCancellationRequested) break;
+                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) continue;
+
+                IEnumerable<string> files;
+                try
+                {
+                    files = EnumerateCandidates(root);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[AggressiveUnsignedDllSweep] Failed to enumerate {Root}", root);
+                    continue;
+                }
+
+                foreach (var file in files.Take(MaxFilesPerDrive))
+                {
+                    if (ct.IsCancellationRequested) break;
+                    try
+                    {
+                        if (await EvaluateFileAsync(file, ct))
+                            findings++;
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[AggressiveUnsignedDllSweep] Failed to evaluate {Path}", file);
+                    }
+                }
+            }
+
+            return findings;
+        }
+
+        private static IEnumerable<string> EnumerateCandidates(string root)
+        {
+            IEnumerable<string> dlls;
+            IEnumerable<string> winmds;
+            try { dlls = Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories); }
+            catch { dlls = Enumerable.Empty<string>(); }
+            try { winmds = Directory.EnumerateFiles(root, "*.winmd", SearchOption.AllDirectories); }
+            catch { winmds = Enumerable.Empty<string>(); }
+            return dlls.Concat(winmds);
+        }
+
+        private static IEnumerable<string> GetScanRoots()
+        {
+            var roots = new List<string>();
+
+            try
+            {
+                foreach (var d in DriveInfo.GetDrives())
+                {
+                    try
+                    {
+                        if (!d.IsReady) continue;
+                        if (d.DriveType is DriveType.Fixed or DriveType.Removable or DriveType.Network)
+                            roots.Add(d.RootDirectory.FullName);
+                    }
+                    catch { /* skip unreadable drive */ }
+                }
+            }
+            catch { /* ignore */ }
+
+            // Explicit System32 pass for parity with the PS script (skipped by ShouldSkipPath).
+            try
+            {
+                var sys32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
+                if (!string.IsNullOrWhiteSpace(sys32))
+                    roots.Add(sys32);
+            }
+            catch { /* ignore */ }
+
+            return roots.Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Returns true when <paramref name="path"/> must be SKIPPED (never quarantined): any
+        /// OS-critical / OS-servicing / keep-tree location, the System32/SysWOW64/WinSxS/servicing
+        /// trees, Program Files, the GAC, the Sentinel install dir, the quarantine vault, or the
+        /// honeypot folder. Fails CLOSED (returns true/skip) on any error. Pure - unit-testable.
+        /// </summary>
+        internal static bool ShouldSkipPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return true;
+
+            try
+            {
+                if (SecurityValidation.IsOsCriticalPath(path)
+                    || ModuleIdentity.IsOsServicingPath(path)
+                    || ModuleIdentity.IsKeepTree(path))
+                    return true;
+
+                var lower = Path.GetFullPath(path).ToLowerInvariant();
+
+                string[] skipFragments =
+                {
+                    @"\windows\system32\",
+                    @"\windows\syswow64\",
+                    @"\windows\winsxs\",
+                    @"\windows\servicing\",
+                    @"\program files\",
+                    @"\program files (x86)\",
+                    @"\assembly\", // GAC
+                    @"\" + HoneypotDllMonitor.HoneypotSubdir + @"\",
+                };
+
+                foreach (var frag in skipFragments)
+                {
+                    if (lower.IndexOf(frag, StringComparison.Ordinal) >= 0)
+                        return true;
+                }
+
+                // Never touch our own install dir or the quarantine vault.
+                if (SelfPathGuard.IsUnderInstallDirectory(path))
+                    return true;
+
+                return false;
+            }
+            catch
+            {
+                // Fail closed: if we cannot classify the path, do NOT quarantine it.
+                return true;
+            }
+        }
+
+        private async Task<bool> EvaluateFileAsync(string path, CancellationToken ct)
+        {
+            if (ShouldSkipPath(path)) return false;
+
+            // Validly-signed modules are left alone.
+            try
+            {
+                if (SecurityValidation.VerifyAuthenticodeSignature(path))
+                    return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[AggressiveUnsignedDllSweep] Signature check failed for {Path}", path);
+                return false;
+            }
+
+            // Unsigned candidate. Honor the per-file cooldown unless its hash is already in the
+            // quarantined cache (then we re-quarantine a re-dropped file).
+            var hash = TryComputeHash(path);
+            bool knownQuarantined = hash != null && _quarantinedHashes.ContainsKey(hash);
+
+            var now = DateTime.UtcNow;
+            if (!knownQuarantined
+                && _alerted.TryGetValue(path, out var last)
+                && now - last < AlertCooldown)
+                return false;
+            _alerted[path] = now;
+
+            string? quarantined;
+            try
+            {
+                // The manager still refuses IsOsCriticalPath internally even when forced - rely
+                // on that safety net; do NOT reimplement quarantine, do NOT shell out.
+                quarantined = await _quarantine.QuarantineFileAtomicAsync(path, forceQuarantineSigned: true);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[AggressiveUnsignedDllSweep] Quarantine failed for {Path}", path);
+                return false;
+            }
+
+            if (quarantined == null)
+                return false;
+
+            if (hash != null)
+                _quarantinedHashes[hash] = 1;
+
+            await _detectionEngine.EmitAsync(new DetectionEvent
+            {
+                RuleName = "DLL Sweep: Unsigned Module Quarantined",
+                Evidence = $"Unsigned module '{path}' (no valid Authenticode signature) " +
+                           $"quarantined as {Path.GetFileName(quarantined)}",
+                Reasoning = "Opt-in aggressive unsigned-DLL sweep: this *.dll/*.winmd outside the " +
+                            "OS/system/program trees carries no valid Authenticode signature. Unsigned " +
+                            "modules dropped into user-writable locations are a common sideloading / " +
+                            "persistence vector, so the file was moved to the quarantine vault " +
+                            "(delete-on-reboot clears it if locked).",
+                Confidence = 0.85,
+                Tier = DetectionTier.Tier1Behavioral,
+                AuthorizedResponse = ResponseAction.Quarantine,
+                ProcessName = "dllsweep",
+                ProcessId = 0,
+                SignalType = SignalType.SuspiciousProcess,
+                Metadata = new Dictionary<string, string>
+                {
+                    ["Path"] = path,
+                    ["SignatureStatus"] = "Unsigned",
+                    ["Quarantined"] = "true",
+                    ["QuarantinePath"] = quarantined
+                }
+            });
+
+            return true;
+        }
+
+        private string? TryComputeHash(string path)
+        {
+            try
+            {
+                using var sha = SHA256.Create();
+                using var fs = File.OpenRead(path);
+                var bytes = sha.ComputeHash(fs);
+                return BitConverter.ToString(bytes).Replace("-", string.Empty);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[AggressiveUnsignedDllSweep] Hash failed for {Path}", path);
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
     /// Detects ransomware/scareware and fake system dialogs via process MainWindowTitle
     /// heuristics. Port of Detection/RansomwareScarewareDetection.ps1 + FakeUacDetection.ps1.
     /// Must run in the user session (Agent) so MainWindowTitle is visible.

@@ -773,7 +773,8 @@ namespace Sentinel.Service
                             ("LegacyHiveMonitor",               s => s.GetRequiredService<LegacyHiveMonitor>()),
                             ("CloudFilesHydrationMonitor",      s => s.GetRequiredService<CloudFilesHydrationMonitor>()),
                             ("ClfsExploitationMonitor",         s => s.GetRequiredService<ClfsExploitationMonitor>()),
-                            ("StateReconciliationMonitor",      s => s.GetRequiredService<StateReconciliationMonitor>())
+                            ("StateReconciliationMonitor",      s => s.GetRequiredService<StateReconciliationMonitor>()),
+                            ("AggressiveUnsignedDllSweepMonitor", s => s.GetRequiredService<AggressiveUnsignedDllSweepMonitor>())
                         );
                         return new MonitorGroup(
                             new MonitorGroupConfig
@@ -794,6 +795,9 @@ namespace Sentinel.Service
                     // diff of long-lived processes. Reboot-durable baseline store + monitor.
                     services.AddSingleton<ModuleBaselineStore>();
                     services.AddSingleton<StateReconciliationMonitor>();
+                    // Opt-in aggressive unsigned-DLL drive sweep (gated behind
+                    // SentinelConfig.EnableAggressiveUnsignedDllSweep, compiled default FALSE).
+                    services.AddSingleton<AggressiveUnsignedDllSweepMonitor>();
                     services.AddSingleton<FirewallIntegrityMonitor>();
                     services.AddSingleton<SecureBootIntegrityMonitor>();
                     services.AddSingleton<WindowsUpdateIntegrityMonitor>();
