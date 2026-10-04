@@ -4,7 +4,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>2.9.7</Version>
+    <Version>2.9.8</Version>
     <Company>Sentinel Security</Company>
     <Product>Sentinel Endpoint Detection and Response</Product>
     <Description>Userland endpoint detection and response (EDR) core engine for Windows</Description>
