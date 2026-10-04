@@ -28,6 +28,23 @@ namespace Sentinel.Core
                 SingleReader = true,
                 SingleWriter = false
             });
+
+        // 1D terminal-class fast lane (FEAT-002): a second, smaller high-priority queue drained
+        // with precedence so terminal-class telemetry (BYOVD loaders, kernel-exploit scaffolds,
+        // confirmed C2, etc.) reaches the response path without waiting behind the normal rule
+        // sweep. This is SCHEDULING ONLY - events in this lane run the identical ProcessContextAsync
+        // body and still flow ProcessDetectionAsync -> HandleDetectionEventAsync ->
+        // AdvancedResponseEngine.HandleAsync, so all tier law, the Tier2-never-acts gate,
+        // observe-until-chain, and the mandatory pre-action audit still apply. Routing in
+        // SubmitTelemetry is mutually exclusive, so an event enters exactly one lane.
+        private const int PriorityChannelCapacity = 1_000;
+        private readonly Channel<FusedTelemetryContext> _priorityChannel =
+            Channel.CreateBounded<FusedTelemetryContext>(new BoundedChannelOptions(PriorityChannelCapacity)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false
+            });
         private readonly ConcurrentDictionary<(string, int), DateTime> _dedupCache = new();
         private int _dedupOps;
         private readonly SentinelMetrics _metrics;
@@ -86,11 +103,73 @@ namespace Sentinel.Core
         public void SubmitTelemetry(FusedTelemetryContext context)
         {
             _metrics.RecordTelemetryReceived();
+
+            // FEAT-002 1D: mutually-exclusive routing. Terminal-class telemetry jumps the
+            // high-priority lane; everything else keeps the existing normal-lane behavior.
+            // Exactly one lane per event - no double-processing (dedup is unchanged downstream).
+            if (ShouldFastLane(context, ResponsePolicy.DefaultMinTier1Confidence))
+            {
+                // DropOldest on the priority lane too; this is a scheduling hint, not authority.
+                _priorityChannel.Writer.TryWrite(context);
+                return;
+            }
+
             // DropOldest: TryWrite always accepts; oldest is discarded under pressure.
             // Approximate drop signal when channel is saturated (Count ~= capacity).
             if (_telemetryChannel.Reader.Count >= TelemetryChannelCapacity - 1)
                 _metrics.RecordTelemetryDropped();
             _telemetryChannel.Writer.TryWrite(context);
+        }
+
+        /// <summary>
+        /// Pure scheduling hint (FEAT-002 1D): decides whether a telemetry context should take
+        /// the terminal-class fast lane. Derives a DetectionEvent-shaped candidate from
+        /// <paramref name="context"/>.TriggeringEvent and returns true ONLY when
+        /// <see cref="ResponsePolicy.IsAttackClassTerminal"/> is true for that candidate AND the
+        /// candidate's confidence meets <paramref name="minConfidence"/>.
+        ///
+        /// This is NEVER an authorization decision - it only changes queue ordering. The real
+        /// detection still flows through the rule sweep and ProcessDetectionAsync ->
+        /// HandleDetectionEventAsync -> AdvancedResponseEngine.HandleAsync, where tier law, the
+        /// Tier2-never-acts gate, observe-until-chain, and the mandatory pre-action audit decide
+        /// what (if anything) actually happens. The triggering telemetry carries no confidence of
+        /// its own, so a candidate derived from a terminal-class signal is treated at full
+        /// confidence; the gate is therefore driven by the attack-class classification (which
+        /// includes the PID &lt;= 4 guard) plus the terminal rule-name mapping. If the triggering
+        /// event cannot be mapped to a terminal-class rule name, this returns false.
+        /// </summary>
+        internal static bool ShouldFastLane(FusedTelemetryContext context, double minConfidence)
+        {
+            if (context?.TriggeringEvent == null)
+                return false;
+
+            var trigger = context.TriggeringEvent;
+
+            // The only semantic label a raw telemetry event carries is its Type; map that to a
+            // candidate rule name. Prefer the fused context's PID/name (populated by the fusion
+            // engine), falling back to the triggering event's own fields.
+            var ruleName = trigger.Type;
+            if (string.IsNullOrEmpty(ruleName))
+                return false;
+
+            var pid = context.ProcessId != 0 ? context.ProcessId : trigger.ProcessId;
+            var processName = !string.IsNullOrEmpty(context.ProcessName)
+                ? context.ProcessName
+                : trigger.ProcessName;
+
+            var candidate = new DetectionEvent
+            {
+                RuleName = ruleName,
+                ProcessId = pid,
+                ProcessName = processName ?? string.Empty,
+                // Telemetry has no confidence of its own; a terminal-class signal is treated at
+                // full confidence so the gate is governed by the terminal classification and the
+                // minConfidence floor, not by an absent telemetry score.
+                Confidence = 1.0,
+            };
+
+            return ResponsePolicy.IsAttackClassTerminal(candidate)
+                   && candidate.Confidence >= minConfidence;
         }
 
         public async Task EmitAsync(DetectionEvent detectionEvent)
@@ -144,22 +223,79 @@ namespace Sentinel.Core
         {
             try
             {
-                var reader = _telemetryChannel.Reader;
-                while (await reader.WaitToReadAsync(_cts.Token))
+                var ct = _cts.Token;
+                var priorityReader = _priorityChannel.Reader;
+                var normalReader = _telemetryChannel.Reader;
+
+                // Single drain loop awaiting readability on EITHER lane. Each iteration FIRST fully
+                // drains the priority lane, THEN consumes a single normal-lane item, then loops back
+                // to re-check priority first - so terminal-class telemetry never queues behind the
+                // normal rule sweep. Both lanes run the identical ProcessContextAsync body.
+                while (true)
                 {
-                    while (reader.TryRead(out var context))
+                    ct.ThrowIfCancellationRequested();
+
+                    // Fully drain the high-priority lane before touching the normal lane.
+                    while (priorityReader.TryRead(out var priorityContext))
                     {
-                        try
-                        {
-                            // If it is a process start, calculate process image hash and check reputations/IoCs asynchronously
-                            if (context.TriggeringEvent is ProcessTelemetry pt)
-                            {
-                                // SECURITY v1.4.6: Capture token into local variable to prevent
-                                // ObjectDisposedException when CTS is disposed during shutdown.
+                        await ProcessContextAsync(priorityContext, ct);
+                    }
+
+                    // Then take at most one normal-lane item, so we re-check priority promptly.
+                    if (normalReader.TryRead(out var normalContext))
+                    {
+                        await ProcessContextAsync(normalContext, ct);
+                        continue; // Re-check priority before the next normal item.
+                    }
+
+                    // Both lanes are momentarily empty - wait until either becomes readable.
+                    var priorityWait = priorityReader.WaitToReadAsync(ct).AsTask();
+                    var normalWait = normalReader.WaitToReadAsync(ct).AsTask();
+                    var ready = await Task.WhenAny(priorityWait, normalWait);
+
+                    // If the completed wait reports no more data AND both channels are complete,
+                    // exit; otherwise loop and let the TryRead drains above pick up new items.
+                    if (ready.Status == TaskStatus.RanToCompletion && !ready.Result &&
+                        priorityReader.Completion.IsCompleted && normalReader.Completion.IsCompleted)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown
+            }
+            catch (ObjectDisposedException)
+            {
+                // CTS disposed during shutdown - safe to exit
+            }
+            catch (Exception ex)
+            {
+                _logger.LogCritical(ex, "[DetectionEngine] Critical error in telemetry queue processing loop");
+            }
+        }
+
+        /// <summary>
+        /// Processes a single fused telemetry context: the asynchronous reputation/IoC offload for
+        /// process-start events plus the full rule sweep. Shared by BOTH the normal and the
+        /// terminal-class fast lane so processing is identical regardless of which lane delivered
+        /// the context. <paramref name="ct"/> is threaded into the reputation offload so it unwinds
+        /// cleanly on shutdown.
+        /// </summary>
+        private async Task ProcessContextAsync(FusedTelemetryContext context, CancellationToken ct)
+        {
+            try
+            {
+                // If it is a process start, calculate process image hash and check reputations/IoCs asynchronously
+                if (context.TriggeringEvent is ProcessTelemetry pt)
+                {
+                                // SECURITY v1.4.6: the CancellationToken is threaded in as a method
+                                // parameter (captured from _cts.Token by the drain loop) to prevent
+                                // ObjectDisposedException when the CTS is disposed during shutdown.
                                 // Previously, accessing _cts.Token after Stop() caused unhandled
                                 // exceptions that crashed the service - an attacker could exploit
                                 // this by triggering rapid stop/start cycles to keep Sentinel down.
-                                var ct = _cts.Token;
                                 _ = Task.Run(async () =>
                                 {
                                     try
@@ -331,25 +467,10 @@ namespace Sentinel.Core
                                     _logger.LogError(ex, "[DetectionEngine] Error running rule {RuleName}", rule.Name);
                                 }
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "[DetectionEngine] Error processing telemetry context item");
-                        }
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal shutdown
-            }
-            catch (ObjectDisposedException)
-            {
-                // CTS disposed during shutdown - safe to exit
             }
             catch (Exception ex)
             {
-                _logger.LogCritical(ex, "[DetectionEngine] Critical error in telemetry queue processing loop");
+                _logger.LogError(ex, "[DetectionEngine] Error processing telemetry context item");
             }
         }
 
