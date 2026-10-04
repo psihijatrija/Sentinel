@@ -1,12 +1,12 @@
 <#
     recover-and-install.ps1
 
-    One-shot recovery + install for Sentinel 2.9.9.
+    One-shot recovery + install for Sentinel 3.0.0.
 
     WHY THIS EXISTS:
     A previous SentinelSetup run was cancelled at the file-copy step. That left the
     install folder half-updated: the old binaries were renamed to *.old (the installer's
-    normal anti-lock step) but the new 2.9.9 files were never written, so version.txt
+    normal anti-lock step) but the new 3.0.0 files were never written, so version.txt
     still reads an older version. This is NOT a tampered install script - setup.iss is
     byte-identical to the 2.9.7 release (verified by hash). The only cause was the Setup
     process not having write permission to Program Files at the copy step.
@@ -34,9 +34,9 @@ Assert-Admin
 
 $InstallDir = "C:\Program Files (x86)\Sentinel"
 if (-not (Test-Path $InstallDir)) { $InstallDir = "C:\Program Files\Sentinel" }
-$Installer  = "e:\Gorstak\Sentinel\installer\SentinelSetup-2.9.9.exe"
+$Installer  = "e:\Gorstak\Sentinel\installer\SentinelSetup-3.0.0.exe"
 
-Write-Host "=== Sentinel 2.9.9 recovery install ===" -ForegroundColor Cyan
+Write-Host "=== Sentinel 3.0.0 recovery install ===" -ForegroundColor Cyan
 Write-Host "Install dir: $InstallDir"
 Write-Host ""
 
@@ -90,10 +90,10 @@ Write-Host "=== Post-install verification ===" -ForegroundColor Cyan
 $vf = Join-Path $InstallDir "version.txt"
 if (Test-Path $vf) {
     $ver = (Get-Content $vf -Raw).Trim()
-    if ($ver -eq "2.9.9") {
+    if ($ver -eq "3.0.0") {
         Write-Host "Installed version: $ver  (SUCCESS)" -ForegroundColor Green
     } else {
-        Write-Host "Installed version: $ver  (expected 2.9.9 - install may not have completed)" -ForegroundColor Red
+        Write-Host "Installed version: $ver  (expected 3.0.0 - install may not have completed)" -ForegroundColor Red
     }
 } else {
     Write-Host "version.txt not found - install did not complete." -ForegroundColor Red
