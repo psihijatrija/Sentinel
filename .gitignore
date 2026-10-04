@@ -67,3 +67,4 @@ semantic-review/
 
 # Test result artifacts
 **/TestResults/
+*.trx
