@@ -78,6 +78,20 @@ namespace Sentinel.Core
                         try { imagePath = SecurityValidation.GetProcessImagePath(proc.Id); }
                         catch { imagePath = null; }
 
+                        // Short-lived dev helpers (git-remote-https, gh, ...) often exit mid-scan,
+                        // so GetProcessImagePath races and returns null. Fall back to the path the
+                        // ancestry cache already recorded for this PID - if present it lets the
+                        // signed-skip below work correctly instead of racing to a false kill.
+                        if (string.IsNullOrEmpty(imagePath))
+                        {
+                            try
+                            {
+                                var cachedPath = _ancestryCache.GetProcessInfo(proc.Id).imagePath;
+                                if (!string.IsNullOrEmpty(cachedPath)) imagePath = cachedPath;
+                            }
+                            catch { }
+                        }
+
                         // Verify code signature for development tools and browser process exemptions
                         bool isDev = _allowlist.IsDevelopmentProcess(proc.ProcessName);
                         var lowerName = proc.ProcessName.ToLowerInvariant();
@@ -130,7 +144,13 @@ namespace Sentinel.Core
                             bool selfSigned = !string.IsNullOrEmpty(imagePath) &&
                                 (_signerTrust.IsSignedFile(imagePath!) ||
                                  SecurityValidation.VerifyAuthenticodeSignature(imagePath!));
-                            bool demote = ShouldDemotePpidToLogOnly(proc.ProcessName, imagePath, selfSigned);
+                            // Allowlisted dev/browser tool whose image path never resolved: this is
+                            // the transient-race case (gh / git-remote-https exit before the scan
+                            // can read their path). The signed-skip above couldn't fire through no
+                            // fault of the binary - demote to LogOnly so a known-good dev tool is
+                            // never killed on a race. Non-allowlisted names are unaffected.
+                            bool allowlistedNameUnresolvedPath = (isDev || isBrowser) && string.IsNullOrEmpty(imagePath);
+                            bool demote = ShouldDemotePpidToLogOnly(proc.ProcessName, imagePath, selfSigned, allowlistedNameUnresolvedPath);
                             var response = demote
                                 ? ResponseAction.LogOnly
                                 : ResponseAction.KillProcess;
@@ -142,7 +162,9 @@ namespace Sentinel.Core
                                     ? " [stock console host - LogOnly]"
                                     : selfSigned
                                         ? " [signed - LogOnly]"
-                                        : " [OS path - LogOnly]")
+                                        : allowlistedNameUnresolvedPath
+                                            ? " [allowlisted dev tool, image path unresolved (transient race) - LogOnly]"
+                                            : " [OS path - LogOnly]")
                                 : "";
 
                             _ = _detectionEngine.EmitAsync(new DetectionEvent
@@ -201,9 +223,20 @@ namespace Sentinel.Core
         /// <summary>
         /// PPID races on these must never authorize kill/chain-trace (production FP: WinReducer + conhost).
         /// </summary>
-        internal static bool ShouldDemotePpidToLogOnly(string processName, string? imagePath, bool selfSigned)
+        internal static bool ShouldDemotePpidToLogOnly(
+            string processName,
+            string? imagePath,
+            bool selfSigned,
+            bool allowlistedNameUnresolvedPath = false)
         {
             if (selfSigned) return true;
+            // Allowlisted dev/browser tool whose image path couldn't be resolved in the scan's
+            // race window (gh / git-remote-https exit near-instantly). The signed-path skip never
+            // got a path to check, so demote instead of killing a known-good transient dev tool.
+            // A genuine PPID-spoof impostor using these names is still caught when its path DOES
+            // resolve (signed-path check) and by other rules; name-only trust is never granted to
+            // processes outside the dev/browser allowlist.
+            if (allowlistedNameUnresolvedPath && string.IsNullOrEmpty(imagePath)) return true;
             if (IsStockWindowsConsoleHost(processName, imagePath)) return true;
             // Any binary under the Windows tree (WRP) - ancestry races are common; kill chain is not.
             if (!string.IsNullOrEmpty(imagePath) && SecurityValidation.IsOsCriticalPath(imagePath))

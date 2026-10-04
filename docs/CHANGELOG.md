@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.9.9] - 2026-10-04
+
+### Fixed
+- **PPID-spoofing rule no longer kills signed dev tools whose transient image path fails to resolve.** `git-remote-https`/`gh` exit within the `ParentPidSpoofDetector` scan window, so `GetProcessImagePath` frequently returned null for them. With an empty path the signed-skip was bypassed and `ShouldDemotePpidToLogOnly` (which also depends on a non-empty path) returned false, so an allowlisted, validly signed `gh`/`git` helper was issued `KillProcess` at 0.85 confidence - breaking `git push` / `gh release`, and multiplied by `push.ps1 -LatestOnly`'s rapid `gh` calls. Now a dev/browser-allowlisted process whose image path cannot be resolved is demoted to LogOnly (Tier2) instead of killed, and the detector additionally falls back to the ancestry cache's recorded image path before giving up (so the signed-skip can still fire). Non-allowlisted names and unsigned binaries that are NOT on the dev/browser allowlist still escalate to KillProcess/Tier1 exactly as before.
+
+### Changed
+- Version stamp 2.9.8 → 2.9.9.
+
 ## [2.9.8] - 2026-10-04
 
 ### Fixed
