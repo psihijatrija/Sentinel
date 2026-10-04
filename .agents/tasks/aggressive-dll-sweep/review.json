@@ -1,0 +1,16 @@
+{
+  "verdict": "APPROVED",
+  "summary": "Opt-in aggressive unsigned-DLL sweep monitor + Tier2/LogOnly IDS command-line rule meet all hard constraints; build/tests green (2 pre-existing TLS failures unrelated to this diff). Two minor, non-blocking notes.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "src/Sentinel.Core/Monitors/PsPortedMonitors.cs",
+      "detail": "ShouldSkipPath relies on SelfPathGuard.IsUnderInstallDirectory to cover Sentinel's own dirs, but the production quarantine vault lives at %ProgramData%\\Sentinel\\Quarantine (NOT under AppContext.BaseDirectory) and IsOsCriticalPath does not cover %ProgramData%. The plan listed the quarantine dir in the skip-fragment list and it was dropped. In practice there is no re-quarantine loop because the sweep only enumerates *.dll/*.winmd while vault blobs are renamed to q_*.senq, so they are never enumerated. Recommend adding an explicit quarantine-dir guard (e.g. compare against QuarantineManager.QuarantineDirectory) for defense-in-depth and to match the documented intent in the XML doc comment, which still claims the vault is skipped by path."
+    },
+    {
+      "severity": "minor",
+      "file": "src/Sentinel.Core/Monitors/PsPortedMonitors.cs",
+      "detail": "The static helpers GetScanRoots and EnumerateCandidates swallow exceptions silently (catch { /* ignore */ }, catch { Enumerable.Empty }) with no Debug log, so a drive-enumeration failure is invisible. This matches the established house style of this exact file (LnkUncGuard and the other PsPortedMonitors use the same silent best-effort catches in enumeration helpers on the base branch), and all OPERATIONAL catches in the new code (scan, evaluate, quarantine, signature, hash) do log at Debug, so the spirit of the 'every catch logs' rule is honored. Optional: make these instance methods and add a Debug log in each catch for full consistency with the stated constraint."
+    }
+  ]
+}

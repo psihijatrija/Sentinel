@@ -233,6 +233,13 @@ namespace Sentinel.Core
         public bool EnableDynamicSandboxing { get; set; } = false; // Run suspicious binaries in Windows Sandbox
 
         /// <summary>
+        /// Deliberate opt-in AGGRESSIVE non-default mode: walks ready drive roots for unsigned
+        /// *.dll/*.winmd and quarantines them. Compiled default FALSE; disk JSON does NOT enable
+        /// it (compiled config only). Operator must flip this in code to arm the sweep.
+        /// </summary>
+        public bool EnableAggressiveUnsignedDllSweep { get; set; } = false;
+
+        /// <summary>
         /// v2.7.6: Operator-defined DOMAIN blocks, enforced by the proven forum.hr-style path -
         /// a hosts-file line (exact host) PLUS a wildcard NRPT rule (apex + all subdomains ->
         /// 0.0.0.0) under the GP-managed policy hive, self-healed on startup and every scan.
