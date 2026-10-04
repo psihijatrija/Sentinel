@@ -47,8 +47,16 @@ namespace Sentinel.Core
             "Invoke-Mimikatz", "sekurlsa::logonpasswords", "Get-Credential",
             "System.Net.NetworkCredential", "ConvertFrom-SecureString",
             "dpapi::masterkey", "lsadump::sam", "kerberos::list",
-            // Sentinel evasion
-            "Sentinel", "Sentinel", "Stop-Service.*Sentinel",
+            // Sentinel evasion - behavioral service-tamper commands only.
+            // NOTE: patterns are matched with string.Contains, so these are literal
+            // substrings (no regex). The bare product name "Sentinel" was removed
+            // because benign scripts that merely reference the product (e.g. the
+            // $env:ProgramData\Sentinel path, diagnostics, push.ps1) matched it and
+            // got their process tree killed. Only genuine attempts to stop/disable the
+            // Sentinel service match now.
+            "Stop-Service Sentinel", "Stop-Service -Name Sentinel",
+            "sc stop Sentinel", "sc.exe stop Sentinel",
+            "Set-Service Sentinel", "Set-Service -Name Sentinel",
             // Download cradles
             "Invoke-Expression", "IEX(", "iex(", "iex ",
             "DownloadString", "DownloadFile", "Net.WebClient",
@@ -181,9 +189,7 @@ namespace Sentinel.Core
 
                         if (string.IsNullOrEmpty(scriptBlock)) continue;
 
-                        var matchedPatterns = MaliciousPatterns
-                            .Where(p => scriptBlock!.Contains(p))
-                            .ToList();
+                        var matchedPatterns = MatchMaliciousPatterns(scriptBlock!);
 
                         if (matchedPatterns.Count == 0) continue;
 
@@ -202,11 +208,7 @@ namespace Sentinel.Core
                         };
 
                         // Tier1 kill for AMSI bypass, credential theft, or Sentinel targeting
-                        bool isCritical = matchedPatterns.Any(p =>
-                            p.Contains("Amsi") ||
-                            p.Contains("Mimi") ||
-                            p.Contains("sekurlsa") ||
-                            p.Contains("Sentinel"));
+                        bool isCritical = IsCriticalScriptMatch(matchedPatterns);
 
                         int pid = 0;
                         string processName = "powershell";
@@ -504,9 +506,7 @@ namespace Sentinel.Core
                             }
                             catch { }
 
-                            var contentPatterns = MaliciousPatterns
-                                .Where(p => content.Contains(p))
-                                .ToList();
+                            var contentPatterns = MatchMaliciousPatterns(content);
 
                             if (contentPatterns.Count == 0) continue; // Benign script drop
 
@@ -540,6 +540,32 @@ namespace Sentinel.Core
         // 
         // Helpers
         // 
+
+        /// <summary>
+        /// Returns the malicious patterns (literal substrings) present in the supplied
+        /// script-block / file content. Pure and I/O-free so the signature set can be
+        /// unit-tested (InternalsVisibleTo Sentinel.Tests) without reading the event log.
+        /// </summary>
+        internal static IReadOnlyList<string> MatchMaliciousPatterns(string content)
+        {
+            if (string.IsNullOrEmpty(content)) return Array.Empty<string>();
+            return MaliciousPatterns.Where(p => content.Contains(p)).ToList();
+        }
+
+        /// <summary>
+        /// True when any matched pattern is a kill-grade signature (AMSI bypass, credential
+        /// theft, or a genuine Sentinel service-tamper command). Every remaining "Sentinel"
+        /// pattern is a Stop/Set-Service command, so the self-referential false positive is
+        /// gone while real shutdown attempts still escalate.
+        /// </summary>
+        internal static bool IsCriticalScriptMatch(IReadOnlyList<string> matchedPatterns)
+        {
+            return matchedPatterns.Any(p =>
+                p.Contains("Amsi") ||
+                p.Contains("Mimi") ||
+                p.Contains("sekurlsa") ||
+                p.Contains("Sentinel"));
+        }
 
         private static string GetProcessNameSafe(int pid)
         {

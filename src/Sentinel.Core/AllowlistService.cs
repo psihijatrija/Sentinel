@@ -77,7 +77,8 @@ namespace Sentinel.Core
         {
             "devenv", "code", "Windsurf", "cursor", "kiro", "positron", "Devin",
             "msbuild", "dotnet", "node", "npm", "python", "py",
-            "git", "git-remote-https",
+            "git", "git-remote-https", "git-remote-http", "gh",
+            "git-credential-manager", "git-credential-manager-core",
             "cargo", "rustc", "go", "java", "javac",
             "cl", "link", "cmake", "ninja",
             "docker", "docker-compose", "kubectl",

@@ -171,10 +171,22 @@ namespace Sentinel.Core
                 double countFactor = Math.Min(1.0, intervals.Count / 20.0);
                 double confidence = Math.Min(0.95, 0.70 + cvFactor * 0.20 + countFactor * 0.08);
 
+                // Torrent / P2P / bulk-transfer clients maintain many regular peer
+                // connections that can trip the statistical beacon gates. Recognized
+                // bulk-transfer clients are demoted to Tier2 + LogOnly so the C2/beaconing
+                // response never kills (or network-isolates) them. The detection is still
+                // emitted and logged; the hard "Tier2 never acts" rule guarantees no kill.
+                // Mirrors DataExfiltrationMonitor's BulkTransferNoise precedent.
+                bool isBulkTransfer = ShouldDemoteBeaconToObserve(history.ProcessName);
+
                 // Determine response action using multi-factor trust verification.
                 // This combines Authenticode, path, diversity, and baseline - not any single signal.
-                var responseAction = DetermineResponseAction(history);
-                var tier = DetectionTier.Tier1Behavioral;
+                var responseAction = isBulkTransfer
+                    ? ResponseAction.LogOnly
+                    : DetermineResponseAction(history);
+                var tier = isBulkTransfer
+                    ? DetectionTier.Tier2Indicator
+                    : DetectionTier.Tier1Behavioral;
 
                 string intervalDesc = mean < 60 ? $"{mean:F1}s" : $"{mean / 60:F1}min";
 
@@ -202,7 +214,8 @@ namespace Sentinel.Core
                         ["RemotePort"] = history.RemotePort.ToString(),
                         ["MeanIntervalSec"] = mean.ToString("F2"),
                         ["CoefficientOfVariation"] = cv.ToString("F4"),
-                        ["ObservationCount"] = intervals.Count.ToString()
+                        ["ObservationCount"] = intervals.Count.ToString(),
+                        ["BulkTransfer"] = isBulkTransfer ? "true" : "false"
                     }
                 });
 
@@ -250,6 +263,19 @@ namespace Sentinel.Core
         ///   - v1.5.9: The response never drops below NetworkIsolate - C2 channel is always blocked
         ///   - This prevents supply-chain attacks (SolarWinds-style) from maintaining C2 connectivity
         /// </summary>
+        /// <summary>
+        /// True when the process is a recognized bulk-transfer / torrent / P2P client whose
+        /// many regular peer connections can trip the beacon gates. Such clients are demoted
+        /// to Tier2 + LogOnly so the C2/beaconing response never terminates or isolates them;
+        /// the detection is still logged. Name match only (via the canonical BulkTransferNoise
+        /// allowlist) - this suppresses only the RESPONSE on the network path, never a
+        /// behavioral kill-grade terminal from another rule.
+        /// </summary>
+        internal static bool ShouldDemoteBeaconToObserve(string? processName)
+        {
+            return BulkTransferNoise.IsBulkTransferProcessName(processName);
+        }
+
         private ResponseAction DetermineResponseAction(ConnectionHistory history)
         {
             // Step 1: Resolve image path

@@ -95,6 +95,25 @@ namespace Sentinel.Tests
             Assert.False(svc.IsDevelopmentProcess("malware"));
         }
 
+        [Fact]
+        public void IsDevelopmentProcess_Recognizes_GitToolchain()
+        {
+            var svc = CreateService();
+            // The PPID-spoofing rule consults this list (plus a signature check at the
+            // call site) before authorizing a kill. These are the legitimate git transport
+            // helpers and the GitHub CLI that previously tripped the PPID-mismatch heuristic.
+            Assert.True(svc.IsDevelopmentProcess("git"));
+            Assert.True(svc.IsDevelopmentProcess("git-remote-https"));
+            Assert.True(svc.IsDevelopmentProcess("git-remote-http"));
+            Assert.True(svc.IsDevelopmentProcess("gh"));
+            Assert.True(svc.IsDevelopmentProcess("git-credential-manager"));
+            Assert.True(svc.IsDevelopmentProcess("git-credential-manager-core"));
+            // Case-insensitive (process names vary in casing)
+            Assert.True(svc.IsDevelopmentProcess("GH"));
+            // An attacker-chosen name is NOT recognized
+            Assert.False(svc.IsDevelopmentProcess("git-stealer"));
+        }
+
         //  User allowlist 
 
         [Fact]

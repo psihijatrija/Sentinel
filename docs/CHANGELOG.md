@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.9.8] - 2026-10-04
+
+### Fixed
+- **Git/GitHub toolchain no longer tripped by the PPID-spoofing rule.** Added `git-remote-http`, `gh`, `git-credential-manager`, and `git-credential-manager-core` to the `AllowlistService` development-process set (which already held `git`/`git-remote-https`) so the normal git transport-helper and `gh -> git` spawn chains are recognized. The `ParentPidSpoofDetector` call site still requires a valid Authenticode/signer signature before skipping the KillProcess response, so names alone never self-authorize.
+- **PowerShell script-block rule no longer treats the bare product name "Sentinel" as a malicious signature.** The `Script: Malicious PowerShell Script Block` rule matched the substring "Sentinel", so any benign script referencing the product (e.g. `$env:ProgramData\Sentinel`, diagnostics, `push.ps1`) had its process tree killed. Narrowed to genuine service-tamper commands (`Stop-Service Sentinel`, `sc.exe stop Sentinel`, `Set-Service Sentinel`, etc.). Genuine attack-tool signatures (Mimikatz, AMSI, download cradles, injection APIs) are unchanged, and real Sentinel-shutdown attempts still escalate to Tier1.
+- **Torrent/P2P clients are no longer killed by the C2/beaconing response.** `BeaconingDetector` now consults the existing `BulkTransferNoise` allowlist (qbittorrent, utorrent, bittorrent, transmission[-qt/-daemon], deluge[d/-gtk], tixati, vuze, azureus, frostwire, aria2c, and other known clients). A recognized client's statistical-beacon detection is demoted to Tier2 + LogOnly (so the "Tier2 never acts" rule guarantees no kill and no NetworkIsolate); the detection is still logged.
+
+### Changed
+- Version stamp 2.9.7 → 2.9.8.
+
 ## [2.9.7] - 2026-10-04
 
 ### Added

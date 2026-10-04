@@ -69,5 +69,40 @@ namespace Sentinel.Tests
             var intervals = history.GetIntervals();
             Assert.True(intervals.Count > 0);
         }
+
+        //  Torrent / bulk-transfer clients are demoted to observe (never killed) 
+
+        [Theory]
+        [InlineData("qbittorrent")]
+        [InlineData("utorrent")]
+        [InlineData("bittorrent")]
+        [InlineData("transmission")]
+        [InlineData("transmission-qt")]
+        [InlineData("transmission-daemon")]
+        [InlineData("deluge")]
+        [InlineData("deluged")]
+        [InlineData("deluge-gtk")]
+        [InlineData("tixati")]
+        [InlineData("vuze")]
+        [InlineData("azureus")]
+        [InlineData("frostwire")]
+        [InlineData("aria2c")]
+        public void TorrentClient_IsDemotedToObserve_WithAndWithoutExe(string name)
+        {
+            Assert.True(BeaconingDetector.ShouldDemoteBeaconToObserve(name));
+            Assert.True(BeaconingDetector.ShouldDemoteBeaconToObserve(name + ".exe"));
+            // Case-insensitive
+            Assert.True(BeaconingDetector.ShouldDemoteBeaconToObserve(name.ToUpperInvariant()));
+        }
+
+        [Fact]
+        public void NonTorrentProcess_IsNotDemoted()
+        {
+            // A genuine C2 beacon name is NOT demoted - the normal kill path still applies.
+            Assert.False(BeaconingDetector.ShouldDemoteBeaconToObserve("beacon"));
+            Assert.False(BeaconingDetector.ShouldDemoteBeaconToObserve("beacon.exe"));
+            Assert.False(BeaconingDetector.ShouldDemoteBeaconToObserve(null));
+            Assert.False(BeaconingDetector.ShouldDemoteBeaconToObserve(""));
+        }
     }
 }
