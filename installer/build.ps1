@@ -71,6 +71,13 @@ $AgentOut = Join-Path $PublishDir "agent"
 & $Dotnet publish $AgentProj -c Release -f net48-windows -o $AgentOut
 if ($LASTEXITCODE -ne 0) { throw "Agent publish failed" }
 
+# 3-AutoRotate. Publish standalone SentinelAutoRotate tool - framework-dependent net48
+Write-Host "Publishing Sentinel AutoRotate (net48-windows, framework-dependent)..." -ForegroundColor Yellow
+$AutoRotateProj = Join-Path $PSScriptRoot "..\tools\Sentinel.AutoRotate\Sentinel.AutoRotate.csproj"
+$AutoRotateOut = Join-Path $PublishDir "autorotate"
+& $Dotnet publish $AutoRotateProj -c Release -f net48-windows -o $AutoRotateOut
+if ($LASTEXITCODE -ne 0) { throw "AutoRotate publish failed" }
+
 # 3a. Icon + version.txt
 Write-Host "Deploying Sentinel.ico and version.txt..." -ForegroundColor Yellow
 $IconSource = Join-Path $PSScriptRoot "assets\Sentinel.ico"

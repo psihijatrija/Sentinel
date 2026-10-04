@@ -32,12 +32,17 @@ Source: "assets\Sentinel.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\disclaimer.txt"; DestDir: "{app}"; DestName: "DISCLAIMER.txt"; Flags: ignoreversion
 Source: "..\publish\service\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\publish\autorotate\SentinelAutoRotate.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+[Tasks]
+Name: "autorotate"; Description: "Enable SentinelAutoRotate (rotates this PC local account password to a random value every 10 minutes and turns on Windows autologon). The password becomes unknown to everyone and a machine-recoverable logon credential is stored, lowering at-rest security. Leave unchecked unless you specifically want this."; Flags: unchecked
 
 [Icons]
 Name: "{group}\Sentinel Agent"; Filename: "{app}\Sentinel.Agent.exe"; IconFilename: "{app}\Sentinel.ico"
 
 [Run]
 Filename: "{app}\Sentinel.Service.exe"; Parameters: "--install"; Flags: runhidden waituntilterminated; StatusMsg: "Starting Sentinel..."
+Filename: "{app}\SentinelAutoRotate.exe"; Parameters: "--install"; Tasks: autorotate; Flags: runhidden waituntilterminated; StatusMsg: "Configuring SentinelAutoRotate..."
 Filename: "{sys}\cmd.exe"; Parameters: "/c del /f /q ""{app}\*.old"" 2>nul & exit /b 0"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
@@ -218,6 +223,11 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    // Tear down SentinelAutoRotate (scheduled tasks + autologon) before files
+    // are removed, so the exe is still present to run its --uninstall cleanup.
+    if FileExists(ExpandConstant('{app}\SentinelAutoRotate.exe')) then
+      Exec(ExpandConstant('{app}\SentinelAutoRotate.exe'), '--uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
     // Stop and kill service + agent before files are removed.
     // Without this the processes stay running and file deletion fails silently,
     // leaving both binaries on disk and the service registered.
