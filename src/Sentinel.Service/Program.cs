@@ -402,6 +402,7 @@ namespace Sentinel.Service
                     services.AddTransient<IDetectionRule, AttackToolsRule>();
                     services.AddTransient<IDetectionRule, CampaignIocRule>();
                     services.AddTransient<IDetectionRule, UnsignedBinaryRule>();
+                    services.AddTransient<IDetectionRule, IdsCommandLineRule>();
                     services.AddTransient<IDetectionRule, CampaignDetectionRule>();
                     services.AddTransient<IDetectionRule, VerdictGateRule>();
                     services.AddTransient<IDetectionRule, ClickFixDetectionRule>();

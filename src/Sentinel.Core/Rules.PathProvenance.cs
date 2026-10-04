@@ -2,9 +2,77 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace Sentinel.Core
 {
+    /// <summary>
+    /// Ports the PS script's Invoke-IdsDetection ($Script:IdsPatterns) as a Sentinel rule.
+    /// Inspects ProcessTelemetry.CommandLine for LOLBin / evasion command-line patterns via
+    /// case-insensitive compiled regexes and, on the first match, emits a Tier2 / LogOnly
+    /// indicator that feeds the correlation engine. Per docs/constraints.md a command-line
+    /// pattern alone never self-authorizes a response, so this is unconditionally LogOnly.
+    /// </summary>
+    [RuleCategory(DetectionCategory.SecurityEvasion)]
+    public class IdsCommandLineRule : IDetectionRule
+    {
+        public string Name => "IdsCommandLineRule";
+
+        // Compiled once (static readonly) for perf; IgnoreCase for command-line case variance.
+        private static readonly (string Name, Regex Rx)[] Patterns = new[]
+        {
+            ("certutil-urlcache",      new Regex(@"certutil(\.exe)?\b.*-urlcache", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("bitsadmin-transfer",     new Regex(@"bitsadmin(\.exe)?\b.*/transfer", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("powershell-encoded",     new Regex(@"powershell(\.exe)?\b.*\s-(enc|encodedcommand)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("powershell-hidden",      new Regex(@"powershell(\.exe)?\b.*\s-w(indowstyle)?\s+hidden", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("invoke-expression",      new Regex(@"invoke-expression|\biex\s*\(", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("net-downloadstring",     new Regex(@"downloadstring", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("net-downloadfile",       new Regex(@"downloadfile", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("net-webclient",          new Regex(@"net\.webclient", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("executionpolicy-bypass", new Regex(@"-executionpolicy\s+bypass", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("wmic-process-create",    new Regex(@"wmic\b.*process\s+call\s+create", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("reg-add-run",            new Regex(@"reg(\.exe)?\s+add\b.*hklm.*\\run", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("schtasks-create",        new Regex(@"schtasks(\.exe)?\b.*/create", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("netsh-firewall",         new Regex(@"netsh\b.*firewall", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("sc-create",              new Regex(@"\bsc(\.exe)?\s+create\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("rundll32-dll",           new Regex(@"rundll32(\.exe)?\b.*\.dll", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("regsvr32-silent",        new Regex(@"regsvr32(\.exe)?\b.*/s", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+            ("mshta-http",             new Regex(@"mshta(\.exe)?\b.*http", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        };
+
+        public DetectionEvent? Evaluate(FusedTelemetryContext context)
+        {
+            if (context.TriggeringEvent is not ProcessTelemetry pt) return null;
+            if (string.IsNullOrEmpty(pt.CommandLine)) return null;
+
+            foreach (var (patternName, rx) in Patterns)
+            {
+                if (!rx.IsMatch(pt.CommandLine)) continue;
+
+                // Truncate the command line in the evidence to keep logs bounded.
+                var cmd = pt.CommandLine!;
+                var truncated = cmd.Length > 200 ? cmd.Substring(0, 200) + "..." : cmd;
+
+                return new DetectionEvent
+                {
+                    RuleName           = Name,
+                    ProcessName        = pt.ProcessName,
+                    ProcessId          = pt.ProcessId,
+                    SignalType         = SignalType.SuspiciousProcess,
+                    Confidence         = 0.60,
+                    Tier               = DetectionTier.Tier2Indicator, // Tier 2 - LogOnly, feeds correlation
+                    AuthorizedResponse = ResponseAction.LogOnly,
+                    Evidence           = $"IDS command-line pattern '{patternName}' matched: {truncated}",
+                    Reasoning          = "Command line matches a known LOLBin / evasion pattern. This is a " +
+                                         "Tier2 indicator only (LogOnly) - a command-line pattern alone never " +
+                                         "authorizes a response; it feeds the correlation engine."
+                };
+            }
+
+            return null;
+        }
+    }
+
     [RuleCategory(DetectionCategory.UnsignedBinary)]
     public class UnsignedBinaryRule : IDetectionRule
     {
