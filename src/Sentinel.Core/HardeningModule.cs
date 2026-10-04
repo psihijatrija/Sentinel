@@ -18,6 +18,222 @@ namespace Sentinel.Core
 
         private const uint LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800;
 
+        #region Self-process mitigations (SetProcessMitigationPolicy)
+
+        // PROCESS_MITIGATION_POLICY ordinals (stable Win32 values).
+        private const int ProcessDEPPolicy = 1;
+        private const int ProcessControlFlowGuardPolicy = 7;
+        private const int ProcessSignaturePolicy = 8;
+        private const int ProcessExtensionPointDisablePolicy = 9;
+        private const int ProcessImageLoadPolicy = 10;
+        private const int ProcessStrictHandleCheckPolicy = 11;
+
+        // One overload per policy struct - matches the P/Invoke + [StructLayout] style in NativeProcessMemory.cs.
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessMitigationPolicy(int policy, ref PROCESS_MITIGATION_DEP_POLICY lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessMitigationPolicy(int policy, ref PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessMitigationPolicy(int policy, ref PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessMitigationPolicy(int policy, ref PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessMitigationPolicy(int policy, ref PROCESS_MITIGATION_IMAGE_LOAD_POLICY lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessMitigationPolicy(int policy, ref PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY lpBuffer, UIntPtr dwLength);
+
+        // The native structs wrap a single DWORD bitfield. We model the bitfield as a uint and
+        // set the documented flag bits (ordinal order within the DWORD, LSB first).
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_MITIGATION_DEP_POLICY
+        {
+            // Bit0 Enable; Bit1 DisableAtlThunkEmulation; Bit2 Permanent.
+            public uint Flags;
+            [MarshalAs(UnmanagedType.U1)] public bool Permanent;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY
+        {
+            // Bit0 EnableControlFlowGuard; Bit1 EnableExportSuppression; Bit2 StrictMode.
+            public uint Flags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY
+        {
+            // Bit0 RaiseExceptionOnInvalidHandleReference; Bit1 HandleExceptionsPermanentlyEnabled.
+            public uint Flags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY
+        {
+            // Bit0 DisableExtensionPoints.
+            public uint Flags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_MITIGATION_IMAGE_LOAD_POLICY
+        {
+            // Bit0 NoRemoteImages; Bit1 NoLowMandatoryLabelImages; Bit2 PreferSystem32Images.
+            public uint Flags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY
+        {
+            // Bit0 MicrosoftSignedOnly; Bit1 StoreSignedOnly; Bit2 MitigationOptIn.
+            public uint Flags;
+        }
+
+        /// <summary>Self-only process mitigations Sentinel requests via SetProcessMitigationPolicy.</summary>
+        [Flags]
+        internal enum SelfMitigation
+        {
+            None = 0,
+            DepPermanent = 1 << 0,
+            ControlFlowGuard = 1 << 1,
+            StrictHandleCheck = 1 << 2,
+            ExtensionPointDisable = 1 << 3,
+            ImageLoadNoRemoteImages = 1 << 4,
+            ImageLoadNoLowMandatoryLabelImages = 1 << 5,
+            ImageLoadPreferSystem32Images = 1 << 6,
+            BlockNonMicrosoftBinaries = 1 << 7,
+        }
+
+        /// <summary>
+        /// Pure, side-effect-free decision of which self-only mitigations to apply.
+        /// No P/Invoke and no I/O, so it is directly unit-testable.
+        ///
+        /// Always includes DEP-permanent, Control Flow Guard, strict handle checks,
+        /// extension-point disable, and the three image-load flags. BlockNonMicrosoftBinaries
+        /// (signature policy = MicrosoftSignedOnly) is included ONLY on an Authenticode-signed
+        /// build, because enforcing Microsoft-signed-only image loads on an unsigned/dev build
+        /// would prevent Sentinel's own binaries from loading. Broad signature enforcement
+        /// remains a Phase 3 opt-in concern beyond this signed-vs-unsigned gate.
+        /// </summary>
+        internal static SelfMitigation GetSelfMitigationPlan(bool processImageIsAuthenticodeSigned)
+        {
+            var plan = SelfMitigation.DepPermanent
+                     | SelfMitigation.ControlFlowGuard
+                     | SelfMitigation.StrictHandleCheck
+                     | SelfMitigation.ExtensionPointDisable
+                     | SelfMitigation.ImageLoadNoRemoteImages
+                     | SelfMitigation.ImageLoadNoLowMandatoryLabelImages
+                     | SelfMitigation.ImageLoadPreferSystem32Images;
+
+            if (processImageIsAuthenticodeSigned)
+                plan |= SelfMitigation.BlockNonMicrosoftBinaries;
+
+            return plan;
+        }
+
+        /// <summary>
+        /// Applies the self-only mitigation plan to the current process. Each policy is applied
+        /// inside its own try/catch that logs at Debug on failure (per constraint: every catch
+        /// logs at >= Debug). Never throws; a standard-user service start must still succeed.
+        /// </summary>
+        private static void ApplySelfMitigations(SelfMitigation plan)
+        {
+            var size = (UIntPtr)4; // each policy struct's bitfield DWORD
+
+            if (plan.HasFlag(SelfMitigation.DepPermanent))
+            {
+                try
+                {
+                    var dep = new PROCESS_MITIGATION_DEP_POLICY { Flags = 0x1u /* Enable */ | 0x4u /* Permanent */, Permanent = true };
+                    if (SetProcessMitigationPolicy(ProcessDEPPolicy, ref dep, size))
+                        Debug.WriteLine("ApplySelfMitigations: DEP (permanent) applied");
+                    else
+                        Debug.WriteLine($"ApplySelfMitigations: DEP not applied (err {Marshal.GetLastWin32Error()})");
+                }
+                catch (Exception ex) { Debug.WriteLine($"ApplySelfMitigations: DEP failed - {ex.Message}"); }
+            }
+
+            if (plan.HasFlag(SelfMitigation.ControlFlowGuard))
+            {
+                try
+                {
+                    var cfg = new PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY { Flags = 0x1u /* EnableControlFlowGuard */ };
+                    if (SetProcessMitigationPolicy(ProcessControlFlowGuardPolicy, ref cfg, size))
+                        Debug.WriteLine("ApplySelfMitigations: Control Flow Guard applied");
+                    else
+                        Debug.WriteLine($"ApplySelfMitigations: CFG not applied (err {Marshal.GetLastWin32Error()})");
+                }
+                catch (Exception ex) { Debug.WriteLine($"ApplySelfMitigations: CFG failed - {ex.Message}"); }
+            }
+
+            if (plan.HasFlag(SelfMitigation.StrictHandleCheck))
+            {
+                try
+                {
+                    var shc = new PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY
+                    {
+                        Flags = 0x1u /* RaiseExceptionOnInvalidHandleReference */ | 0x2u /* HandleExceptionsPermanentlyEnabled */
+                    };
+                    if (SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, ref shc, size))
+                        Debug.WriteLine("ApplySelfMitigations: Strict handle check applied");
+                    else
+                        Debug.WriteLine($"ApplySelfMitigations: StrictHandleCheck not applied (err {Marshal.GetLastWin32Error()})");
+                }
+                catch (Exception ex) { Debug.WriteLine($"ApplySelfMitigations: StrictHandleCheck failed - {ex.Message}"); }
+            }
+
+            if (plan.HasFlag(SelfMitigation.ExtensionPointDisable))
+            {
+                try
+                {
+                    var ep = new PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY { Flags = 0x1u /* DisableExtensionPoints */ };
+                    if (SetProcessMitigationPolicy(ProcessExtensionPointDisablePolicy, ref ep, size))
+                        Debug.WriteLine("ApplySelfMitigations: Extension-point disable applied");
+                    else
+                        Debug.WriteLine($"ApplySelfMitigations: ExtensionPointDisable not applied (err {Marshal.GetLastWin32Error()})");
+                }
+                catch (Exception ex) { Debug.WriteLine($"ApplySelfMitigations: ExtensionPointDisable failed - {ex.Message}"); }
+            }
+
+            if (plan.HasFlag(SelfMitigation.ImageLoadNoRemoteImages) ||
+                plan.HasFlag(SelfMitigation.ImageLoadNoLowMandatoryLabelImages) ||
+                plan.HasFlag(SelfMitigation.ImageLoadPreferSystem32Images))
+            {
+                try
+                {
+                    uint flags = 0;
+                    if (plan.HasFlag(SelfMitigation.ImageLoadNoRemoteImages)) flags |= 0x1u;              // NoRemoteImages
+                    if (plan.HasFlag(SelfMitigation.ImageLoadNoLowMandatoryLabelImages)) flags |= 0x2u;   // NoLowMandatoryLabelImages
+                    if (plan.HasFlag(SelfMitigation.ImageLoadPreferSystem32Images)) flags |= 0x4u;        // PreferSystem32Images
+                    var il = new PROCESS_MITIGATION_IMAGE_LOAD_POLICY { Flags = flags };
+                    if (SetProcessMitigationPolicy(ProcessImageLoadPolicy, ref il, size))
+                        Debug.WriteLine("ApplySelfMitigations: Image-load restrictions applied");
+                    else
+                        Debug.WriteLine($"ApplySelfMitigations: ImageLoad not applied (err {Marshal.GetLastWin32Error()})");
+                }
+                catch (Exception ex) { Debug.WriteLine($"ApplySelfMitigations: ImageLoad failed - {ex.Message}"); }
+            }
+
+            if (plan.HasFlag(SelfMitigation.BlockNonMicrosoftBinaries))
+            {
+                try
+                {
+                    var sig = new PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY { Flags = 0x1u /* MicrosoftSignedOnly */ };
+                    if (SetProcessMitigationPolicy(ProcessSignaturePolicy, ref sig, size))
+                        Debug.WriteLine("ApplySelfMitigations: BlockNonMicrosoftBinaries (signature policy) applied");
+                    else
+                        Debug.WriteLine($"ApplySelfMitigations: Signature policy not applied (err {Marshal.GetLastWin32Error()})");
+                }
+                catch (Exception ex) { Debug.WriteLine($"ApplySelfMitigations: Signature policy failed - {ex.Message}"); }
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// v2.5.5: Hardening is now unconditional - always active.
         /// The setter is retained for compatibility but is a no-op.
@@ -42,6 +258,24 @@ namespace Sentinel.Core
                 // Self-only: protect Sentinel process / install - never the user's tools.
                 bool res1 = SetDllDirectory(string.Empty);
                 bool res2 = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+                // Self-only process mitigations (SetProcessMitigationPolicy). Best-effort and
+                // fail-soft: each policy is applied inside ApplySelfMitigations under its own
+                // try/catch, so a standard-user start never fails here. BlockNonMicrosoftBinaries
+                // is gated behind an Authenticode-signed build of our own image.
+                try
+                {
+                    string? selfImagePath = SecurityValidation.GetProcessImagePath(System.Net48Environment.ProcessId)
+                                            ?? Process.GetCurrentProcess().MainModule?.FileName;
+                    bool signed = !string.IsNullOrEmpty(selfImagePath) &&
+                                  SecurityValidation.VerifyAuthenticodeSignature(selfImagePath!);
+                    ApplySelfMitigations(GetSelfMitigationPlan(signed));
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"ApplyOrFail: self mitigation setup skipped - {ex.Message}");
+                }
+
                 RegisterForSafeMode();
 
                 // v2.5.5: Hardening is now unconditional - always active.
@@ -134,6 +368,12 @@ namespace Sentinel.Core
                 if (key == null) return;
 
                 foreach (var (guid, _) in AsrRules)
+                {
+                    try { key.DeleteValue(guid, throwOnMissingValue: false); } catch { }
+                }
+
+                // Symmetric teardown of the audit-first tier.
+                foreach (var (guid, _) in AsrRulesAudit)
                 {
                     try { key.DeleteValue(guid, throwOnMissingValue: false); } catch { }
                 }
@@ -1075,6 +1315,28 @@ namespace Sentinel.Core
             "c1db55ab-c21a-4637-bb3f-a12568109d35",
         };
 
+        /// <summary>
+        /// Audit-first ASR tier: enforced in Audit mode (value "2"), never Block.
+        ///
+        /// These rules are high value but have real false-positive potential against
+        /// legitimate line-of-business software, so Sentinel observes them in Audit and
+        /// only promotes them to Block (value "1") after a clean field window on a given
+        /// deployment. Keeping them at "2" generates Defender audit telemetry (what WOULD
+        /// have been blocked) without breaking the user's working software - the audit-first
+        /// rationale that lets us collect evidence before enforcing.
+        ///
+        /// Only GUID-confirmed, lockout-capable rules belong here (no uncertain GUIDs):
+        ///   7674ba52 Block Adobe Reader from creating child processes
+        ///   c0033c00 Block use of copied or impersonated system tools
+        ///   01443614 Block executable files from running unless they meet a prevalence/age/trusted-list criterion
+        /// </summary>
+        internal static readonly (string Guid, string Name)[] AsrRulesAudit =
+        {
+            ("7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c", "Block Adobe Reader from creating child processes"),
+            ("c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb", "Block use of copied or impersonated system tools"),
+            ("01443614-cd74-433a-b99e-2ecdc07bfc25", "Block executable files from running unless they meet a prevalence/age/trusted-list criterion"),
+        };
+
         private const string AsrPolicyRoot =
             @"SOFTWARE\Policies\Microsoft\Windows Defender\Windows Defender Exploit Guard\ASR";
         private const string AsrPolicyRulesKey = AsrPolicyRoot + @"\Rules";
@@ -1100,6 +1362,12 @@ namespace Sentinel.Core
                 foreach (var (guid, _) in AsrRules)
                 {
                     key.SetValue(guid, "1", Microsoft.Win32.RegistryValueKind.String);
+                }
+
+                // Audit-first tier ("2"): observe-only, promoted to Block later after a clean field window.
+                foreach (var (guid, _) in AsrRulesAudit)
+                {
+                    key.SetValue(guid, "2", Microsoft.Win32.RegistryValueKind.String);
                 }
 
                 // Drop rules that break our own (and most) installers if an older Sentinel applied them.
@@ -1181,6 +1449,13 @@ namespace Sentinel.Core
                 {
                     var val = key.GetValue(guid)?.ToString();
                     if (val != "1") return false;
+                }
+
+                // Audit-first tier must be present and set to Audit ("2").
+                foreach (var (guid, _) in AsrRulesAudit)
+                {
+                    var val = key.GetValue(guid)?.ToString();
+                    if (val != "2") return false;
                 }
 
                 // Intact also means hostile self-block rules are gone
