@@ -144,13 +144,22 @@ namespace Sentinel.Core
                             bool selfSigned = !string.IsNullOrEmpty(imagePath) &&
                                 (_signerTrust.IsSignedFile(imagePath!) ||
                                  SecurityValidation.VerifyAuthenticodeSignature(imagePath!));
-                            // Allowlisted dev/browser tool whose image path never resolved: this is
-                            // the transient-race case (gh / git-remote-https exit before the scan
-                            // can read their path). The signed-skip above couldn't fire through no
-                            // fault of the binary - demote to LogOnly so a known-good dev tool is
-                            // never killed on a race. Non-allowlisted names are unaffected.
-                            bool allowlistedNameUnresolvedPath = (isDev || isBrowser) && string.IsNullOrEmpty(imagePath);
-                            bool demote = ShouldDemotePpidToLogOnly(proc.ProcessName, imagePath, selfSigned, allowlistedNameUnresolvedPath);
+                            // Allowlisted dev/browser tool on a PPID mismatch: NEVER kill. The
+                            // top-of-scan signed-skip is gated on BOTH a resolved image path AND a
+                            // passing signature check in the same 2s tick. Under rapid-fire git/gh
+                            // spawning that gate races two ways: (a) the path never resolves (gh /
+                            // git-remote-https exit first), or (b) the path resolves but the slow
+                            // WinVerifyTrust call intermittently fails, so selfSigned is false even
+                            // for a validly-signed binary. Either way a known-good, allowlisted dev
+                            // tool reached the kill branch at 0.85 and was terminated mid-push
+                            // (observed: git PID 11656 killed on a signature race). Allowlist
+                            // membership by NAME is sufficient to decline the kill: a real attacker
+                            // merely naming their binary "git"/"gh" is caught by other rules, whereas
+                            // killing the real tool breaks every push. Demote to LogOnly for any
+                            // allowlisted dev/browser name regardless of whether the path or
+                            // signature resolved on this tick. Non-allowlisted names are unaffected.
+                            bool allowlistedDevTool = (isDev || isBrowser);
+                            bool demote = ShouldDemotePpidToLogOnly(proc.ProcessName, imagePath, selfSigned, allowlistedDevTool);
                             var response = demote
                                 ? ResponseAction.LogOnly
                                 : ResponseAction.KillProcess;
@@ -162,8 +171,8 @@ namespace Sentinel.Core
                                     ? " [stock console host - LogOnly]"
                                     : selfSigned
                                         ? " [signed - LogOnly]"
-                                        : allowlistedNameUnresolvedPath
-                                            ? " [allowlisted dev tool, image path unresolved (transient race) - LogOnly]"
+                                        : allowlistedDevTool
+                                            ? " [allowlisted dev/browser tool - LogOnly, never killed on PPID race]"
                                             : " [OS path - LogOnly]")
                                 : "";
 
@@ -227,16 +236,20 @@ namespace Sentinel.Core
             string processName,
             string? imagePath,
             bool selfSigned,
-            bool allowlistedNameUnresolvedPath = false)
+            bool allowlistedDevTool = false)
         {
             if (selfSigned) return true;
-            // Allowlisted dev/browser tool whose image path couldn't be resolved in the scan's
-            // race window (gh / git-remote-https exit near-instantly). The signed-path skip never
-            // got a path to check, so demote instead of killing a known-good transient dev tool.
-            // A genuine PPID-spoof impostor using these names is still caught when its path DOES
-            // resolve (signed-path check) and by other rules; name-only trust is never granted to
-            // processes outside the dev/browser allowlist.
-            if (allowlistedNameUnresolvedPath && string.IsNullOrEmpty(imagePath)) return true;
+            // Allowlisted dev/browser tool on a PPID mismatch: NEVER escalate to KillProcess,
+            // regardless of whether the image path or signature resolved on this scan tick.
+            // The top-of-scan signed-skip requires BOTH a resolved path AND a passing
+            // WinVerifyTrust check within the same 2s tick; under rapid-fire git/gh spawning
+            // that gate races (path not yet readable, or the slow signature call transiently
+            // fails) and a validly-signed, allowlisted tool reaches the 0.85 kill branch and is
+            // terminated mid-push. Allowlist membership by NAME is sufficient to decline the
+            // kill: an impostor merely named "git"/"gh" is caught by other rules, while killing
+            // the real tool breaks every push/release. So demote to LogOnly for any allowlisted
+            // dev/browser name. Names outside the dev/browser allowlist are never demoted here.
+            if (allowlistedDevTool) return true;
             if (IsStockWindowsConsoleHost(processName, imagePath)) return true;
             // Any binary under the Windows tree (WRP) - ancestry races are common; kill chain is not.
             if (!string.IsNullOrEmpty(imagePath) && SecurityValidation.IsOsCriticalPath(imagePath))

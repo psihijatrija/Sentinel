@@ -1,4 +1,10 @@
 # Changelog
+## [3.0.0] - 2026-10-04
+### Fixed
+- **PPID-spoofing rule no longer kills allowlisted dev/browser tools on a signature-check race.** The 2.9.9 fix only demoted an allowlisted process when its image path was *empty*. But `git` (unlike the near-instant `gh`/`git-remote-https`) usually *does* resolve a path, so it took the signed-path branch which requires `_signerTrust.IsSignedFile(path)` to pass within the same 2s scan tick. Under `push.ps1 -LatestOnly` rapid-fire git spawning, the slow `WinVerifyTrust` call intermittently failed for a validly-signed `git.exe` (Git for Windows maintainer), so `selfSigned` was false, the empty-path demote did not apply, and `git` was issued `KillProcess` at 0.85 mid-push (observed: git PID 11656 killed on a signature race). Now `ShouldDemotePpidToLogOnly` demotes to LogOnly/Tier2 for ANY dev/browser-allowlisted process name on a PPID mismatch, regardless of whether the path or signature resolved on that tick. A mere name-impostor is caught by other rules; names outside the dev/browser allowlist and unsigned non-allowlisted binaries still escalate to KillProcess/Tier1 as before.
+### Changed
+- Version stamp 2.9.9 -> 3.0.0 (patch carry on 9).
+
 
 ## [2.9.9] - 2026-10-04
 
