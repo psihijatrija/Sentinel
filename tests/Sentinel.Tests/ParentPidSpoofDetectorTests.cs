@@ -59,7 +59,7 @@ namespace Sentinel.Tests
         public void ShouldDemotePpidToLogOnly_ReturnsTrue_ForAllowlistedNameWithUnresolvedPath(string name, string? path)
         {
             Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
-                name, path, selfSigned: false, allowlistedNameUnresolvedPath: true));
+                name, path, selfSigned: false, allowlistedDevTool: true));
         }
 
         // A non-allowlisted, unsigned process with the same mismatch is NOT demoted - it still
@@ -70,16 +70,19 @@ namespace Sentinel.Tests
         public void ShouldDemotePpidToLogOnly_ReturnsFalse_ForNonAllowlistedUnresolvedPath(string name, string? path)
         {
             Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
-                name, path, selfSigned: false, allowlistedNameUnresolvedPath: false));
+                name, path, selfSigned: false, allowlistedDevTool: false));
         }
 
-        // The transient-race demote only applies when the path is actually unresolved; if a path
-        // resolves it goes through the normal signed/OS-path checks, not name-only trust.
+        // The allowlisted-dev-tool demote is UNCONDITIONAL by design: once a PPID-mismatch
+        // process is an allowlisted dev/browser name, it is demoted to LogOnly regardless of
+        // its image path (even a suspicious one like C:\Temp\gh.exe). The method returns true
+        // before any path check - killing a real git/gh mid-push is never acceptable, and an
+        // impostor merely named "gh" is caught by other rules.
         [Fact]
-        public void ShouldDemotePpidToLogOnly_UnresolvedPathFlag_IgnoredWhenPathResolves()
+        public void ShouldDemotePpidToLogOnly_AllowlistedDevTool_DemotesRegardlessOfPath()
         {
-            Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
-                "gh", @"C:\Temp\gh.exe", selfSigned: false, allowlistedNameUnresolvedPath: true));
+            Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
+                "gh", @"C:\Temp\gh.exe", selfSigned: false, allowlistedDevTool: true));
         }
 
         [Fact]

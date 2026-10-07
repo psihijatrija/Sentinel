@@ -360,7 +360,7 @@ namespace Sentinel.Agent
                     services.AddHostedService<MicSessionMonitor>();
                     services.AddHostedService<NeuroBehaviorVisualMonitor>();
                     services.AddHostedService<BrowserExtensionMonitor>();
-                    services.AddHostedService<PhantomKeystrokeGuard>();
+                    services.AddHostedService<InputIntegrityGuard>();
                     services.AddHostedService<ClickjackingGuard>();
                     services.AddHostedService<WebcamHijackMonitor>();
                     services.AddHostedService<ShellWatchdog>();
@@ -368,6 +368,11 @@ namespace Sentinel.Agent
                     services.AddHostedService<ScarewareWindowMonitor>();
                     services.AddHostedService<CursorTakeoverMonitor>();
                     services.AddHostedService<CookieIntegrityMonitor>();
+                    // Previously dead code: a complete BackgroundService that emits acoustic-threat
+                    // detections and mutes harmful audio sessions, but was registered in no composition
+                    // root. Its only deps (DetectionEngine, ILogger) are already in the Agent container;
+                    // NAudio WasapiLoopbackCapture ships with Sentinel.Core. Detection logic unchanged.
+                    services.AddHostedService<AcousticThreatMonitor>();
                     services.AddSingleton<IsolationResponseEngine>();
                 });
     }

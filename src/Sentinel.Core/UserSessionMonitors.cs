@@ -665,120 +665,12 @@ namespace Sentinel.Core
         }
     }
 
-    /// <summary>
-    /// Detects phantom keystrokes - keypress injection from non-HID sources.
-    /// Installs a low-level keyboard hook (WH_KEYBOARD_LL) and checks the
-    /// LLKHF_INJECTED flag to detect software-injected keystrokes via SendInput.
-    /// Blocks injected keystrokes and emits detection events.
-    /// </summary>
-    public sealed class PhantomKeystrokeGuard : IHostedService, IDisposable
-    {
-        private readonly DetectionEngine _detectionEngine;
-        private readonly ILogger<PhantomKeystrokeGuard> _logger;
-        private readonly SentinelConfig _config;
-        private System.Threading.Timer? _timer;
-        private DateTime _lastAlertTime = DateTime.MinValue;
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct LASTINPUTINFO
-        {
-            public uint cbSize;
-            public uint dwTime;
-        }
-
-        private uint _lastInputTime;
-        private uint _previousInputTime;
-        private int _noInputChangeCount;
-
-        public PhantomKeystrokeGuard(DetectionEngine de, ILogger<PhantomKeystrokeGuard> l, SentinelConfig config)
-        {
-            _detectionEngine = de;
-            _logger = l;
-            _config = config;
-        }
-
-        public Task StartAsync(CancellationToken cancellationToken)
-        {
-            _logger.LogInformation("[PhantomKeystrokeGuard] Started");
-
-            // Run heuristic input monitor timer
-            _timer = new System.Threading.Timer(Check, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
-            return Task.CompletedTask;
-        }
-
-        public Task StopAsync(CancellationToken cancellationToken)
-        {
-            _timer?.Change(Timeout.Infinite, Timeout.Infinite);
-            return Task.CompletedTask;
-        }
-
-        private async void Check(object? state)
-        {
-            try
-            {
-                var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
-                if (!GetLastInputInfo(ref info)) return;
-
-                var currentTick = (uint)Environment.TickCount;
-
-                if (_lastInputTime == info.dwTime && _previousInputTime == _lastInputTime)
-                {
-                    _noInputChangeCount++;
-                }
-                else
-                {
-                    _noInputChangeCount = 0;
-                }
-
-                _previousInputTime = _lastInputTime;
-                _lastInputTime = info.dwTime;
-
-                if (_noInputChangeCount >= 6)
-                {
-                    foreach (var proc in Process.GetProcesses())
-                    {
-                        try
-                        {
-                            var name = proc.ProcessName.ToLowerInvariant();
-                            string? imagePath = SecurityValidation.GetProcessImagePath(proc.Id);
-
-                            if ((name.Contains("sendinput") || name.Contains("autoit") ||
-                                 name.Contains("nircmd") || name.Contains("inputsimulator")) &&
-                                !string.IsNullOrEmpty(imagePath) &&
-                                (imagePath!.Contains(@"\Temp\") ||
-                                 imagePath.Contains(@"\Downloads\")))
-                            {
-                                if ((DateTime.UtcNow - _lastAlertTime).TotalSeconds < 60) break;
-                                _lastAlertTime = DateTime.UtcNow;
-
-                                await _detectionEngine.EmitAsync(new DetectionEvent
-                                {
-                                    RuleName = "Phantom Keystrokes: Input Injection Tool Detected",
-                                    Evidence = $"Process '{proc.ProcessName}' (PID {proc.Id}) from '{imagePath}' detected while no physical input is occurring",
-                                    Reasoning = "A known input automation/injection tool is running from a suspicious path while no physical keyboard input has been detected for an extended period, indicating programmatic keystroke injection.",
-                                    Confidence = 0.80, Tier = DetectionTier.Tier1Behavioral,
-                                    AuthorizedResponse = ResponseAction.KillProcessTree,
-                                    ProcessName = proc.ProcessName, ProcessId = proc.Id,
-                                    SignalType = SignalType.PhantomKeystroke
-                                });
-                                break;
-                            }
-                        }
-                        catch { }
-                        finally { proc.Dispose(); }
-                    }
-
-                    _noInputChangeCount = 0;
-                }
-            }
-            catch { }
-        }
-
-        public void Dispose() => _timer?.Dispose();
-    }
+    // NOTE: PhantomKeystrokeGuard was removed in the input-integrity work. Its documented
+    // WH_KEYBOARD_LL / LLKHF_INJECTED behavior was never implemented; the real code only
+    // name-matched sendinput/autoit/nircmd/inputsimulator binaries in \Temp\/\Downloads\ and
+    // issued a KillProcessTree on that attacker-controllable filename trust - forbidden
+    // security theater. The genuine injected-flag detection (LLKHF_INJECTED / LLMHF_INJECTED,
+    // behavioral and name-free, Tier2/LogOnly) now lives in InputIntegrityGuard.cs, so no
+    // capability was lost.
 }
 
