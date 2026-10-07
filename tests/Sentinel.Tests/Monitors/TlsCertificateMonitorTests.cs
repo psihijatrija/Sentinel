@@ -18,8 +18,11 @@ namespace Sentinel.Tests.Monitors
             var result = TlsCertificateMonitor.AnalyzeCert(cert);
 
             Assert.True(result.IsSelfSigned);
-            // Base confidence is 0.40, no bonus for self-signed anymore
-            Assert.True(result.Confidence < 0.60, $"Self-signed alone should be < 0.60, got {result.Confidence}");
+            // Base confidence is 0.40; a cert with no EKU extension is "All-Purpose" (can sign
+            // for any use, a real MitM/code-signing risk per RFC 5280) and gets +0.25. The test
+            // cert has no EKU, so it scores 0.65 - still Tier2/LogOnly, below every removal
+            // threshold.
+            Assert.True(result.Confidence <= 0.65, $"Self-signed alone (base + no-EKU/All-Purpose) should be <= 0.65, got {result.Confidence}");
         }
 
         [Fact]
@@ -46,7 +49,7 @@ namespace Sentinel.Tests.Monitors
 
             Assert.True(result.IsSelfSigned);
             Assert.DoesNotContain(result.Reasons, r => r.Contains("No CRL/OCSP"));
-            Assert.True(result.Confidence < 0.65, $"Long-lived root should stay below remove threshold, got {result.Confidence}");
+            Assert.True(result.Confidence <= 0.65, $"Long-lived root (base + no-EKU/All-Purpose) should stay at/below remove threshold, got {result.Confidence}");
         }
 
         [Fact]

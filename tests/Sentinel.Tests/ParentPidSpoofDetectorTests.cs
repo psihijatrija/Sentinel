@@ -73,16 +73,26 @@ namespace Sentinel.Tests
                 name, path, selfSigned: false, allowlistedDevTool: false));
         }
 
-        // The allowlisted-dev-tool demote is UNCONDITIONAL by design: once a PPID-mismatch
-        // process is an allowlisted dev/browser name, it is demoted to LogOnly regardless of
-        // its image path (even a suspicious one like C:\Temp\gh.exe). The method returns true
-        // before any path check - killing a real git/gh mid-push is never acceptable, and an
-        // impostor merely named "gh" is caught by other rules.
+        // The allowlisted-dev-tool name demotes the kill ONLY while the image path is
+        // unresolved (the transient race window). Once a path DID resolve to an untrusted,
+        // unsigned location like C:\Temp\gh.exe, the name alone is NOT enough: the method falls
+        // through to the selfSigned / stock-console-host / OS-critical-path checks and the kill
+        // stands. A filename never self-authorizes trust on a kill path.
         [Fact]
-        public void ShouldDemotePpidToLogOnly_AllowlistedDevTool_DemotesRegardlessOfPath()
+        public void ShouldDemotePpidToLogOnly_AllowlistedDevTool_ResolvedUntrustedPath_DoesNotDemote()
+        {
+            Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
+                "gh", @"C:\Temp\gh.exe", selfSigned: false, allowlistedDevTool: true));
+        }
+
+        // A validly-signed real tool whose path resolved is still demoted - via the selfSigned
+        // branch, not via its name. This proves the tightening does not break the legitimate
+        // signed tool whose top-of-scan signed-skip raced.
+        [Fact]
+        public void ShouldDemotePpidToLogOnly_AllowlistedDevTool_ResolvedSignedPath_Demotes()
         {
             Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
-                "gh", @"C:\Temp\gh.exe", selfSigned: false, allowlistedDevTool: true));
+                "gh", @"C:\Program Files\GitHub CLI\gh.exe", selfSigned: true, allowlistedDevTool: true));
         }
 
         [Fact]

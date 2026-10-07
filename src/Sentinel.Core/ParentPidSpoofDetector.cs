@@ -239,17 +239,18 @@ namespace Sentinel.Core
             bool allowlistedDevTool = false)
         {
             if (selfSigned) return true;
-            // Allowlisted dev/browser tool on a PPID mismatch: NEVER escalate to KillProcess,
-            // regardless of whether the image path or signature resolved on this scan tick.
-            // The top-of-scan signed-skip requires BOTH a resolved path AND a passing
-            // WinVerifyTrust check within the same 2s tick; under rapid-fire git/gh spawning
-            // that gate races (path not yet readable, or the slow signature call transiently
-            // fails) and a validly-signed, allowlisted tool reaches the 0.85 kill branch and is
-            // terminated mid-push. Allowlist membership by NAME is sufficient to decline the
-            // kill: an impostor merely named "git"/"gh" is caught by other rules, while killing
-            // the real tool breaks every push/release. So demote to LogOnly for any allowlisted
-            // dev/browser name. Names outside the dev/browser allowlist are never demoted here.
-            if (allowlistedDevTool) return true;
+            // Allowlisted dev/browser NAME demotes the kill ONLY in the genuine transient
+            // unresolved-path race window: the image path could not be resolved on this scan
+            // tick (a short-lived gh/git-remote-https exited before QueryFullProcessImageName
+            // returned). In that window there is no resolved attacker-controllable anchor to
+            // check, so failing open for a known dev/browser name is the lesser evil and avoids
+            // killing a real tool mid-push. But if a path DID resolve, the name alone is NOT
+            // enough: fall through to the selfSigned / IsStockWindowsConsoleHost /
+            // IsOsCriticalPath checks so an impostor at a resolved untrusted path
+            // (e.g. C:\Temp\gh.exe) is NOT exonerated by its name. The selfSigned branch above
+            // already protects a validly-signed real tool whose path resolved. This mirrors the
+            // already-shipped IsStockWindowsConsoleHost empty-path carve-out.
+            if (allowlistedDevTool && string.IsNullOrEmpty(imagePath)) return true;
             if (IsStockWindowsConsoleHost(processName, imagePath)) return true;
             // Any binary under the Windows tree (WRP) - ancestry races are common; kill chain is not.
             if (!string.IsNullOrEmpty(imagePath) && SecurityValidation.IsOsCriticalPath(imagePath))
