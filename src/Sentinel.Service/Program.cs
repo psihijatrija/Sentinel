@@ -775,6 +775,7 @@ namespace Sentinel.Service
                             ("CloudFilesHydrationMonitor",      s => s.GetRequiredService<CloudFilesHydrationMonitor>()),
                             ("ClfsExploitationMonitor",         s => s.GetRequiredService<ClfsExploitationMonitor>()),
                             ("StateReconciliationMonitor",      s => s.GetRequiredService<StateReconciliationMonitor>()),
+                            ("TrustedHostModuleIntegrityMonitor", s => s.GetRequiredService<TrustedHostModuleIntegrityMonitor>()),
                             ("AggressiveUnsignedDllSweepMonitor", s => s.GetRequiredService<AggressiveUnsignedDllSweepMonitor>())
                         );
                         return new MonitorGroup(
@@ -796,6 +797,11 @@ namespace Sentinel.Service
                     // diff of long-lived processes. Reboot-durable baseline store + monitor.
                     services.AddSingleton<ModuleBaselineStore>();
                     services.AddSingleton<StateReconciliationMonitor>();
+                    // Registry-driven DLL-load-point integrity (audio APOs + print monitors/processors).
+                    // Observe-only (Tier2/LogOnly). Does not duplicate PrintSpoolerMonitor (filesystem
+                    // driver store) or WinsockLspIntegrityMonitor (Winsock catalog).
+                    services.AddSingleton<IRegisteredModuleSource, HklmRegisteredModuleSource>();
+                    services.AddSingleton<TrustedHostModuleIntegrityMonitor>();
                     // Opt-in aggressive unsigned-DLL drive sweep (gated behind
                     // SentinelConfig.EnableAggressiveUnsignedDllSweep, compiled default FALSE).
                     services.AddSingleton<AggressiveUnsignedDllSweepMonitor>();
