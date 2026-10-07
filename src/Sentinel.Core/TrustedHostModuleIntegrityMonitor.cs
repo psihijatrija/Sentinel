@@ -57,7 +57,6 @@ namespace Sentinel.Core
         private readonly ConcurrentDictionary<string, byte> _baseline = new(StringComparer.OrdinalIgnoreCase);
         // Flagged modules already emitted (dedup) so a persistent plant is reported once.
         private readonly ConcurrentDictionary<string, byte> _alerted = new(StringComparer.OrdinalIgnoreCase);
-        private bool _baselineComplete;
 
         public TrustedHostModuleIntegrityMonitor(
             DetectionEngine detectionEngine,
@@ -92,7 +91,9 @@ namespace Sentinel.Core
             {
                 _logger.LogDebug(ex, "[TrustedHostModuleIntegrityMonitor] Baseline read error");
             }
-            _baselineComplete = true;
+            // Baseline is now populated. The scan loop below only alerts on modules NOT in
+            // _baseline, so the baseline-before-scan ordering here is what guarantees newly-added
+            // DLLs are the only ones evaluated - no separate "complete" flag is needed.
 
             while (!ct.IsCancellationRequested)
             {
