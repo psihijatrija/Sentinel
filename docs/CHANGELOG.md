@@ -1,4 +1,8 @@
 # Changelog
+## [3.0.2] - 2026-10-08
+### Fixed
+- **`AcousticThreatMonitor` unregistered — no longer runs.** Once activated in 3.0.1, its WASAPI-loopback Goertzel analysis of the live audio *output* stream and its session-muting (`SimpleAudioVolume.Mute`) degraded legitimate playback: a user reported YouTube audio breaking up/stuttering and ear discomfort immediately after installing 3.0.1, and stopping the Sentinel service resolved it. The thresholds were too aggressive and the muting too blunt for normal content. The monitor's `AddHostedService<AcousticThreatMonitor>()` registration in the Agent composition root has been removed, reverting it to its prior dead-but-compiled state; the class and its detection logic remain in the tree untouched, pending a redesign (opt-in, lighter-weight, far narrower thresholds) before it is ever re-enabled.
+
 ## [3.0.1] - 2026-10-07
 ### Added
 - **`InputIntegrityGuard`** (user-session, observe-only Tier2/LogOnly) — closes the three real gaps in the credential-capture / perceptual-manipulation ("read & write to the user") I/O channel: (a) genuine synthetic-input-injection detection via low-level `WH_KEYBOARD_LL`/`WH_MOUSE_LL` hooks on a dedicated message-pump thread, inspecting the `LLKHF_INJECTED`/`LLMHF_INJECTED` flags (behavioral, never name-based; honest `ProcessId=0` where Windows cannot attribute the source); (b) keylogger/raw-input hook observation with the userland limitation documented honestly rather than faked; (c) clipboard write-replace (ClipBanker) detection via `AddClipboardFormatListener` on a message-only window. Replaces the removed `PhantomKeystrokeGuard`.
