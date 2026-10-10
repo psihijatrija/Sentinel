@@ -516,14 +516,32 @@ namespace Sentinel.Core
                     if (ct.IsCancellationRequested) return;
                     try
                     {
-                        // Flag non-standard root CAs that aren't part of the Microsoft trusted root program
-                        if (!IsWellKnownCa(cert))
-                        {
-                            var notBefore = cert.NotBefore;
-                            var issuer = cert.Issuer;
-                            var subject = cert.Subject;
-                            var thumbprint = cert.Thumbprint;
+                        var issuer = cert.Issuer;
+                        var subject = cert.Subject;
+                        var thumbprint = cert.Thumbprint;
 
+                        // Highest priority: thumbprint is on the authoritative distrust list
+                        // (StartCom + the roots pinned to Disallowed by Registry\Certificates.reg).
+                        // Thumbprint is a non-attacker-controllable identity anchor, so this is a
+                        // true positive regardless of what the cert names itself. Offer remediation.
+                        var distrustLabel = CertDistrustList.GetLabel(thumbprint);
+                        if (distrustLabel != null)
+                        {
+                            result.AddFinding(new ScanFinding
+                            {
+                                Category = ScanCategory.Certificate,
+                                Severity = ScanSeverity.High,
+                                Title = "Distrusted certificate in trusted store",
+                                Description = $"{distrustLabel}. Store: {label}, Subject: {subject}, Thumbprint: {thumbprint}. " +
+                                              "Sentinel can remove it from the Root store and pin it to the Disallowed (Untrusted) store.",
+                                Path = label,
+                                CertThumbprint = CertDistrustList.Normalize(thumbprint),
+                                Remediable = true,
+                            });
+                        }
+                        // Otherwise fall back to the name/validity heuristic for unknown non-standard CAs.
+                        else if (!IsWellKnownCa(cert))
+                        {
                             // Skip common legitimate additions (driver signing, enterprise CAs with long validity)
                             if (IsLikelyLegitimateAddition(cert)) continue;
 
@@ -534,6 +552,7 @@ namespace Sentinel.Core
                                 Title = "Non-standard certificate in trusted store",
                                 Description = $"Store: {label}, Subject: {subject}, Issuer: {issuer}, Thumbprint: {thumbprint}",
                                 Path = label,
+                                CertThumbprint = CertDistrustList.Normalize(thumbprint),
                             });
                         }
                         result.Stats.CertificatesScanned++;
@@ -957,6 +976,18 @@ namespace Sentinel.Core
         public int? ProcessId { get; set; }
         public string? ProcessName { get; set; }
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// Certificate SHA-1 thumbprint (uppercase hex, no separators) when the finding is a
+        /// certificate finding. Null for non-cert findings.
+        /// </summary>
+        public string? CertThumbprint { get; set; }
+
+        /// <summary>
+        /// True when Sentinel can offer a one-click remediation for this finding. For
+        /// distrusted certificates this triggers the Root-removal + Disallowed-pin flow.
+        /// </summary>
+        public bool Remediable { get; set; }
     }
 
     public sealed class ScanStats

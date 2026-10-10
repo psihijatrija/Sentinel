@@ -280,6 +280,7 @@ namespace Sentinel.Core
         private readonly WeightedCorrelationConfig _weighted;
         private readonly Plugins.PluginRegistry _plugins;
         private readonly ScanEngine _scanEngine;
+        private readonly CertRemediator? _certRemediator;
         private readonly ILogger<ServiceAgentIpcHost> _logger;
         private byte[] _token = Array.Empty<byte>();
 
@@ -298,7 +299,8 @@ namespace Sentinel.Core
             Plugins.PluginRegistry plugins,
             ScanEngine scanEngine,
             ILogger<ServiceAgentIpcHost> logger,
-            MonitorRegistry? registry = null)
+            MonitorRegistry? registry = null,
+            CertRemediator? certRemediator = null)
         {
             _metrics = metrics;
             _weighted = weighted;
@@ -306,6 +308,7 @@ namespace Sentinel.Core
             _scanEngine = scanEngine;
             _logger = logger;
             _registry = registry;
+            _certRemediator = certRemediator;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -486,6 +489,12 @@ namespace Sentinel.Core
                             response = JsonSerializer.Serialize(new { ok = true, status = "idle" });
                         }
                         break;
+                    case "cert_distrust":
+                        // Remediate a distrusted certificate: remove from Root, pin to Disallowed.
+                        // Mirrors Registry\Certificates.reg. Fail-closed: CertRemediator refuses
+                        // any thumbprint not on the authoritative distrust list.
+                        response = HandleCertDistrust(body);
+                        break;
                     default:
                         response = "{\"ok\":false,\"error\":\"unknown_op\"}";
                         break;
@@ -497,6 +506,60 @@ namespace Sentinel.Core
             {
                 _logger.LogDebug(ex, "[IPC] Bad request");
                 await writer.WriteLineAsync("{\"ok\":false,\"error\":\"bad_request\"}").ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Handles the <c>cert_distrust</c> op: parses a thumbprint from the signed request
+        /// body and runs <see cref="CertRemediator.Distrust"/> (remove from Root, pin to
+        /// Disallowed). Returns a JSON result the dashboard can surface.
+        /// </summary>
+        private string HandleCertDistrust(string body)
+        {
+            if (_certRemediator == null)
+                return "{\"ok\":false,\"error\":\"remediator_unavailable\"}";
+
+            string thumbprint = string.Empty;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(body))
+                {
+                    using var bodyDoc = JsonDocument.Parse(body);
+                    if (bodyDoc.RootElement.ValueKind == JsonValueKind.Object &&
+                        bodyDoc.RootElement.TryGetProperty("thumbprint", out var tEl))
+                    {
+                        thumbprint = tEl.GetString() ?? string.Empty;
+                    }
+                }
+            }
+            catch
+            {
+                return "{\"ok\":false,\"error\":\"bad_body\"}";
+            }
+
+            if (string.IsNullOrWhiteSpace(thumbprint))
+                return "{\"ok\":false,\"error\":\"missing_thumbprint\"}";
+
+            // Fail-closed guard also lives in CertRemediator; check here for a clean 4xx-style reply.
+            if (!CertDistrustList.IsDistrusted(thumbprint))
+                return "{\"ok\":false,\"error\":\"not_distrusted\"}";
+
+            try
+            {
+                var res = _certRemediator.Distrust(thumbprint);
+                return JsonSerializer.Serialize(new
+                {
+                    ok = res.Success,
+                    thumbprint = res.Thumbprint,
+                    removedFromTrust = res.RemovedFromTrust,
+                    addedToDisallowed = res.AddedToDisallowed,
+                    message = res.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[IPC] cert_distrust failed");
+                return "{\"ok\":false,\"error\":\"remediation_failed\"}";
             }
         }
 

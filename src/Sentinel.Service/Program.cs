@@ -358,6 +358,8 @@ namespace Sentinel.Service
                     services.AddSingleton<ToastService>();
                     // v2.2: One-time system scan engine (triggered via IPC from dashboard)
                     services.AddSingleton<ScanEngine>();
+                    // SYSTEM-side certificate remediation (distrust: remove from Root, pin to Disallowed)
+                    services.AddSingleton<CertRemediator>();
 
                     // Engines
                     services.AddSingleton<TelemetryFusionEngine>();

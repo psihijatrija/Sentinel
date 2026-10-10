@@ -289,6 +289,11 @@ namespace Sentinel.Agent
                     if (!ValidateCsrf(request, response)) return;
                     await HandleModuleRemediate(request, response).ConfigureAwait(false);
                     break;
+                case "/api/cert/distrust":
+                    if (method != "POST") { response.StatusCode = 405; response.Close(); return; }
+                    if (!ValidateCsrf(request, response)) return;
+                    await HandleCertDistrust(request, response).ConfigureAwait(false);
+                    break;
                 default:
                     response.StatusCode = 404;
                     await WriteJson(response, new { error = "unknown_endpoint" }).ConfigureAwait(false);
@@ -382,6 +387,54 @@ namespace Sentinel.Agent
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[WebDashboard] Module remediation failed");
+                response.StatusCode = 500;
+                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Forwards a distrusted-certificate remediation request to the SYSTEM service over IPC.
+        /// The service (running as SYSTEM) removes the cert from the trusted stores and pins it
+        /// to the Disallowed store. LocalMachine store mutation requires SYSTEM, which is why
+        /// this is proxied rather than performed in the user-session agent.
+        /// </summary>
+        private async Task HandleCertDistrust(HttpListenerRequest request, HttpListenerResponse response)
+        {
+            try
+            {
+                using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
+                var json = await reader.ReadToEndAsync().ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                string thumbprint = root.TryGetProperty("thumbprint", out var tEl) ? (tEl.GetString() ?? "") : "";
+                if (string.IsNullOrWhiteSpace(thumbprint))
+                {
+                    response.StatusCode = 400;
+                    await WriteJson(response, new { ok = false, error = "missing_thumbprint" }).ConfigureAwait(false);
+                    return;
+                }
+
+                var body = JsonSerializer.Serialize(new { thumbprint });
+                var ipcResult = ServiceAgentIpcClient.Request("cert_distrust", body, 8000);
+
+                if (string.IsNullOrEmpty(ipcResult))
+                {
+                    response.StatusCode = 502;
+                    await WriteJson(response, new { ok = false, error = "service_unreachable" }).ConfigureAwait(false);
+                    return;
+                }
+
+                // Pass the service's JSON result straight through to the browser.
+                response.ContentType = "application/json";
+                var bytes = Encoding.UTF8.GetBytes(ipcResult);
+                response.ContentLength64 = bytes.Length;
+                await response.OutputStream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+                response.Close();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[WebDashboard] Cert distrust remediation failed");
                 response.StatusCode = 500;
                 await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
             }

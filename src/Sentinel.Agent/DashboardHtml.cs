@@ -943,7 +943,16 @@ function checkScanStatus() {{
                     var f = findings[j];
                     var s = f.Severity || f.severity || 0;
                     var sevClass = s >= 4 ? 'critical' : s === 3 ? 'high' : s === 2 ? 'medium' : 'low';
-                    html += '<div class=""finding""><div class=""finding-severity ' + sevClass + '""></div><div class=""finding-body""><div class=""finding-title"">' + esc(f.Title || f.title) + '</div><div class=""finding-desc"">' + esc(f.Description || f.description) + '</div></div></div>';
+                    var remediable = f.Remediable || f.remediable;
+                    var thumb = f.CertThumbprint || f.certThumbprint || '';
+                    var actionHtml = '';
+                    if (remediable && thumb) {{
+                        actionHtml = '<button class=""btn btn-primary"" style=""margin-left:auto;align-self:center;white-space:nowrap"" ' +
+                            'onclick=""remediateCert(this,\'' + esc(thumb) + '\')"">Remove &amp; Block</button>';
+                    }}
+                    html += '<div class=""finding"" data-thumb=""' + esc(thumb) + '""><div class=""finding-severity ' + sevClass + '""></div>' +
+                        '<div class=""finding-body""><div class=""finding-title"">' + esc(f.Title || f.title) + '</div>' +
+                        '<div class=""finding-desc"">' + esc(f.Description || f.description) + '</div></div>' + actionHtml + '</div>';
                 }}
                 container.innerHTML = html;
             }}
@@ -953,6 +962,39 @@ function checkScanStatus() {{
             btn.disabled = false;
             btn.textContent = 'Run Full Scan';
         }}
+    }});
+}}
+
+// Remediate a distrusted certificate: remove from trusted stores + pin to Disallowed.
+function remediateCert(btn, thumbprint) {{
+    if (!thumbprint) return;
+    btn.disabled = true;
+    btn.textContent = 'Working...';
+    ensureCsrf(function(token) {{
+        apiCall('/api/cert/distrust', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json', 'X-CSRF-Token': token }},
+            body: JSON.stringify({{ thumbprint: thumbprint }})
+        }}, function(res) {{
+            var finding = btn.closest('.finding');
+            if (res && res.ok) {{
+                btn.textContent = 'Blocked';
+                if (finding) {{
+                    var desc = finding.querySelector('.finding-desc');
+                    if (desc) desc.textContent = res.message || 'Removed from trusted store and blocked.';
+                    var sev = finding.querySelector('.finding-severity');
+                    if (sev) sev.className = 'finding-severity low';
+                }}
+            }} else {{
+                btn.disabled = false;
+                btn.textContent = 'Retry';
+                if (finding) {{
+                    var d2 = finding.querySelector('.finding-desc');
+                    if (d2) d2.textContent = 'Remediation failed: ' + ((res && res.error) || 'unknown') +
+                        '. Ensure the Sentinel service is running as SYSTEM.';
+                }}
+            }}
+        }});
     }});
 }}
 
