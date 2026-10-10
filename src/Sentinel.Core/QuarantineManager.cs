@@ -153,8 +153,15 @@ namespace Sentinel.Core
         ///
         /// Returns the quarantine path, or <c>null</c> if the file was refused (signed)
         /// or missing.
+        ///
+        /// <paramref name="hardenedRemoval"/> (opt-in, used only by the aggressive unsigned-module
+        /// sweep): when the original cannot be deleted in place because it is mapped into a live
+        /// process or its ACL denies delete, terminate the holder processes and seize ownership
+        /// (takeown/icacls) so the file leaves disk immediately instead of waiting for reboot.
+        /// Default callers (signed installers, normal detections) must NOT set this - they keep
+        /// the conservative retry-then-delete-on-reboot behavior.
         /// </summary>
-        public async Task<string?> QuarantineFileAtomicAsync(string filePath, bool forceQuarantineSigned = false)
+        public async Task<string?> QuarantineFileAtomicAsync(string filePath, bool forceQuarantineSigned = false, bool hardenedRemoval = false)
         {
             if (!File.Exists(filePath))
             {
@@ -282,6 +289,14 @@ namespace Sentinel.Core
             // delete-on-reboot so the file is guaranteed gone after the next boot rather
             // than silently surviving.
             bool removedNow = await TryDeleteWithRetriesAsync(filePath);
+            if (!removedNow && hardenedRemoval)
+            {
+                // Opt-in aggressive removal (unsigned-module sweep): the file is still on disk
+                // because it is mapped into a live process (delete lock) or its ACL denies
+                // delete. Mirror the PS DLL remover - terminate the holder processes and seize
+                // ownership (takeown/icacls), then retry the delete before deferring to reboot.
+                removedNow = await TryHardenedDeleteAsync(filePath);
+            }
             if (!removedNow)
             {
                 bool scheduled = TryScheduleDeleteOnReboot(filePath);
@@ -331,6 +346,117 @@ namespace Sentinel.Core
                 }
             }
             return !File.Exists(filePath);
+        }
+
+        /// <summary>
+        /// Aggressive opt-in removal used by the unsigned-module sweep (hardenedRemoval=true).
+        /// Ports the PS DLL remover's locked-file path: kill every process that currently maps
+        /// the file, seize ownership and reset the ACL via takeown/icacls, then retry the delete.
+        /// Never used by the default callers - signed installers and normal detections keep the
+        /// conservative retry-then-reboot behavior. Returns true only if the original is gone.
+        /// </summary>
+        private static async Task<bool> TryHardenedDeleteAsync(string filePath)
+        {
+            if (!File.Exists(filePath)) return true;
+
+            // 1. Terminate processes that hold the file mapped (Stop-ProcessesUsingDLL parity).
+            try { KillProcessesMappingFile(filePath); }
+            catch { /* best effort - continue to ownership seize + delete */ }
+
+            // Give the OS a moment to unmap after the holders die.
+            if (await TryDeleteWithRetriesAsync(filePath)) return true;
+
+            // 2. Seize ownership + reset ACL (Set-DLLFileOwnership parity), then retry.
+            try { SeizeOwnership(filePath); }
+            catch { /* best effort */ }
+
+            return await TryDeleteWithRetriesAsync(filePath);
+        }
+
+        /// <summary>
+        /// Kills every process whose loaded modules include <paramref name="filePath"/>.
+        /// Mirrors the PS remover's Stop-ProcessesUsingDLL. Uses the hardened
+        /// <see cref="HardeningModule.SafeKillProcessTree"/> so Sentinel's own binaries and
+        /// BSOD-critical system processes are never terminated.
+        /// </summary>
+        private static void KillProcessesMappingFile(string filePath)
+        {
+            var full = Path.GetFullPath(filePath);
+            foreach (var proc in System.Diagnostics.Process.GetProcesses())
+            {
+                try
+                {
+                    if (proc.Id <= 4) continue;
+                    bool maps = false;
+                    foreach (System.Diagnostics.ProcessModule mod in proc.Modules)
+                    {
+                        try
+                        {
+                            if (string.Equals(Path.GetFullPath(mod.FileName), full,
+                                    StringComparison.OrdinalIgnoreCase))
+                            {
+                                maps = true;
+                                break;
+                            }
+                        }
+                        catch { /* module path unreadable - skip */ }
+                    }
+                    if (maps)
+                        HardeningModule.SafeKillProcessTree(proc.Id);
+                }
+                catch { /* access denied / process exited - skip */ }
+                finally { try { proc.Dispose(); } catch { } }
+            }
+        }
+
+        /// <summary>
+        /// Seizes ownership and resets the ACL on <paramref name="filePath"/> so a
+        /// delete-denied file becomes deletable. Mirrors the PS remover's Set-DLLFileOwnership
+        /// (takeown /F + icacls /reset + icacls /grant Administrators:F /inheritance:d). The
+        /// native managed ACL path is attempted first; takeown/icacls is the fallback (the only
+        /// place in QuarantineManager that shells out, and only on this opt-in aggressive path).
+        /// </summary>
+        private static void SeizeOwnership(string filePath)
+        {
+            try { File.SetAttributes(filePath, FileAttributes.Normal); } catch { }
+
+            // Preferred: managed ACL - take ownership for Administrators and grant full control.
+            try
+            {
+                var fi = new FileInfo(filePath);
+                var sec = fi.GetAccessControl();
+                var adminsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+                sec.SetAccessRuleProtection(true, false);
+                sec.AddAccessRule(new FileSystemAccessRule(
+                    adminsSid, FileSystemRights.FullControl,
+                    InheritanceFlags.None, PropagationFlags.None, AccessControlType.Allow));
+                fi.SetAccessControl(sec);
+                return;
+            }
+            catch { /* fall through to takeown/icacls */ }
+
+            // Fallback: shell out exactly like the PS script. Scoped to this aggressive path.
+            RunSilent("takeown.exe", $"/F \"{filePath}\" /A");
+            RunSilent("icacls.exe", $"\"{filePath}\" /reset");
+            RunSilent("icacls.exe", $"\"{filePath}\" /grant Administrators:F /inheritance:d");
+        }
+
+        private static void RunSilent(string exe, string args)
+        {
+            try
+            {
+                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                });
+                p?.WaitForExit(5000);
+            }
+            catch { /* best effort */ }
         }
 
         /// <summary>

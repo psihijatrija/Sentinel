@@ -732,8 +732,12 @@ namespace Sentinel.Core
                     return true;
                 }
 
+                // hardenedRemoval: this engine remediates DLLs that are mapped into a live
+                // process - exactly the delete-locked case this method's summary describes. Kill
+                // the holders and seize ownership so the original leaves disk now, instead of the
+                // old retry-then-reboot path that let a mapped DLL survive and be re-detected.
                 var vaultPath = await _quarantineManager.QuarantineFileAtomicAsync(
-                    dllPath, forceQuarantineSigned: true);
+                    dllPath, forceQuarantineSigned: true, hardenedRemoval: true);
 
                 if (vaultPath == null)
                 {

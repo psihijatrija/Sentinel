@@ -351,11 +351,15 @@ namespace Sentinel.Core
     }
 
     /// <summary>
-    /// OPT-IN AGGRESSIVE unsigned-DLL drive sweep. Mirrors the PS script's
+    /// OPT-IN AGGRESSIVE unsigned-module drive sweep. Mirrors the PS script's
     /// Invoke-UnsignedDLLRemover: walks ready Fixed/Removable/Network drive roots (plus an
-    /// explicit System32 pass) for *.dll/*.winmd (capped per drive), verifies Authenticode, and
-    /// quarantines validly-unsigned candidates through Sentinel's EXISTING QuarantineManager
-    /// (delete-on-reboot handles locked files - NO process-kill, NO shelling out).
+    /// explicit System32 pass) for every loadable-module extension (.dll, .winmd, .ocx, .cpl,
+    /// .ax, .node, .drv, .acm, .tsp, .mui, .efi - the ModuleIdentity.ModuleExtensions set),
+    /// capped per drive, verifies Authenticode, and quarantines validly-unsigned candidates
+    /// through Sentinel's QuarantineManager with hardened removal: like the script's
+    /// Stop-ProcessesUsingDLL + takeown/icacls, a locked module has its holder processes
+    /// terminated and ownership seized so the original leaves disk immediately
+    /// (delete-on-reboot remains the final fallback).
     ///
     /// Entirely gated behind SentinelConfig.EnableAggressiveUnsignedDllSweep (compiled default
     /// FALSE). When the flag is false the monitor returns immediately. Registered in the Service
@@ -397,7 +401,7 @@ namespace Sentinel.Core
                 return;
             }
 
-            _logger.LogInformation("[AggressiveUnsignedDllSweep] Started - aggressive unsigned *.dll/*.winmd quarantine sweep ARMED");
+            _logger.LogInformation("[AggressiveUnsignedDllSweep] Started - aggressive unsigned loadable-module quarantine sweep ARMED (all module extensions)");
 
             try { await Task.Delay(SettleDelay, ct); } catch (OperationCanceledException) { return; }
 
@@ -421,8 +425,8 @@ namespace Sentinel.Core
         /// <summary>
         /// Enumerates ready Fixed/Removable/Network drive roots (plus an explicit System32 pass
         /// for parity with the script - those files are skipped by <see cref="ShouldSkipPath"/>),
-        /// walks *.dll/*.winmd capped per drive, and quarantines validly-unsigned candidates.
-        /// Returns the number of files quarantined.
+        /// walks every loadable-module extension capped per drive, and quarantines
+        /// validly-unsigned candidates. Returns the number of files quarantined.
         /// </summary>
         internal async Task<int> ScanAllAsync(CancellationToken ct = default)
         {
@@ -465,13 +469,16 @@ namespace Sentinel.Core
 
         private static IEnumerable<string> EnumerateCandidates(string root)
         {
-            IEnumerable<string> dlls;
-            IEnumerable<string> winmds;
-            try { dlls = Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories); }
-            catch { dlls = Enumerable.Empty<string>(); }
-            try { winmds = Directory.EnumerateFiles(root, "*.winmd", SearchOption.AllDirectories); }
-            catch { winmds = Enumerable.Empty<string>(); }
-            return dlls.Concat(winmds);
+            // Match the PS DLL remover's intent of "all loadable modules, not just .dll".
+            // Enumerate the whole tree once and filter by ModuleIdentity.ModuleExtensions
+            // (.dll, .winmd, .ocx, .cpl, .ax, .node, .drv, .acm, .tsp, .mui, .efi) rather than
+            // issuing one EnumerateFiles pass per extension. A single enumeration with a
+            // predicate is cheaper and stays correct as the module-extension set grows.
+            IEnumerable<string> all;
+            try { all = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories); }
+            catch { return Enumerable.Empty<string>(); }
+
+            return all.Where(ModuleIdentity.IsModuleFileName);
         }
 
         private static IEnumerable<string> GetScanRoots()
@@ -587,8 +594,12 @@ namespace Sentinel.Core
             try
             {
                 // The manager still refuses IsOsCriticalPath internally even when forced - rely
-                // on that safety net; do NOT reimplement quarantine, do NOT shell out.
-                quarantined = await _quarantine.QuarantineFileAtomicAsync(path, forceQuarantineSigned: true);
+                // on that safety net. hardenedRemoval: match the PS DLL remover - if the module
+                // is mapped into a live process (delete-locked), kill the holders and seize
+                // ownership (takeown/icacls) so the original is removed now, not deferred to
+                // reboot. Scoped to this opt-in sweep only; other callers keep the safe default.
+                quarantined = await _quarantine.QuarantineFileAtomicAsync(
+                    path, forceQuarantineSigned: true, hardenedRemoval: true);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -608,11 +619,14 @@ namespace Sentinel.Core
                 RuleName = "DLL Sweep: Unsigned Module Quarantined",
                 Evidence = $"Unsigned module '{path}' (no valid Authenticode signature) " +
                            $"quarantined as {Path.GetFileName(quarantined)}",
-                Reasoning = "Opt-in aggressive unsigned-DLL sweep: this *.dll/*.winmd outside the " +
-                            "OS/system/program trees carries no valid Authenticode signature. Unsigned " +
-                            "modules dropped into user-writable locations are a common sideloading / " +
-                            "persistence vector, so the file was moved to the quarantine vault " +
-                            "(delete-on-reboot clears it if locked).",
+                Reasoning = "Opt-in aggressive unsigned-module sweep: this loadable module " +
+                            "(.dll/.winmd/.ocx/.cpl/.ax/.node/.drv/...) outside the OS/system/program " +
+                            "trees carries no valid Authenticode signature. Unsigned modules dropped " +
+                            "into user-writable locations are a common sideloading / persistence " +
+                            "vector, so the file was moved to the quarantine vault. If the module is " +
+                            "mapped into a live process, the holders are terminated and ownership is " +
+                            "seized so the original is removed immediately (reboot-delete is the final " +
+                            "fallback).",
                 Confidence = 0.85,
                 Tier = DetectionTier.Tier1Behavioral,
                 AuthorizedResponse = ResponseAction.Quarantine,

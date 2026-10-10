@@ -580,8 +580,9 @@ namespace Sentinel.Core
                                 : $"New HID device '{dev}' (VID:PID={vidPid ?? "unknown"}) not in whitelist or baseline. Logged only (work-first: HID auto-disable requires Hardened Mode).",
                             Reasoning = "A new Human Interface Device appeared that was not present at startup and is not " +
                                         "in the trusted device whitelist. This may be a BadUSB/Rubber Ducky attack that " +
-                                        "emulates a keyboard. Default work-first mode logs only so Xbox controllers, " +
-                                        "wheels, and tablets keep working. Hardened Mode disables the device.",
+                                        "emulates a keyboard. Proactive host lockdown is always-on, so the device is " +
+                                        "registry-disabled on sight. Legitimate controllers/wheels/tablets must be " +
+                                        "allowlisted via TrustedUsbDevices (VID:PID) to survive this.",
                             Confidence = 0.88, Tier = DetectionTier.Tier1Behavioral,
                             AuthorizedResponse = ResponseAction.LogOnly,
                             ProcessName = "SYSTEM", ProcessId = 0,

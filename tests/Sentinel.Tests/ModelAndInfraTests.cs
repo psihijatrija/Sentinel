@@ -28,7 +28,7 @@ namespace Sentinel.Tests
             // v2.9.4: armed-by-default - single-signal Tier1 response (no observe-until-chain)
             Assert.False(config.ObserveUntilChain);
             Assert.True(config.SilentObserve);
-            Assert.False(config.AutoDisableFailedUsbEnumeration); // work-first: no USB auto-disable
+            Assert.True(config.AutoDisableFailedUsbEnumeration); // v3.0.3: work-first dropped - auto-disable descriptor-fail USB
             Assert.Empty(config.TrustedCastDevices);
             Assert.Empty(config.TrustedUsbDevices);
             Assert.Equal(15, config.DnsPollIntervalSeconds);

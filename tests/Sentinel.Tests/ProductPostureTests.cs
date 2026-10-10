@@ -18,7 +18,8 @@ namespace Sentinel.Tests
             // v2.9.4: armed-by-default posture
             Assert.False(c.ObserveUntilChain);
             Assert.True(c.SilentObserve);
-            Assert.False(c.AutoDisableFailedUsbEnumeration);
+            // v3.0.3: work-first dropped - descriptor-fail USB is auto-disabled by default.
+            Assert.True(c.AutoDisableFailedUsbEnumeration);
             Assert.True(c.ThreatIntelProactiveFirewall);
             Assert.True(c.BlockFcmPushChannel);
             Assert.True(ProductPosture.AllowsProactiveHostLockdown(c));

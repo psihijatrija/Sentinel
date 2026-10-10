@@ -255,9 +255,13 @@ namespace Sentinel.Core
                 confidence = 0.80;
                 tier = DetectionTier.Tier1Behavioral;
                 response = ResponseAction.LogOnly;
-                // Work-first: never disable/eject HID on a default install.
-                // Xbox controllers, wheels, HOTAS, tablets, and 2.4 GHz receivers
-                // appear as unknown HID after boot. Kiosk only.
+                // Proactive host lockdown is always-on (RestrictivePortHardening is a hardwired
+                // invariant), so an unknown HID keyboard is disabled + ejected on sight - a
+                // BadUSB/Rubber-Ducky keystroke-injector must not get a single boot of runtime.
+                // COLLATERAL: Xbox controllers, wheels, HOTAS, tablets, and 2.4 GHz receivers can
+                // appear as unknown HID after boot and will be disabled too. The intended escape
+                // hatch is the TrustedUsbDevices VID:PID allowlist (handled by the _trustedVidPid
+                // branch above, settable via --set-config), NOT softening this kill path.
                 if (ProductPosture.AllowsProactiveHostLockdown(_config))
                 {
                     disabled = DisableUsbDevice(dev.DeviceId);
@@ -273,7 +277,8 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    evidence += " Logged only (work-first: HID auto-disable requires Hardened Mode).";
+                    // Unreachable on shipped builds (lockdown is always-on); retained defensively.
+                    evidence += " Logged only (proactive host lockdown unexpectedly unavailable).";
                 }
             }
             else if (dev.IsComposite)

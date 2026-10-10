@@ -225,19 +225,31 @@ namespace Sentinel.Core
         /// </summary>
         public VpnShieldConfig VpnShield { get; set; } = new();
         // Optional modern detection extensions
+        // NOTE: EnableIntelThreatIntel stays FALSE by default on purpose - IntelFeedUrl below is
+        // a PLACEHOLDER (example.com). Enabling it without a real feed URL just polls a dead
+        // host. Set a real IntelFeedUrl via config and flip this to true to use it.
         public bool EnableIntelThreatIntel { get; set; } = false;
         public string IntelFeedUrl { get; set; } = "https://intel-ti-feed.example.com/iocs.json";
+        // NOTE: these two flags are currently NOT read by any consumer (no wired monitor/engine
+        // references them). Left FALSE so the config does not advertise behavior that does not
+        // exist. If/when a PMU monitor or AI-scoring engine is wired up, flip the relevant flag.
         public bool EnableHardwarePmuMonitor { get; set; } = false;
-        // New optional extensions
         public bool EnableAiBehaviorScoring { get; set; } = false; // AI model based scoring
+        // NOTE: EnableDynamicSandboxing stays FALSE by default - it executes suspicious binaries
+        // in Windows Sandbox, which requires the optional Windows Sandbox feature installed and
+        // carries real performance/compat cost. Enable only on hosts that have it.
         public bool EnableDynamicSandboxing { get; set; } = false; // Run suspicious binaries in Windows Sandbox
 
         /// <summary>
-        /// Deliberate opt-in AGGRESSIVE non-default mode: walks ready drive roots for unsigned
-        /// *.dll/*.winmd and quarantines them. Compiled default FALSE; disk JSON does NOT enable
-        /// it (compiled config only). Operator must flip this in code to arm the sweep.
+        /// AGGRESSIVE mode: walks ready drive roots for unsigned loadable modules
+        /// (.dll/.winmd/.ocx/.cpl/.ax/.node/.drv/...) and quarantines them with hardened removal
+        /// (kill holders + takeown/icacls so locked modules leave disk immediately). Default TRUE
+        /// on this repeat-target host - the sweep mirrors the PS Antivirus.ps1 DLL remover.
+        /// Still compiled-only: disk JSON does NOT enable it (EncryptedConfigStore has no case for
+        /// this key and all JSON sources are stripped), so a planted file can neither arm NOR
+        /// disarm it. To disarm, change this initializer and rebuild.
         /// </summary>
-        public bool EnableAggressiveUnsignedDllSweep { get; set; } = false;
+        public bool EnableAggressiveUnsignedDllSweep { get; set; } = true;
 
         /// <summary>
         /// v2.7.6: Operator-defined DOMAIN blocks, enforced by the proven forum.hr-style path -
@@ -382,9 +394,13 @@ namespace Sentinel.Core
         /// <summary>
         /// v1.9.7: When true, auto-disable USB nodes that fail descriptor requests
         /// (VID_0000 / "Device Descriptor Request Failed") via registry ConfigFlags.
-        /// Default <c>false</c> - do not kill flaky USB devices on normal desktops.
+        /// Default TRUE (v3.0.3): the "work-first" restraint is dropped on this hardened host -
+        /// a device that fails descriptor enumeration is treated as a BadUSB / rogue-HID tell and
+        /// disabled on sight. Trade-off accepted: a genuinely flaky-but-legitimate USB device may
+        /// be disabled; re-enable it in Device Manager if that happens. HID BadUSB rules continue
+        /// to apply to unknown keyboards regardless of this flag.
         /// </summary>
-        public bool AutoDisableFailedUsbEnumeration { get; set; } = false;
+        public bool AutoDisableFailedUsbEnumeration { get; set; } = true;
 
         public CveShieldConfig CveShield { get; set; } = new();
 

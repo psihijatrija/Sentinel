@@ -106,7 +106,7 @@ namespace Sentinel.Tests
         public void Config_Defaults_UsbHardening()
         {
             var cfg = new SentinelConfig();
-            Assert.False(cfg.AutoDisableFailedUsbEnumeration); // v1.9.7 work-first default
+            Assert.True(cfg.AutoDisableFailedUsbEnumeration); // v3.0.3: work-first dropped - auto-disable on
             Assert.Empty(cfg.TrustedUsbDevices);
         }
     }

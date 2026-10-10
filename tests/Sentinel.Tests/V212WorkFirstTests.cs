@@ -8,15 +8,15 @@ namespace Sentinel.Tests
     public class V212WorkFirstTests
     {
         [Fact]
-        public void DefaultConfig_ArmsMitmDefense_StillNoUsbAutoDisable()
+        public void DefaultConfig_ArmsMitmDefense_AndUsbAutoDisable()
         {
             var c = new SentinelConfig();
             // v2.5.5: RestrictivePortHardening is always-on.
             Assert.True(c.RestrictivePortHardening);
             // v2.9.4: MitmDefense is armed by default (post-incident hardened product line).
             Assert.True(c.MitmDefense.Enabled);
-            // USB auto-disable stays off - arming MitM defense must not flip unrelated USB behavior.
-            Assert.False(c.AutoDisableFailedUsbEnumeration);
+            // v3.0.3: work-first restraint dropped - descriptor-fail USB is auto-disabled by default.
+            Assert.True(c.AutoDisableFailedUsbEnumeration);
             Assert.True(ProductPosture.AllowsProactiveHostLockdown(c));
             Assert.True(ProductPosture.AllowsMitmDefenseMutations(c));
         }
