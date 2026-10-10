@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 2.2.9**
+**Version: 3.0.4**
 
 ---
 
@@ -287,6 +287,31 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 - Default `Enabled: false` on clean installs
 - When enabled: `TlsCertificateMonitor` removes high-confidence planted roots immediately; `GhostProcessMonitor` kills invisible/empty-name PID -> Cast without the normal 2-scan wait; `CastDeviceGuard` auto-blocks rogue Cast by IOC MAC prefix and known IPs; `NullSessionGuard` blocks FCM TCP 5228; `AdvancedResponseEngine` exempts MitmDefense actions from ObserveUntilChain demotion
 - Config fields: `Enabled`, `RemovePlantedCerts`, `BlockFcmPushChannel`, `AutoBlockRogueCast`, `RogueCastMacPrefixes`, `KnownRogueCastIps`
+
+### FR-24: Autonomous suspicious-root guard (v3.0.4)
+
+- `RootStoreGuard` (SYSTEM, SystemIntegrity group; startup sweep + 90s poll) continuously detects,
+  removes, blocks, and cleans up after planted/distrusted root certificates **without a manual scan**.
+- **Detection signal (non-attacker-controllable, name-independent).** A root in a trusted store
+  (Root/CA, LocalMachine + CurrentUser) is suspicious when it carries **neither** OS-authoritative
+  stamp: it is **not** a member of the downloaded Microsoft AuthRoot CTL (`crypt32` property 98) **and
+  not** a Microsoft root-program policy root (property 105, OID `1.3.6.1.4.1.311.60.3.2`). It is in a
+  trusted store but nothing the OS trusted-root program vouches for anchors it. The explicit
+  `CertDistrustList` (thumbprint-keyed: StartCom + the three Microsoft roots from `Registry\Certificates.reg`)
+  is also always enforced. Subject/Issuer **names are ignored** (attacker-controlled).
+- **Response.** `CertRemediator` removes the cert from Root/CA/TrustedPublisher (LM+CU) and pins it to
+  the Disallowed store (thumbprint-only registry-block fallback). Then files whose Authenticode chain
+  roots at the removed cert are quarantined (`forceQuarantineSigned`, WRP-safe - never under
+  System32/WinSxS/servicing - and blast-radius capped).
+- **Hard safety floor (fail-closed, cannot self-brick).** Autonomous removal re-verifies the verdict
+  against the **live, store-connected** cert context (the CTL stamps exist only there; a detached DER
+  copy loses them). Any root carrying either stamp - every OS root (MS Root CA 2010/2011) and every
+  public CA (DigiCert, GlobalSign, ISRG, ...) - is refused unconditionally.
+- **Posture.** The whole autonomous mutation path is gated on `ActiveResponse`
+  (`ResponsePolicy.MayPerformInlineHostMutation`) and recorded as a Tier1 response; with ActiveResponse
+  off the finding is still surfaced (detection-only). The by-thumbprint `CertDistrustList` path remains
+  fail-closed (refuses any thumbprint not on the list). Detection signal reverse-engineered from the
+  Zemana AntiLogger "Suspicious Root CA" behavior and verified against a live Windows root store.
 
 ### FR-21: Protective VPN-shield remediation (v2.6.0)
 

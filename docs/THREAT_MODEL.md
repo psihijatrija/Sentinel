@@ -1,8 +1,41 @@
 # Sentinel - Threat Model
 
-**Version: 2.6.8**
+**Version: 3.0.4**
 
 This document assumes the attacker has read the source code.
+
+### v3.0.4 - autonomous removal of planted / unvouched-for root CAs
+
+Answers the attack the user actually experienced: a root certificate planted in the trusted store to
+enable TLS interception (MITM) and to vouch for malicious signed code. The pre-existing
+`TlsCertificateMonitor` catches a root **added after Sentinel's baseline**, but a root already present
+at first run (planted before install, or left by a prior compromise) slipped through its baseline, and
+there was no autonomous removal of the *existing* store population. `RootStoreGuard` (SYSTEM,
+SystemIntegrity; startup sweep + 90s poll) closes that: it continuously audits the whole trusted-store
+population and acts on anything the OS trusted-root program does not vouch for.
+
+**The signal is the attacker's problem, not a name.** A legitimate root carries one of two
+non-attacker-controllable stamps the OS CTL mechanism writes: AuthRoot-CTL membership (`crypt32` prop
+98, every public CA) or the Microsoft root-program policy marker (prop 105, OID
+`1.3.6.1.4.1.311.60.3.2`, the OS roots that sign Windows). A planted/orphaned/de-vouched root carries
+**neither** - it is physically trusted but nothing authoritative anchors it. An attacker cannot forge
+either stamp from userland (they are assigned by the signed CTL update path, not by anything in the
+cert the attacker controls), so renaming the planted root "Microsoft ..." or copying a real root's
+Subject does not help. On a hit the root is removed from every trusted store, pinned to Disallowed, and
+files whose Authenticode chain roots at it are quarantined. This signal and threshold were
+reverse-engineered from how Zemana AntiLogger flags "Suspicious Root CA" and verified against a live
+Windows root store (it flags only orphaned/legacy roots; it leaves MS Root CA 2010/2011 and all public
+CAs intact).
+
+**Honest ceiling / self-harm guard.** Auto-removing trust anchors is the one cert action that can brick
+a host (cf. the April 2026 Microsoft Defender incident that removed two legitimate DigiCert roots and
+broke TLS/code-signing fleet-wide). The hard safety floor is re-verified against the **live
+store-connected** context (the stamps exist only there; a detached DER copy loses them) immediately
+before removal, so a vouched-for anchor is refused unconditionally - the guard can only ever remove a
+root the OS does not vouch for. A local admin can of course re-plant a root (B1); as everywhere else,
+Sentinel makes the plant visible, durably recorded, auto-reverted, and chain-corroborating - it does
+not claim to prevent an admin-level action, only to not let a planted root silently persist. The whole
+mutation path is `ActiveResponse`-gated and Tier1; with ActiveResponse off it observes and records only.
 
 ### v2.8.2 - a new network adapter appearing ("attacker adds his network to mine")
 
@@ -362,6 +395,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 | SecureBootIntegrityMonitor | Checks Secure Boot state |
 | ScheduledTaskMonitor | Detects new/modified scheduled tasks |
 | TlsCertificateMonitor | Detects unauthorized root CA installations |
+| RootStoreGuard | Autonomously removes + blocks roots the OS trusted-root program does not vouch for (no AuthRoot-CTL / MS-program stamp), then quarantines files signed by a chain to them |
 | UacBypassSurfaceMonitor | Detects autoelevate binary abuse |
 
 ### Group 5: Credential Protection
