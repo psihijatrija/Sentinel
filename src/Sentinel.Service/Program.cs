@@ -778,7 +778,8 @@ namespace Sentinel.Service
                             ("ClfsExploitationMonitor",         s => s.GetRequiredService<ClfsExploitationMonitor>()),
                             ("StateReconciliationMonitor",      s => s.GetRequiredService<StateReconciliationMonitor>()),
                             ("TrustedHostModuleIntegrityMonitor", s => s.GetRequiredService<TrustedHostModuleIntegrityMonitor>()),
-                            ("AggressiveUnsignedDllSweepMonitor", s => s.GetRequiredService<AggressiveUnsignedDllSweepMonitor>())
+                            ("AggressiveUnsignedDllSweepMonitor", s => s.GetRequiredService<AggressiveUnsignedDllSweepMonitor>()),
+                            ("RootStoreGuard",                  s => s.GetRequiredService<RootStoreGuard>())
                         );
                         return new MonitorGroup(
                             new MonitorGroupConfig
@@ -807,6 +808,10 @@ namespace Sentinel.Service
                     // Opt-in aggressive unsigned-DLL drive sweep (gated behind
                     // SentinelConfig.EnableAggressiveUnsignedDllSweep, compiled default FALSE).
                     services.AddSingleton<AggressiveUnsignedDllSweepMonitor>();
+                    // Autonomous suspicious-root guard: detects roots the OS trusted-root program
+                    // does not vouch for (no AuthRoot-CTL / MS-program stamp) + the explicit distrust
+                    // list, removes + blocks them, and quarantines files signed by a chain to them.
+                    services.AddSingleton<Sentinel.Core.Monitors.RootStoreGuard>();
                     services.AddSingleton<FirewallIntegrityMonitor>();
                     services.AddSingleton<SecureBootIntegrityMonitor>();
                     services.AddSingleton<WindowsUpdateIntegrityMonitor>();

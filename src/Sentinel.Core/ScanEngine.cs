@@ -32,6 +32,7 @@ namespace Sentinel.Core
     {
         private readonly IoCScanner _iocScanner;
         private readonly FileReputationEngine? _fileReputation;
+        private readonly CertRemediator? _certRemediator;
         private readonly ILogger<ScanEngine> _logger;
 
         private int _isRunning;
@@ -39,11 +40,13 @@ namespace Sentinel.Core
         public ScanEngine(
             IoCScanner iocScanner,
             ILogger<ScanEngine> logger,
-            FileReputationEngine? fileReputation = null)
+            FileReputationEngine? fileReputation = null,
+            CertRemediator? certRemediator = null)
         {
             _iocScanner = iocScanner;
             _logger = logger;
             _fileReputation = fileReputation;
+            _certRemediator = certRemediator;
         }
 
         public bool IsRunning => Interlocked.CompareExchange(ref _isRunning, 0, 0) == 1;
@@ -527,17 +530,57 @@ namespace Sentinel.Core
                         var distrustLabel = CertDistrustList.GetLabel(thumbprint);
                         if (distrustLabel != null)
                         {
-                            result.AddFinding(new ScanFinding
+                            var normThumb = CertDistrustList.Normalize(thumbprint);
+
+                            // Auto-remediate: this is a fixed, hardcoded blocklist (not a heuristic),
+                            // so enforcing it is a deterministic policy, not an autonomous judgement.
+                            // When the SYSTEM-side remediator is wired (service context) remove + block
+                            // on sight. If it is unavailable (e.g. agent-side scan) fall back to
+                            // offering the manual Remove & Block action.
+                            if (_certRemediator != null)
                             {
-                                Category = ScanCategory.Certificate,
-                                Severity = ScanSeverity.High,
-                                Title = "Distrusted certificate in trusted store",
-                                Description = $"{distrustLabel}. Store: {label}, Subject: {subject}, Thumbprint: {thumbprint}. " +
-                                              "Sentinel can remove it from the Root store and pin it to the Disallowed (Untrusted) store.",
-                                Path = label,
-                                CertThumbprint = CertDistrustList.Normalize(thumbprint),
-                                Remediable = true,
-                            });
+                                CertRemediator.RemediationResult rr;
+                                try
+                                {
+                                    rr = _certRemediator.Distrust(normThumb);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "[ScanEngine] Auto-remediation threw for {Thumb}", normThumb);
+                                    rr = new CertRemediator.RemediationResult { Message = "Auto-remediation error: " + ex.Message };
+                                }
+
+                                result.AddFinding(new ScanFinding
+                                {
+                                    Category = ScanCategory.Certificate,
+                                    Severity = ScanSeverity.High,
+                                    Title = rr.Success
+                                        ? "Distrusted certificate removed & blocked"
+                                        : "Distrusted certificate in trusted store",
+                                    Description = $"{distrustLabel}. Store: {label}, Subject: {subject}, Thumbprint: {thumbprint}. " +
+                                                  (rr.Success
+                                                      ? $"Auto-remediated: {rr.Message}"
+                                                      : $"Auto-remediation did not complete ({rr.Message}). Use Remove & Block to retry."),
+                                    Path = label,
+                                    CertThumbprint = normThumb,
+                                    // Only keep the manual action if auto-remediation did not fully succeed.
+                                    Remediable = !rr.Success,
+                                });
+                            }
+                            else
+                            {
+                                result.AddFinding(new ScanFinding
+                                {
+                                    Category = ScanCategory.Certificate,
+                                    Severity = ScanSeverity.High,
+                                    Title = "Distrusted certificate in trusted store",
+                                    Description = $"{distrustLabel}. Store: {label}, Subject: {subject}, Thumbprint: {thumbprint}. " +
+                                                  "Sentinel can remove it from the trusted stores and pin it to the Disallowed (Untrusted) store.",
+                                    Path = label,
+                                    CertThumbprint = normThumb,
+                                    Remediable = true,
+                                });
+                            }
                         }
                         // Otherwise fall back to the name/validity heuristic for unknown non-standard CAs.
                         else if (!IsWellKnownCa(cert))

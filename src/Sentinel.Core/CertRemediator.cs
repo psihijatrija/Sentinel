@@ -104,6 +104,113 @@ namespace Sentinel.Core
         }
 
         /// <summary>
+        /// Distrusts a suspicious root the <see cref="CertSuspicionAnalyzer"/> has authorized.
+        /// Unlike <see cref="Distrust(string)"/> (fail-closed to the hardcoded blocklist), this
+        /// path handles arbitrary / previously-unseen roots - but it re-verifies the analyzer
+        /// verdict here as a hard safety floor, so a trusted anchor (any root carrying the
+        /// AuthRoot-CTL or Microsoft-program stamp) can NEVER be removed through this path even
+        /// if a caller passes it in. The authorization anchor is the non-attacker-controllable
+        /// OS CTL stamp, not the certificate's name.
+        /// </summary>
+        public RemediationResult DistrustSuspiciousRoot(X509Certificate2 cert)
+        {
+            var result = new RemediationResult
+            {
+                Thumbprint = CertDistrustList.Normalize(cert?.Thumbprint)
+            };
+
+            if (cert == null || result.Thumbprint.Length == 0)
+            {
+                result.Message = "Null/empty certificate";
+                return result;
+            }
+
+            // HARD SAFETY FLOOR: re-check the verdict. Only act on a root that carries NEITHER
+            // authoritative stamp. The OS CTL stamps (props 98/105) only exist on a cert context
+            // that is CONNECTED TO THE STORE - a detached copy (e.g. built from RawData) loses
+            // them, which would make even a genuine anchor look "suspicious". So we re-open the
+            // cert FROM the store and evaluate the live context, never the passed-in copy. If the
+            // live context says vouched-for, refuse. If the cert is no longer in any trusted store
+            // we have nothing to remove and treat that as refuse-safe.
+            if (!IsSuspiciousInStore(result.Thumbprint))
+            {
+                result.Message = "Certificate is a vouched-for trust anchor (or absent); removal refused (safety floor)";
+                _logger.LogWarning(
+                    "[CertRemediator] Refused removal of vouched-for/absent root {Thumb}",
+                    result.Thumbprint);
+                return result;
+            }
+
+            var captured = new List<X509Certificate2> { new X509Certificate2(cert.RawData) };
+
+            result.RemovedFromTrust = RemoveFromStores(result.Thumbprint, TrustStores);
+            result.AddedToDisallowed = AddToDisallowed(result.Thumbprint, captured);
+
+            result.Success = result.AddedToDisallowed > 0 || result.RemovedFromTrust > 0;
+            result.Message = result.Success
+                ? $"Removed suspicious root from {result.RemovedFromTrust} trusted store(s); blocked in {result.AddedToDisallowed} Disallowed store(s)."
+                : "Suspicious root not found in any trusted store (nothing to do).";
+
+            _logger.LogWarning(
+                "[CertRemediator] Distrusted SUSPICIOUS root {Thumb} ({Subject}): removed={Removed}, blocked={Added}",
+                result.Thumbprint, cert.Subject, result.RemovedFromTrust, result.AddedToDisallowed);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Re-opens the cert by thumbprint from each trusted store and evaluates the LIVE,
+        /// store-connected context with <see cref="CertSuspicionAnalyzer"/>. The OS CTL stamps
+        /// (props 98/105) only exist on a store-connected context, so this is the only correct
+        /// place to make the safety-floor decision. Returns true only if the cert is actually
+        /// present in a trusted store AND that live context is suspicious (no authoritative stamp).
+        /// </summary>
+        private bool IsSuspiciousInStore(string thumbprint)
+        {
+            foreach (var (name, location) in TrustStores)
+            {
+                try
+                {
+                    using var store = new X509Store(name, location);
+                    store.Open(OpenFlags.ReadOnly);
+                    var matches = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
+                    foreach (var cert in matches)
+                    {
+                        try
+                        {
+                            // Found a live context: its stamps are authoritative. If ANY store
+                            // copy is vouched-for, do not remove (fail safe toward keeping trust).
+                            if (!CertSuspicionAnalyzer.IsSuspicious(cert))
+                                return false;
+                        }
+                        finally { cert.Dispose(); }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[CertRemediator] Safety-floor store read failed for {Store}/{Loc}", name, location);
+                }
+            }
+
+            // Not vouched-for in any store copy. Confirm it is actually present somewhere trusted;
+            // if absent entirely, treat as not-suspicious (nothing to remove) rather than acting.
+            foreach (var (name, location) in TrustStores)
+            {
+                try
+                {
+                    using var store = new X509Store(name, location);
+                    store.Open(OpenFlags.ReadOnly);
+                    var matches = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
+                    bool present = matches.Count > 0;
+                    foreach (var c in matches) c.Dispose();
+                    if (present) return true;
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Reads matching certs out of the trusted stores (ReadOnly) so their exact bytes can be
         /// re-added to Disallowed. Returns distinct certs keyed by thumbprint.
         /// </summary>
