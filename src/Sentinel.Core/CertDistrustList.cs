@@ -34,7 +34,7 @@ namespace Sentinel.Core
             new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 // StartCom Certification Authority - globally distrusted CA (WoSign scandal).
-                ["3E20F7F203189673EC6DC4D8AE5D3ED35847EADF"] = "StartCom Certification Authority (globally distrusted CA)",
+                ["3E2BF7F2031B96F38CE6C4D8A85D3E2D58476A0F"] = "StartCom Certification Authority (globally distrusted CA)",
 
                 // Roots enumerated in Registry\Certificates.reg (removed from Root, pinned to Disallowed).
                 ["0119E81BE9A14CD8E22F40AC118C687ECBA3F4D8"] = "Microsoft Time Stamp Root Certificate Authority 2014 (Certificates.reg distrust)",

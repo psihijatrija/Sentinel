@@ -16,7 +16,7 @@ namespace Sentinel.Tests
     public class CertDistrustListTests
     {
         // The four seed thumbprints the feature must cover.
-        private const string StartCom = "3E20F7F203189673EC6DC4D8AE5D3ED35847EADF";
+        private const string StartCom = "3E2BF7F2031B96F38CE6C4D8A85D3E2D58476A0F";
         private const string MsTimeStampRoot2014 = "0119E81BE9A14CD8E22F40AC118C687ECBA3F4D8";
         private const string MsEccTsRoot2018 = "31F9FC8BA3805986B721EA7295C65B3A44534274";
         private const string MsEccProductRoot2018 = "06F1AA330B927B753A40E68CDF22E34BCBEF3352";
@@ -56,7 +56,7 @@ namespace Sentinel.Tests
         [Fact]
         public void Normalize_StripsSeparatorsAndUppercases()
         {
-            Assert.Equal(StartCom, CertDistrustList.Normalize("3e:20 f7-f2\t03189673ec6dc4d8ae5d3ed35847eadf"));
+            Assert.Equal(StartCom, CertDistrustList.Normalize("3e:2b f7-f2\t031b96f38ce6c4d8a85d3e2d58476a0f"));
             Assert.Equal(string.Empty, CertDistrustList.Normalize(null));
             Assert.Equal(string.Empty, CertDistrustList.Normalize("   "));
         }

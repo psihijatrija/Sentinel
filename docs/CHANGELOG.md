@@ -1,4 +1,11 @@
 # Changelog
+## [3.0.5] - 2026-10-10
+### Fixed
+- **Corrected the StartCom thumbprint in `CertDistrustList`.** The 3.0.4 seed value for the StartCom Certification Authority root was transcribed by eye from a dashboard screenshot and several hex digits were misread (`3E20F7F203189673EC6DC4D8AE5D3ED35847EADF`), so it never matched the real certificate — the scan kept falling through to the old name/validity heuristic ("Non-standard certificate in trusted store", no remediation button) instead of the new thumbprint path. Replaced with the authoritative thumbprint read directly from the live Root store, `3E2BF7F2031B96F38CE6C4D8A85D3E2D58476A0F`. StartCom now raises the High-severity "Distrusted certificate in trusted store" finding with the **Remove & Block** action, as intended. The three Microsoft roots (taken from `Registry\Certificates.reg` text, not OCR) were already correct and are unchanged.
+
+### Changed
+- Version stamp 3.0.4 -> 3.0.5.
+
 ## [3.0.4] - 2026-10-10
 ### Added
 - **Thumbprint-keyed certificate distrust list + one-click remediation.** The one-time system scan (`ScanEngine.ScanCertStore`) now checks every certificate in the trusted stores (Root / CA / TrustedPublisher, LocalMachine + CurrentUser) against an authoritative distrust list (`CertDistrustList`) keyed on the SHA-1 **thumbprint** — a non-attacker-controllable identity anchor, unlike the Subject/Issuer *name* heuristic (which an attacker fully controls and which only "borderline-flagged" these certs before). A match raises a dedicated **High**-severity "Distrusted certificate in trusted store" finding carrying the thumbprint and a `Remediable` flag. Seed list: the StartCom Certification Authority root (globally distrusted since the 2016–2017 WoSign scandal) plus the three Microsoft roots (`Time Stamp Root CA 2014`, `ECC TS Root CA 2018`, `ECC Product Root CA 2018`) enumerated in the owner's `Registry\Certificates.reg` and independently flagged "Suspicious Root CA / Delete" by a Zemana AntiLogger scan.
