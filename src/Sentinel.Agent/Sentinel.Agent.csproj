@@ -6,7 +6,7 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
-    <Version>3.0.4</Version>
+    <Version>3.0.5</Version>
     <Company>Sentinel Security</Company>
     <Product>Sentinel Endpoint Detection and Response</Product>
     <Description>Sentinel EDR User-Session Agent and Web Dashboard</Description>

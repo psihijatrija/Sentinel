@@ -469,12 +469,14 @@ namespace Sentinel.Tests
             // "DGA + C2 Beaconing" contains "beacon" -> C2Beaconing (string matcher is order-dependent)
             Assert.Equal(DetectionCategory.C2Beaconing, ScoringEngine.CategorizeDetection("DGA + C2 Beaconing"));
             Assert.Equal(DetectionCategory.AntiTamper, ScoringEngine.CategorizeDetection("Anti-Tamper: Process Suspended"));
-            // "Fileless Attack Chain" doesn't contain any of the evasion keywords - falls to Unknown
-            // unless it passes through the attribute registry. This is expected behavior for
-            // composite names that were designed for human readability rather than categorization.
-            var filelessCategory = ScoringEngine.CategorizeDetection("Fileless Attack Chain");
-            Assert.True(filelessCategory == DetectionCategory.Unknown || filelessCategory == DetectionCategory.SecurityEvasion,
-                $"Fileless Attack Chain categorized as {filelessCategory}");
+            // "Fileless Attack Chain" is a kill-grade composite. It now resolves to its own
+            // FilelessAttack family (previously collapsed to Unknown, which undercounted
+            // corroboration diversity and left the FilelessAttack weight bucket dead).
+            Assert.Equal(DetectionCategory.FilelessAttack, ScoringEngine.CategorizeDetection("Fileless Attack Chain"));
+            Assert.Equal(DetectionCategory.FilelessAttack, ScoringEngine.CategorizeDetection("In-Memory Implant Active"));
+            Assert.Equal(DetectionCategory.FilelessAttack, ScoringEngine.CategorizeDetection("Dropped Payload Active"));
+            // "Token Theft + Lateral Movement" now resolves to LateralMovement (was Unknown).
+            Assert.Equal(DetectionCategory.LateralMovement, ScoringEngine.CategorizeDetection("Token Theft + Lateral Movement"));
         }
     }
 }

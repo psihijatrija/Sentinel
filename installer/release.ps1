@@ -120,6 +120,24 @@ if ($DryRun) {
 Write-Step "Writing version.txt"
 Set-Content -Path $VersionFile -Value $Next -NoNewline
 
+#  1b. Stamp the README version line from version.txt (docs are not touched by build.ps1,
+#      so stamp here to keep the single-source-of-truth claim honest and drift-free). 
+$ReadmePath = Join-Path $RepoRoot "README.md"
+if (Test-Path $ReadmePath) {
+    $readme = Get-Content $ReadmePath -Raw
+    # Match the "**Version:** X.Y.Z (single source of truth: `version.txt`)" line only.
+    $readmeRe = '(?m)^\*\*Version:\*\*\s*\d+\.\d+\.\d+(\s*\(single source of truth: `version\.txt`\))'
+    if ($readme -match $readmeRe) {
+        $stamped = [regex]::Replace($readme, $readmeRe, "**Version:** $Next" + '$1')
+        if ($stamped -ne $readme) {
+            Set-Content -Path $ReadmePath -Value $stamped -NoNewline
+            Write-Step "Stamped README version -> $Next"
+        }
+    } else {
+        Write-Host "WARNING: README version line not found; skipping README stamp." -ForegroundColor Yellow
+    }
+}
+
 #  2. Build installer (publishes, stamps, compiles Inno Setup, copies to releases\) 
 Write-Step "Building installer via build.ps1"
 & (Join-Path $PSScriptRoot "build.ps1")
@@ -154,7 +172,7 @@ Write-Step "Committing release $Next"
 # publish/ are gitignored; releases/<ver> is added explicitly.
 # Note: releases/ is gitignored - the installer ships as a GitHub release artifact (step 5),
 # not as a committed binary. So it is intentionally not staged here.
-Invoke-External git @('-C', $RepoRoot, 'add', '-A', '--', 'src', 'tests', 'docs', 'version.txt', 'installer/setup.iss', 'installer/release.ps1')
+Invoke-External git @('-C', $RepoRoot, 'add', '-A', '--', 'src', 'tests', 'docs', 'version.txt', 'README.md', 'installer/setup.iss', 'installer/release.ps1')
 Invoke-External git @('-C', $RepoRoot, 'commit', '-m', "Release $Next")
 
 #  4. Push to origin/main 

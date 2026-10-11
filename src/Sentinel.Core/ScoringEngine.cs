@@ -365,6 +365,18 @@ namespace Sentinel.Core
             var r = ruleName!.ToLowerInvariant();
             if (r.Contains("beacon")) return DetectionCategory.C2Beaconing;
             if (r.Contains("lsass") || r.Contains("credential") || r.Contains("credtool") || r.Contains("canary")) return DetectionCategory.CredentialDump;
+            // Fileless / in-memory implant composites: these are kill-grade terminals whose
+            // human-readable names contain none of the keyword tokens below, so without an
+            // explicit branch they collapsed to Unknown - undercounting corroboration /
+            // IsMultiCategoryAttack diversity and leaving the FilelessAttack weight bucket dead.
+            // Checked before "reverse shell"/"c2" so "Fileless Attack Chain" / "In-Memory
+            // Implant Active" / "Dropped Payload Active" resolve to their own family.
+            if (r.Contains("fileless") || r.Contains("in-memory implant") || r.Contains("in memory implant") ||
+                r.Contains("dropped payload") || r.Contains("staged module") || r.Contains("dormant payload"))
+                return DetectionCategory.FilelessAttack;
+            // Lateral-movement composites (e.g. "Token Theft + Lateral Movement"): the matcher
+            // had no lateral branch at all, so these fell to Unknown.
+            if (r.Contains("lateral") || r.Contains("psexec") || r.Contains("winrm") || r.Contains("dcom")) return DetectionCategory.LateralMovement;
             if (r.Contains("reverse shell") || r.Contains("reverseshell") || r.Contains("c2") || r.Contains("callback")) return DetectionCategory.ReverseShell;
             if (r.Contains("injection") || r.Contains("hollowing") || r.Contains("threatintel")) return DetectionCategory.ProcessInjection;
             if (r.Contains("ransomware") || r.Contains("shadow copy")) return DetectionCategory.Ransomware;
