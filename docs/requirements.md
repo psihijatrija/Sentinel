@@ -258,7 +258,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 
 - Interfaces: `IDetector`, `ITelemetryProvider`, `ICorrelationRule`, `IResponsePlugin`
 - `PluginRegistry` DI singleton - register correlation rules without editing core files
-- `RulePackLoader` - loads HMAC-signed `*.pack.json` packs from `%ProgramData%\Sentinel\rules\packs\` as `FragmentCorrelationRule` plugins; fail-closed on invalid HMAC
+- `RulePackLoader` - loads RSA-SHA256-signed `*.pack.json` packs from `%ProgramData%\Sentinel\rules\packs\` as `FragmentCorrelationRule` plugins; fail-closed on invalid/missing signature (v2.0.4 CRIT-2: migrated from symmetric HMAC to asymmetric RSA so a SYSTEM-level attacker cannot forge packs; legacy HMAC-signed packs are rejected). Verification uses the embedded public key only (v2.0.8: admin-writable external key files are ignored)
 - See `docs/RULE_PACKS.md`
 
 ### FR-15: Service<->Agent IPC (v2.0)
