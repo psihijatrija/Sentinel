@@ -229,6 +229,49 @@ namespace Sentinel.Tests
         {
             Assert.Empty(AttackTechniqueMap.Resolve("Completely Benign Thing"));
         }
+
+        // Composites emitted by BehavioralCorrelationEngine previously carried no SignalType
+        // (Generic), so a composite whose NAME matched no ATT&CK fragment emitted with an EMPTY
+        // AttackTechniques field. ClassifyCompositeSignal now assigns a representative terminal
+        // SignalType so AttackTechniqueMap.Enrich's signal fallback fires. These composite names
+        // match no fragment in the map, so without the fix they would resolve to nothing.
+        [Theory]
+        [InlineData("Fileless Attack Chain")]
+        [InlineData("In-Memory Implant Active")]
+        [InlineData("Dropped Payload Active")]
+        [InlineData("Spoofed Process Phoning Home")]
+        [InlineData("Local Payload: Staged Module + Credential Access")]
+        public void Composite_NameMatchesNoFragment_StillGetsTechniques(string compositeName)
+        {
+            // Precondition: the raw name resolves to nothing (this is the gap being closed).
+            Assert.Empty(AttackTechniqueMap.Resolve(compositeName));
+
+            // With the classified SignalType the composite is built with, Enrich now populates it.
+            var ev = new DetectionEvent
+            {
+                RuleName = compositeName,
+                SignalType = BehavioralCorrelationEngine.ClassifyCompositeSignal(compositeName),
+            };
+            Assert.NotEqual(SignalType.Generic, ev.SignalType);
+
+            AttackTechniqueMap.Enrich(ev);
+            Assert.True(ev.Metadata.ContainsKey("AttackTechniques"),
+                $"Composite '{compositeName}' must carry ATT&CK techniques (FR-8).");
+            Assert.False(string.IsNullOrWhiteSpace(ev.Metadata["AttackTechniques"]));
+        }
+
+        [Theory]
+        [InlineData("Active Mass-Encryption Chain", SignalType.Ransomware)]
+        [InlineData("Credential Dump + Exfiltration", SignalType.CredentialTheft)]
+        [InlineData("Fileless Attack Chain", SignalType.ProcessInjection)]
+        [InlineData("In-Memory Implant Active", SignalType.ProcessInjection)]
+        [InlineData("Dropped Payload Active", SignalType.NetworkC2)]
+        [InlineData("Spoofed Process Phoning Home", SignalType.NetworkC2)]
+        [InlineData("Local Payload: Staged Module + Defense Tampering", SignalType.SecurityEvasion)]
+        public void ClassifyCompositeSignal_MapsToTerminalFamily(string name, SignalType expected)
+        {
+            Assert.Equal(expected, BehavioralCorrelationEngine.ClassifyCompositeSignal(name));
+        }
     }
 
     public class ProductInfoTests

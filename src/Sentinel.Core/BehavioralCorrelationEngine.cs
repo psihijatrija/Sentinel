@@ -747,6 +747,12 @@ namespace Sentinel.Core
                 ProcessName = name,
                 Confidence = confidence,
                 Tier = DetectionTier.Tier1Behavioral,
+                // Carry a representative terminal SignalType so downstream SignalType-based
+                // fallbacks fire for composites whose names match no ATT&CK fragment (e.g.
+                // "Fileless Attack Chain", "In-Memory Implant Active"). Response authority is
+                // driven by the ChainConfirmed/Composite/QuarantineAndKill fields, not SignalType,
+                // so this only improves explainability enrichment - it never changes kill scope.
+                SignalType = ClassifyCompositeSignal(ruleName),
                 AuthorizedResponse = ResponseAction.QuarantineAndKill,
                 Evidence = $"[COMPOSITE] {evidence} (PID {pid})",
                 Reasoning = reasoning,
@@ -762,6 +768,45 @@ namespace Sentinel.Core
                 CoercionAbusePolicy.TagAsCoercionToolkit(compositeEvent);
 
             await _emitCallback!(compositeEvent);
+        }
+
+        /// <summary>
+        /// Map a composite rule name to a representative terminal <see cref="SignalType"/>.
+        /// Composites are built here with no SignalType (defaulting to Generic), which disabled
+        /// the SignalType-based fallback in <see cref="AttackTechniqueMap.Enrich"/> - so any
+        /// composite whose NAME matched no ATT&amp;CK fragment ("Fileless Attack Chain",
+        /// "In-Memory Implant Active", "Dropped Payload Active", "Spoofed Process Phoning Home",
+        /// "Local Payload: ...") emitted with an EMPTY AttackTechniques field, weakening the
+        /// FR-8 explainability / FR-12 evidence-pack contract. This classifies by the terminal
+        /// family the composite represents; it is metadata-only and never affects kill scope
+        /// (which is driven by ChainConfirmed/Composite/QuarantineAndKill).
+        /// </summary>
+        internal static SignalType ClassifyCompositeSignal(string? ruleName)
+        {
+            if (string.IsNullOrEmpty(ruleName)) return SignalType.SuspiciousProcess;
+            var r = ruleName!;
+
+            bool Has(string s) => r.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0;
+
+            // Order: most specific terminal family first.
+            if (Has("Ransomware") || Has("Mass-Encryption")) return SignalType.Ransomware;
+            if (Has("Credential") || Has("LSASS") || Has("Infostealer")) return SignalType.CredentialTheft;
+            if (Has("Injection") || Has("Injected") || Has("In-Memory Implant") || Has("Fileless") ||
+                Has("Staged Module + Injection")) return SignalType.ProcessInjection;
+            if (Has("Reverse Shell")) return SignalType.ReverseShell;
+            // Defense-tampering composites (AMSI/ETW/defense disable) -> evasion family.
+            if (Has("Defense Tampering") || Has("Evasion")) return SignalType.SecurityEvasion;
+            // Everything else that reaches a composite is a confirmed terminal with an outbound /
+            // C2 / exfil / phone-home leg (Dropped Payload, Phoning Home, Beacon, Exfil, DGA,
+            // Named Pipe C2, Covert C2/RAT, Escalation + C2 Channel, Data Staging + Exfiltration).
+            if (Has("C2") || Has("Beacon") || Has("Phoning Home") || Has("Exfil") ||
+                Has("DGA") || Has("Payload") || Has("Covert") || Has("Channel"))
+                return SignalType.NetworkC2;
+
+            // Fallback: a confirmed multi-signal terminal we didn't name-match. SuspiciousProcess
+            // keeps it a non-Generic signal so the name-based Resolve remains authoritative while
+            // avoiding a misleading specific technique.
+            return SignalType.SuspiciousProcess;
         }
 
 
