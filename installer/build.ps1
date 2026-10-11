@@ -68,8 +68,28 @@ if ($LASTEXITCODE -ne 0) { throw "Service publish failed" }
 Write-Host "Publishing Sentinel Agent (net48-windows, framework-dependent)..." -ForegroundColor Yellow
 $AgentProj = Join-Path $PSScriptRoot "..\src\Sentinel.Agent\Sentinel.Agent.csproj"
 $AgentOut = Join-Path $PublishDir "agent"
-& $Dotnet publish $AgentProj -c Release -f net48-windows -o $AgentOut
+# Agent is published for the win-x64 RID (framework-dependent, NOT self-contained) so the
+# SDK resolves the x64 WebView2Loader.dll to the publish root. The Agent process is x64
+# (its ML.NET natives are x64); a no-RID publish would drop the x86 loader at the root -
+# wrong bitness - and WebView2 would silently fall back to the legacy IE11 WebBrowser forever.
+# AgentDashboardForm still degrades gracefully if the Edge WebView2 *Runtime* is absent.
+& $Dotnet publish $AgentProj -c Release -f net48-windows -r win-x64 --self-contained false -o $AgentOut
 if ($LASTEXITCODE -ne 0) { throw "Agent publish failed" }
+
+# 3-WebView2. Verify the correct-bitness native loader reached the publish root.
+$WebView2Root = Join-Path $AgentOut "WebView2Loader.dll"
+if (Test-Path $WebView2Root) {
+    Write-Host "x64 WebView2Loader.dll present at Agent root" -ForegroundColor Yellow
+} else {
+    # Last-resort copy from the RID native folder if the SDK layout changes.
+    $WebView2X64 = Join-Path $AgentOut "runtimes\win-x64\native\WebView2Loader.dll"
+    if (Test-Path $WebView2X64) {
+        Copy-Item $WebView2X64 -Destination $WebView2Root -Force
+        Write-Host "Copied x64 WebView2Loader.dll to Agent root" -ForegroundColor Yellow
+    } else {
+        Write-Host "WARNING: WebView2Loader.dll missing - dashboard will use legacy WebBrowser" -ForegroundColor Red
+    }
+}
 
 # 3-AutoRotate. Publish standalone SentinelAutoRotate tool - framework-dependent net48
 Write-Host "Publishing Sentinel AutoRotate (net48-windows, framework-dependent)..." -ForegroundColor Yellow

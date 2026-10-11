@@ -43,3 +43,22 @@ jobs:
         name: test-results
         path: ${{ github.workspace }}/TestResults/*.trx
         if-no-files-found: ignore
+
+    # Coverage runs as its own step: coverlet.msbuild instruments at test-build time, so it
+    # cannot use the --no-build artifacts from the Test step above. It builds+tests again with
+    # instrumentation and emits a cobertura report. Not gated on a threshold yet (the baseline
+    # is ~40% line on Sentinel.Core); the number is published so regressions are visible.
+    - name: Coverage
+      run: >
+        dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj
+        -c Release
+        /p:CollectCoverage=true
+        /p:CoverletOutputFormat=cobertura
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: ${{ github.workspace }}/tests/Sentinel.Tests/TestResults/coverage.cobertura.xml
+        if-no-files-found: ignore
