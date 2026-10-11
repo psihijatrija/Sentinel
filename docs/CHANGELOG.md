@@ -1,4 +1,9 @@
 # Changelog
+## [3.0.7] - 2026-10-11
+### Changed
+- **Repository URLs updated from the old `github.com/CroatiaSecurity` org to `github.com/psihijatrija`.** Corrected the two actual GitHub URLs: the `LICENSE` copyright line (`github.com/psihijatrija/Sentinel`) and the 2.3.6 changelog porting link (`github.com/psihijatrija/GorstaksProtection`). Non-URL `CroatiaSecurity/C datasets` references (ML trainer docs) and the compiled Worker HMAC shared-secret constant in `Models.cs` (which must byte-match the Worker env `SENTINEL_SHARED_SECRET` per FR-11) are intentionally left unchanged.
+- Version stamp 3.0.6 -> 3.0.7.
+
 ## [3.0.6] - 2026-10-11
 ### Added
 - **Agent dashboard now runs on Edge/Chromium (WebView2) with graceful fallback.** `AgentDashboardForm` prefers the `Microsoft.Web.WebView2` control (modern CSS grid/flexbox/JS, no IE11 quirks) instead of the legacy WinForms `WebBrowser` with its `FEATURE_BROWSER_EMULATION` IE11 shim. WebView2 is initialized without `await` on the Agent STA thread (NFR-6) via the `CoreWebView2InitializationCompleted` event; the per-user browser profile lives under `%LocalAppData%\Sentinel\WebView2` (the install dir may be read-only for the interactive user). The embedded host is locked down: DevTools off, default context menus off, accelerator keys off, `NewWindowRequested` suppressed. **Graceful degradation (NFR-2):** if the Edge WebView2 Runtime is missing, the managed assemblies can't construct the control, or init otherwise fails, the form falls back to the legacy `WebBrowser` so Settings always renders instead of crashing. The installer publishes the Agent for the `win-x64` RID (framework-dependent) so the correct-bitness `WebView2Loader.dll` (verified x64, `Machine=0x8664`) lands at the publish root — a no-RID publish dropped the x86 loader and WebView2 would have silently fallen back forever.
@@ -2319,7 +2324,7 @@ AV false positive elimination: sensitive Win32/NT APIs moved out of the PE impor
 
 ## [2.3.6] - 2026-09-01
 
-Detection quality improvements ported from [GorstaksProtection](https://github.com/CroatiaSecurity/GorstaksProtection): sliding-window ransomware rules, full-path parent verification, ThreatFox live IOC feed, and a mandatory pre-action audit log.
+Detection quality improvements ported from [GorstaksProtection](https://github.com/psihijatrija/GorstaksProtection): sliding-window ransomware rules, full-path parent verification, ThreatFox live IOC feed, and a mandatory pre-action audit log.
 
 ### Fixed
 
