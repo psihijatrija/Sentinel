@@ -266,8 +266,8 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 
 | Component | Mechanism | Notes |
 |-----------|-----------|-------|
-| `TrayIconService` | System tray NotifyIcon; **Settings** / double-click opens native `AgentDashboardForm` with embedded WebBrowser. **No** `ShowBalloonTip` | WinForms STA |
-| `AgentDashboardForm` | Thin WebBrowser shell hosting `http://localhost:19845` (WebDashboardService). IE11 Edge emulation for CSS grid/flexbox. **v2.2.9+:** replaces the old WinForms sidebar panels | WinForms STA |
+| `TrayIconService` | System tray NotifyIcon; **Settings** / double-click opens native `AgentDashboardForm` with embedded browser. **No** `ShowBalloonTip` | WinForms STA |
+| `AgentDashboardForm` | Thin browser shell hosting `http://localhost:19845` (WebDashboardService). **v3.0.6:** prefers Edge/Chromium `WebView2` (profile under `%LocalAppData%\Sentinel\WebView2`; DevTools/context-menu/new-window locked down); falls back to the legacy `WebBrowser` (IE11 Edge emulation) if the WebView2 Runtime is absent. **v2.2.9+:** replaces the old WinForms sidebar panels | WinForms STA |
 | `WebDashboardService` | Loopback HTTP dashboard + REST API + WebSocket on localhost:19845. Bearer token auth. Serves `DashboardHtml` at GET / | BackgroundService |
 | `DashboardHtml` | Self-contained HTML/CSS/JS served by WebDashboardService - the full dashboard UI | Static class |
 | `ScreenCaptureMonitor` | Detects DXGI desktop duplication + transparent overlay phishing windows | 15-25s |

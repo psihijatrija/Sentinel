@@ -12,6 +12,16 @@
          CS8602: Null-forgiving in test assertions is acceptable
          xUnit2002/xUnit2013/xUnit1031: Style suggestions in tests -->
     <NoWarn>CS0618;CS8602;xUnit2002;xUnit2013;xUnit1031</NoWarn>
+
+    <!-- coverlet.msbuild coverage defaults. Active only when /p:CollectCoverage=true is
+         passed; otherwise these properties are inert and a normal `dotnet test` is unchanged. -->
+    <CoverletOutputFormat>cobertura</CoverletOutputFormat>
+    <CoverletOutput>$(MSBuildThisFileDirectory)TestResults/coverage.cobertura.xml</CoverletOutput>
+    <!-- Measure the product assembly only; the test assembly itself is not of interest. -->
+    <Include>[Sentinel.Core]*</Include>
+    <!-- Exclude generated / compat shims that skew the number without being real logic. -->
+    <ExcludeByFile>**/obj/**/*.cs</ExcludeByFile>
+    <ExcludeByAttribute>GeneratedCodeAttribute,CompilerGeneratedAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +33,12 @@
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageReference Include="Moq" Version="4.20.72" />
+    <!-- Code coverage via MSBuild integration (not the VSTest collector, which does not
+         support .NET Framework targets). Enable with: dotnet test /p:CollectCoverage=true -->
+    <PackageReference Include="coverlet.msbuild" Version="6.0.4">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
