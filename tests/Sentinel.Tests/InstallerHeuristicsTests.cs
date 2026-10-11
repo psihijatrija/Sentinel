@@ -164,5 +164,140 @@ namespace Sentinel.Tests
         }
 
         #endregion
+
+        #region IsDirectXOrRuntimeRedist
+
+        [Theory]
+        [InlineData("dxsetup", null)]
+        [InlineData("vcredist_x64", null)]
+        [InlineData("vc_redist", null)]
+        [InlineData("xnafx40", null)]
+        [InlineData("physx", null)]
+        [InlineData("openal", null)]
+        public void IsDirectXOrRuntimeRedist_True_ByName(string name, string? path)
+        {
+            Assert.True(InstallerHeuristics.IsDirectXOrRuntimeRedist(name, path));
+        }
+
+        [Theory]
+        [InlineData(null, @"C:\Program Files (x86)\Steam\steamapps\common\MyGame\_CommonRedist\DirectX\dxsetup.exe")]
+        [InlineData(null, @"C:\Games\redist\directx\installer.exe")]
+        public void IsDirectXOrRuntimeRedist_True_BySteamRedistPath(string? name, string path)
+        {
+            Assert.True(InstallerHeuristics.IsDirectXOrRuntimeRedist(name, path));
+        }
+
+        [Theory]
+        [InlineData(null, @"C:\Windows\System32\d3dx9_43.dll")]
+        [InlineData(null, @"C:\Windows\System32\xinput1_3.dll")]
+        [InlineData(null, @"C:\Windows\System32\vulkan-1.dll")]
+        public void IsDirectXOrRuntimeRedist_True_ByRedistDllHint(string? name, string path)
+        {
+            Assert.True(InstallerHeuristics.IsDirectXOrRuntimeRedist(name, path));
+        }
+
+        [Theory]
+        [InlineData("notepad", null)]
+        [InlineData("evil", null)]
+        [InlineData("malware", @"C:\Temp\malware.exe")]
+        [InlineData("", null)]
+        public void IsDirectXOrRuntimeRedist_False(string name, string? path)
+        {
+            Assert.False(InstallerHeuristics.IsDirectXOrRuntimeRedist(name, path));
+        }
+
+        #endregion
+
+        #region IsPortableDownloadOrArchiveTool
+
+        [Theory]
+        [InlineData("aria2c", null)]
+        [InlineData("curl", null)]
+        [InlineData("wget", null)]
+        [InlineData("7z", null)]
+        [InlineData("wimlib-imagex", null)]
+        [InlineData("dism", null)]
+        public void IsPortableDownloadOrArchiveTool_True_ByName(string name, string? path)
+        {
+            Assert.True(InstallerHeuristics.IsPortableDownloadOrArchiveTool(name, path));
+        }
+
+        [Fact]
+        public void IsPortableDownloadOrArchiveTool_True_ByImagePath_WhenNameNull()
+        {
+            Assert.True(InstallerHeuristics.IsPortableDownloadOrArchiveTool(
+                null, @"C:\Users\Bob\Downloads\uupdump\files\aria2c.exe"));
+        }
+
+        [Theory]
+        [InlineData("explorer", null)]
+        [InlineData("evil", @"C:\Temp\evil.exe")]
+        [InlineData("", null)]
+        [InlineData(null, null)]
+        public void IsPortableDownloadOrArchiveTool_False(string? name, string? path)
+        {
+            Assert.False(InstallerHeuristics.IsPortableDownloadOrArchiveTool(name, path));
+        }
+
+        #endregion
+
+        #region IsOfflineImageWorkPath
+
+        [Theory]
+        [InlineData(@"C:\Users\Bob\Downloads\uupdump\convert.cmd")]
+        [InlineData(@"C:\Tools\NTLite\ntlite.exe")]
+        [InlineData(@"C:\MSMG Toolkit\start.cmd")]
+        [InlineData(@"C:\Users\Bob\Downloads\28000.1_amd64_convert\files\aria2c.exe")]
+        public void IsOfflineImageWorkPath_True(string path)
+        {
+            Assert.True(InstallerHeuristics.IsOfflineImageWorkPath(path));
+        }
+
+        [Theory]
+        [InlineData(@"C:\Temp\evil\payload.exe")]
+        [InlineData(@"C:\Windows\System32\cmd.exe")]
+        [InlineData(null)]
+        [InlineData("")]
+        public void IsOfflineImageWorkPath_False(string? path)
+        {
+            Assert.False(InstallerHeuristics.IsOfflineImageWorkPath(path));
+        }
+
+        #endregion
+
+        #region IsBenignPortableWorkContext
+
+        [Fact]
+        public void IsBenignPortableWorkContext_True_ForKnownToolByName()
+        {
+            Assert.True(InstallerHeuristics.IsBenignPortableWorkContext(
+                "aria2c", @"C:\Users\Bob\Downloads\uupdump\files\aria2c.exe"));
+        }
+
+        [Fact]
+        public void IsBenignPortableWorkContext_True_ForKnownToolInOfflineImagePath()
+        {
+            // Offline-image path trust applies only when the binary itself is a known tool.
+            Assert.True(InstallerHeuristics.IsBenignPortableWorkContext(
+                null, @"C:\Users\Bob\Downloads\uupdump\files\aria2c.exe"));
+        }
+
+        [Fact]
+        public void IsBenignPortableWorkContext_False_ForMalwareInUupFolder()
+        {
+            // Anti-evasion: a non-tool binary sitting in a folder named "uups" must NOT get a
+            // blanket bypass just because the directory name looks like offline-image tooling.
+            Assert.False(InstallerHeuristics.IsBenignPortableWorkContext(
+                "malware", @"C:\Users\Bob\Downloads\uups\malware.exe"));
+        }
+
+        [Fact]
+        public void IsBenignPortableWorkContext_False_ForUnknownToolAndPath()
+        {
+            Assert.False(InstallerHeuristics.IsBenignPortableWorkContext(
+                "evil", @"C:\Temp\evil.exe"));
+        }
+
+        #endregion
     }
 }
