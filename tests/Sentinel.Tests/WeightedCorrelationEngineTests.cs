@@ -161,6 +161,27 @@ namespace Sentinel.Tests
             }));
         }
 
+        [Fact]
+        public void MapWeightCategory_FilelessComposites_MapToMemoryBucket()
+        {
+            // These kill-grade composites match none of the name-first branches, so they fall
+            // through to the enum switch. Before the CategorizeDetection fix they resolved to
+            // Unknown and were weighted as the "Generic" bucket (10); now they correctly land
+            // in the FilelessAttack -> "Memory" bucket (40).
+            Assert.Equal("Memory", WeightedCorrelationEngine.MapWeightCategory(new DetectionEvent
+            {
+                RuleName = "Fileless Attack Chain"
+            }));
+            Assert.Equal("Memory", WeightedCorrelationEngine.MapWeightCategory(new DetectionEvent
+            {
+                RuleName = "In-Memory Implant Active"
+            }));
+            Assert.Equal("Memory", WeightedCorrelationEngine.MapWeightCategory(new DetectionEvent
+            {
+                RuleName = "Dropped Payload Active"
+            }));
+        }
+
         private sealed class TestCorrelationRule : ICorrelationRule
         {
             public string Name => "TestRule";
