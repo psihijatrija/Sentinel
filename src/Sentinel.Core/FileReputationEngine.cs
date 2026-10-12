@@ -64,6 +64,23 @@ namespace Sentinel.Core
         // Prevalence tracking: SHA256 -> number of distinct paths seen
         private readonly ConcurrentDictionary<string, HashSet<string>> _prevalenceMap = new();
 
+        // v3.0.9 MEMORY: these two caches are keyed by distinct SHA-256 and grow once per unique
+        // file ever evaluated. A full-disk FileVerdictScanner walk visits every executable/DLL on
+        // every fixed volume, so without a cap they climbed into the hundreds of thousands of
+        // entries (each retaining a FileReputationResult plus a HashSet<string> of paths) and drove
+        // Sentinel.Service.exe toward ~2 GB RSS. The DI singleton lifetime + never-returning host
+        // Main means nothing ever recycled them. The read-side TTL only re-evaluated expired
+        // entries; it never deleted. We now bound both maps with an opportunistic eviction that
+        // runs on insert (no reliance on an external prune timer, which can silently die if a
+        // monitor loop stops under BackgroundServiceExceptionBehavior.Ignore). Oldest entries by
+        // CachedAt are dropped first; a dropped entry is simply re-evaluated the next time its hash
+        // is seen, so bounding is behaviorally safe (fail-open, advisory cache).
+        private const int MaxCachedResults = 50_000;
+        // Trim target after a cap breach - evict down to this so we amortize eviction cost rather
+        // than evicting one entry per insert once full.
+        private const int ResultCacheTrimTo = 40_000;
+        private int _evictGuard; // 0/1 flag: ensures a single evicting thread at a time (no lock on the hot path)
+
         // Rate limiters per API source
         private readonly SemaphoreSlim _circlThrottle = new(4, 4);      // 4 concurrent
         private readonly SemaphoreSlim _malwareBazaarThrottle = new(2, 2); // 2 concurrent
@@ -204,6 +221,7 @@ namespace Sentinel.Core
 
             _resultCache[hash] = (result, DateTimeOffset.UtcNow);
             TrackPrevalence(hash, filePath);
+            EvictIfOverCap();
             PersistResult(hash, result);
 
             _logger.LogDebug(
@@ -704,6 +722,59 @@ namespace Sentinel.Core
             {
                 if (paths.Count < 100)
                     paths.Add(filePath);
+            }
+        }
+
+        /// <summary>
+        /// v3.0.9: Bounds <see cref="_resultCache"/> (and, in lockstep, <see cref="_prevalenceMap"/>)
+        /// so a full-disk scan cannot grow them without limit. Runs opportunistically on insert; a
+        /// single thread evicts at a time (CAS guard) so the hot path never blocks. When the cache
+        /// exceeds <see cref="MaxCachedResults"/> we drop the oldest entries by CachedAt down to
+        /// <see cref="ResultCacheTrimTo"/>, and remove any prevalence entry whose hash is no longer
+        /// cached. Eviction is behaviorally safe: a dropped hash is simply re-evaluated next time it
+        /// is seen (the on-disk SecureCacheStore and persisted result still answer most lookups).
+        /// </summary>
+        private void EvictIfOverCap()
+        {
+            if (_resultCache.Count <= MaxCachedResults)
+                return;
+            // Only one evicting thread at a time; others skip and let it proceed.
+            if (Interlocked.CompareExchange(ref _evictGuard, 1, 0) != 0)
+                return;
+            try
+            {
+                int toRemove = _resultCache.Count - ResultCacheTrimTo;
+                if (toRemove > 0)
+                {
+                    // Oldest-first by CachedAt. Snapshot is O(n) but only runs on a cap breach.
+                    var victims = _resultCache
+                        .OrderBy(kvp => kvp.Value.CachedAt)
+                        .Take(toRemove)
+                        .Select(kvp => kvp.Key)
+                        .ToArray();
+                    foreach (var key in victims)
+                    {
+                        _resultCache.TryRemove(key, out _);
+                        _prevalenceMap.TryRemove(key, out _);
+                    }
+                    _logger.LogDebug(
+                        "[FileReputationEngine] Evicted {Count} oldest cache entries (cap {Cap}); now {Size}",
+                        victims.Length, MaxCachedResults, _resultCache.Count);
+                }
+
+                // Prune orphaned prevalence entries (hash dropped from result cache but path-set lingered).
+                if (_prevalenceMap.Count > _resultCache.Count)
+                {
+                    foreach (var kvp in _prevalenceMap)
+                    {
+                        if (!_resultCache.ContainsKey(kvp.Key))
+                            _prevalenceMap.TryRemove(kvp.Key, out _);
+                    }
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _evictGuard, 0);
             }
         }
 

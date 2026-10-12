@@ -37,6 +37,7 @@ namespace Sentinel.Core
             new(StringComparer.OrdinalIgnoreCase);
 
         private long _dirtyCount;
+        private int _evictGuard; // single evicting thread at a time; no lock on the hot path
         private readonly System.Threading.Timer? _flushTimer;
         private readonly object _flushLock = new();
         private volatile bool _disposed;
@@ -46,6 +47,15 @@ namespace Sentinel.Core
         // Only rewrite the on-disk index when at least this many new entries have accumulated,
         // or on dispose. Keeps the walk from triggering repeated full-file rewrites.
         private const long FlushThreshold = 200;
+
+        // v3.0.9 MEMORY: cap the in-memory map. It is keyed by full file path and previously grew
+        // once per file ever walked on every fixed volume, with no removal of stale/missing paths -
+        // a steady contributor to Sentinel.Service.exe's unbounded RSS. This index is purely
+        // advisory and fail-open (an evicted path is just re-hashed once on the next walk), so when
+        // we exceed the cap we trim arbitrary excess entries down to the trim target. The cap is
+        // sized to comfortably hold a large software footprint while staying bounded.
+        private const int MaxEntries = 300_000;
+        private const int EntriesTrimTo = 250_000;
 
         public FileScanIndex(string? secureDir = null)
         {
@@ -128,12 +138,47 @@ namespace Sentinel.Core
                 var value = (fi.Length, fi.LastWriteTimeUtc.Ticks);
                 _entries[key] = value;
 
+                EvictIfOverCap();
+
                 if (Interlocked.Increment(ref _dirtyCount) >= FlushThreshold)
                     TryFlush(force: false);
             }
             catch
             {
                 // best-effort - skipping the mark just means we re-hash next time
+            }
+        }
+
+        /// <summary>
+        /// v3.0.9: Bounds <see cref="_entries"/> so repeated full-volume walks cannot grow the
+        /// index without limit. Runs opportunistically on insert with a single evicting thread
+        /// (CAS guard) so the hot path never blocks. The index carries no per-entry timestamp and
+        /// is purely advisory/fail-open, so we trim arbitrary excess keys down to the trim target;
+        /// an evicted path is simply re-hashed once on the next walk. The map is also marked dirty
+        /// so the trimmed set is persisted on the next batched flush.
+        /// </summary>
+        private void EvictIfOverCap()
+        {
+            if (_entries.Count <= MaxEntries)
+                return;
+            if (Interlocked.CompareExchange(ref _evictGuard, 1, 0) != 0)
+                return;
+            try
+            {
+                int removed = 0;
+                foreach (var key in _entries.Keys)
+                {
+                    if (_entries.Count <= EntriesTrimTo)
+                        break;
+                    if (_entries.TryRemove(key, out _))
+                        removed++;
+                }
+                if (removed > 0)
+                    Interlocked.Increment(ref _dirtyCount);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _evictGuard, 0);
             }
         }
 

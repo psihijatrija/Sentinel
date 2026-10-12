@@ -1,4 +1,15 @@
 # Changelog
+## [3.0.9] - 2026-10-12
+### Fixed
+- **Service memory leak: three unbounded in-memory caches in `Sentinel.Service.exe` now have hard size caps + eviction.** The service registers its engines as DI singletons that live for the whole process (the host never recycles), so any cache without eviction grows until restart. Three caches had **no cap and no eviction** and all scale with "number of distinct files/hashes/paths ever seen" — which the full-disk `FileVerdictScanner` walk maximizes — driving `Sentinel.Service.exe` RSS toward ~2 GB over time:
+  - **`FileReputationEngine._resultCache` + `_prevalenceMap`** (the heaviest): one entry per distinct SHA-256, each retaining a `FileReputationResult` object plus a growing `HashSet<string>` of every path that hash appeared at. The existing read-side TTL only triggered *re-evaluation* of expired entries; it never deleted them, and `Malicious`/other verdicts had no expiry at all. Now bounded at 50k entries, trimmed oldest-first by `CachedAt` down to 40k, with orphaned prevalence entries pruned in lockstep.
+  - **`FileScanIndex._entries`**: one entry per full file path ever walked on any fixed volume, never removed even when the path no longer exists. Now capped at 300k, trimmed to 250k.
+  - **`HashReputationService._memoryCache`**: one permanent entry per unique hash ever looked up. Now capped at 100k with FIFO eviction (a companion insertion-order queue), trimmed to 80k.
+- **Eviction is opportunistic (insert-triggered), not timer-driven.** Each cache trims itself on insert under a single-thread CAS guard so the hot path never blocks. This deliberately avoids relying on an external prune timer, because the service runs with `BackgroundServiceExceptionBehavior.Ignore` — a monitor whose loop dies would silently stop any prune work it owned, letting the cache leak while the host kept running. All three caches are advisory and fail-open: an evicted entry is simply re-evaluated / re-hashed the next time it is seen, and the on-disk `SecureCacheStore` + persisted verdicts remain authoritative, so bounding changes no detection behavior. Build 0W/0E.
+
+### Changed
+- Version stamp 3.0.8 -> 3.0.9.
+
 ## [3.0.8] - 2026-10-11
 ### Added
 - **Branch-coverage tests for four security-critical Core classes (test-only; no behavior change).** Targeted the lowest-coverage, highest-risk-per-untested-branch classes identified from the measured cobertura baseline and raised each materially:

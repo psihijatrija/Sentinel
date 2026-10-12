@@ -18,6 +18,15 @@ namespace Sentinel.Core
     public class HashReputationService
     {
         private readonly ConcurrentDictionary<string, HashVerdict> _memoryCache = new();
+        // v3.0.9 MEMORY: _memoryCache held one permanent entry per unique hash ever looked up and
+        // had no cap or eviction - another contributor to Sentinel.Service.exe's unbounded growth
+        // (the disk-backed SecureCacheStore is authoritative, so this is only a hot read-through
+        // layer). We bound it with insertion-order FIFO eviction: _cacheOrder records keys as they
+        // are first cached, and once _memoryCache exceeds the cap we drop the oldest keys. Entries
+        // are small, so the cap is generous; a dropped hash just re-reads from disk / re-queries.
+        private readonly ConcurrentQueue<string> _cacheOrder = new();
+        private const int MaxMemoryCacheEntries = 100_000;
+        private const int MemoryCacheTrimTo = 80_000;
         private readonly SecureCacheStore _cacheStore;
         private readonly ThreatReportingConfig _config;
         private readonly ILogger<HashReputationService> _logger;
@@ -85,7 +94,7 @@ namespace Sentinel.Core
             var cachedVal = _cacheStore.Load("reputation", sha256);
             if (cachedVal != null && Enum.TryParse<HashVerdict>(cachedVal, out var diskVerdict))
             {
-                _memoryCache[sha256] = diskVerdict;
+                CacheVerdict(sha256, diskVerdict);
                 return diskVerdict;
             }
 
@@ -93,11 +102,35 @@ namespace Sentinel.Core
 
             if (liveVerdict != HashVerdict.Unknown)
             {
-                _memoryCache[sha256] = liveVerdict;
+                CacheVerdict(sha256, liveVerdict);
                 _cacheStore.Save("reputation", sha256, liveVerdict.ToString());
             }
 
             return liveVerdict;
+        }
+
+        /// <summary>
+        /// v3.0.9: Writes a hash verdict into the in-memory read-through cache, recording insertion
+        /// order and evicting the oldest entries once the cache exceeds its cap. Only records order
+        /// for keys not already present so re-writes do not inflate the queue. Bounding is safe: the
+        /// SecureCacheStore on disk remains authoritative, so an evicted entry just re-reads.
+        /// </summary>
+        private void CacheVerdict(string sha256, HashVerdict verdict)
+        {
+            bool isNew = !_memoryCache.ContainsKey(sha256);
+            _memoryCache[sha256] = verdict;
+            if (isNew)
+                _cacheOrder.Enqueue(sha256);
+
+            if (_memoryCache.Count <= MaxMemoryCacheEntries)
+                return;
+
+            // Drop oldest keys (FIFO) until back under the trim target. Dequeued keys that were
+            // already removed are simply skipped.
+            while (_memoryCache.Count > MemoryCacheTrimTo && _cacheOrder.TryDequeue(out var oldest))
+            {
+                _memoryCache.TryRemove(oldest, out _);
+            }
         }
 
         /// <summary>
