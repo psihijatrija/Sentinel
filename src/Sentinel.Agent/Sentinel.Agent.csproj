@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Version>3.0.7</Version>
+    <Company>Sentinel Security</Company>
+    <Product>Sentinel Endpoint Detection and Response</Product>
+    <Description>Sentinel EDR User-Session Agent and Web Dashboard</Description>
+    <Copyright>Copyright (c) 2026 Sentinel Contributors</Copyright>
+    <Authors>Sentinel</Authors>
+    <Platforms>AnyCPU;x64</Platforms>
+    <ApplicationIcon>..\..\installer\assets\Sentinel.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sentinel.Core\Sentinel.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Edge/Chromium dashboard host. Requires the Edge WebView2 Runtime on the target
+         (pre-installed on current Win10/11). AgentDashboardForm falls back to the legacy
+         WinForms WebBrowser (IE11 emulation) when the runtime is unavailable, so a missing
+         runtime degrades gracefully rather than breaking Settings. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+</Project>

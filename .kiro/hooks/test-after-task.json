@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Run tests after spec task",
+      "trigger": "PostTaskExec",
+      "description": "Runs the Sentinel test suite after a spec task is marked complete, so future feature work verifies itself against the Tier1/Tier2 contract, ProductPosture default-deny, and security hardening test suites.",
+      "action": {
+        "type": "command",
+        "command": "dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --verbosity normal",
+        "timeout": 600
+      }
+    }
+  ]
+}

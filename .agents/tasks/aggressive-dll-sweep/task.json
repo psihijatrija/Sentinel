@@ -1,0 +1,7 @@
+{
+  "task_id": "task-aggressive-dll-sweep",
+  "task_description": "Port two behaviors from E:\\Test\\Antivirus.ps1 into the Sentinel EDR C# solution (net48-windows): (1) an OPT-IN aggressive unsigned-DLL drive sweep monitor gated behind a compiled config flag that defaults FALSE, routed entirely through Sentinel's existing QuarantineManager; and (2) a Tier2/LogOnly IDS command-line pattern detection rule. All work in the worktree e:\\Gorstak\\Sentinel\\.worktrees\\aggressive-dll-sweep. Honor hard constraints: no shelling out, DI everywhere, CancellationToken threaded, no static mutable state, no string-built JSON, every catch logs, Tier2 never triggers response, compiled config only.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

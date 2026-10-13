@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Detection change test reminder",
+      "trigger": "PostFileSave",
+      "description": "When a detection or response engine file is saved, reminds the agent to honor Sentinel's testing constraints: every Tier1 rule needs a test that it fires as Tier1Behavioral, every Tier2 rule a test that it returns Tier2Indicator, the Tier2 log-only contract must be verified, and any new proactive host mutation must ship a ProductPosture default-deny test.",
+      "matcher": "(Rule|Detection|Response|Correlation|Monitor|ResponsePolicy|ProductPosture).*\\.cs$",
+      "action": {
+        "type": "agent",
+        "prompt": "A detection/response-related file was just changed. Before considering this done, verify Sentinel's testing constraints from docs/constraints.md are met: (1) every new/changed Tier1 rule has a test proving it fires and returns Tier1Behavioral; (2) every Tier2 rule has a test proving it returns Tier2Indicator; (3) the Tier2 log-only contract still holds (Tier2 with ActiveResponse=true must still be LogOnly); (4) any new proactive host mutation gates on ProductPosture and ships a default-deny test. Add or update tests as needed, then run the suite."
+      }
+    }
+  ]
+}

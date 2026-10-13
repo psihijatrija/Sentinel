@@ -1,0 +1,5 @@
+# Exclude test attack patterns from GitHub zip downloads
+# These files contain intentional attack command strings for integration testing
+# and trigger AV false positives when scanned as part of a zip archive
+tests/WindowsSentinel.Tests/AttackPatternIntegrationTests.cs export-ignore
+tests/WindowsSentinel.Tests/RulesTests.cs export-ignore

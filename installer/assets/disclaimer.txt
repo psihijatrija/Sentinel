@@ -1,0 +1,38 @@
+SENTINEL - LEGAL DISCLAIMER
+===========================
+
+Sentinel is provided for defensive, educational, and research purposes only.
+
+By clicking "I Agree" and installing this software you agree to the following
+terms:
+
+1. AUTHORISED USE ONLY
+   You will only run Sentinel on systems you own or have explicit written
+   authorisation to monitor. Unauthorised monitoring of third-party systems
+   may be a criminal offence.
+
+2. PRIVACY AND CONSENT
+   You will not use Sentinel to monitor, surveil, or collect data on any
+   person without their knowledge and consent where required by applicable law.
+
+3. NO WARRANTY
+   This software is provided "AS IS", without warranty of any kind, express
+   or implied, including but not limited to warranties of merchantability,
+   fitness for a particular purpose, and non-infringement.
+
+4. LIMITATION OF LIABILITY
+   The authors and contributors accept no liability for damages, data loss,
+   system instability, false positives, missed detections, or any other harm
+   arising from the use or inability to use this software.
+
+5. SYSTEM IMPACT
+   Sentinel actively terminates processes and modifies host security policy
+   (IPSec rules, ASR Block rules, firewall rules, registry hardening). Test
+   in a non-production environment before deploying broadly.
+
+6. COMPLIANCE
+   You are solely responsible for ensuring your use of this software complies
+   with all applicable local, national, and international laws and regulations.
+
+This software is released under the MIT License. Full licence text is in the
+LICENSE file included with the installation.
