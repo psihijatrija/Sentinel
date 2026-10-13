@@ -34,9 +34,20 @@ namespace Sentinel.Core
         private const int HardCapFiles = 10000;
         private const int HardCapEndpoints = 3000;
 
+        // 3.1.1: insert-time cap enforcement. The hard caps above previously ran ONLY inside
+        // Prune() on the 15s TelemetryFusionEngine timer, so a FILE-node burst (ransomware
+        // encryption / write storm feeding FileActivityTelemetry "WROTE" edges) could add far
+        // more than HardCapFiles distinct nodes within a single 15s window and only be clawed
+        // back at the next tick - a transient RSS spike. We now also enforce on insert: when a
+        // brand-new node pushes its type over cap, shed the oldest of that type. Single-flighted
+        // per type via CAS so the hot path never blocks, mirroring the 3.0.9/3.1.0 insert-time
+        // pattern. Prune() still runs on the timer for TTL/retention; this only bounds bursts.
+        private int _enforcing; // 0 = idle, 1 = an insert-time enforcement pass is running
+
         public void AddNode(string key, string type, Dictionary<string, string>? properties = null)
         {
-            var node = _nodes.GetOrAdd(key, k => new GraphNode { Key = k, Type = type });
+            bool added = false;
+            var node = _nodes.GetOrAdd(key, k => { added = true; return new GraphNode { Key = k, Type = type }; });
             node.LastSeen = DateTime.UtcNow;
             if (properties != null)
             {
@@ -44,6 +55,39 @@ namespace Sentinel.Core
                 {
                     node.Properties[pKey] = pVal;
                 }
+            }
+
+            // Only a brand-new node can push a type over its cap; existing-node refreshes skip this.
+            if (added)
+            {
+                EnforceHardCapsOnInsert(type);
+            }
+        }
+
+        // Enforces the hard cap for a single node type on the insert path. Cheap guard first
+        // (CAS + a per-type count check); the O(n) sort only runs when actually over cap, and
+        // only one thread at a time performs it.
+        private void EnforceHardCapsOnInsert(string type)
+        {
+            int cap = type switch
+            {
+                "FILE" => HardCapFiles,
+                "ENDPOINT" => HardCapEndpoints,
+                _ => HardCapProcesses
+            };
+
+            // Fast pre-check without locking: count this type lazily only if the whole graph is
+            // already large enough that a single type could plausibly be over cap.
+            if (_nodes.Count <= cap) return;
+
+            if (System.Threading.Interlocked.CompareExchange(ref _enforcing, 1, 0) != 0) return;
+            try
+            {
+                EnforceHardCaps(type, cap);
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _enforcing, 0);
             }
         }
 
@@ -72,6 +116,12 @@ namespace Sentinel.Core
                 }
             }
         }
+
+        /// <summary>Total node count (diagnostics / cap verification).</summary>
+        public int NodeCount => _nodes.Count;
+
+        /// <summary>Node count of a given type (PROCESS / FILE / ENDPOINT).</summary>
+        public int NodeCountOfType(string type) => _nodes.Count(n => n.Value.Type == type);
 
         public List<GraphEdge> GetProcessEdges(string processKey)
         {

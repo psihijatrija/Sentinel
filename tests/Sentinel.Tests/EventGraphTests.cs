@@ -128,6 +128,40 @@ namespace Sentinel.Tests
         }
 
         // 
+        // Node cap enforcement on insert (3.1.1)
+        // 
+
+        [Fact]
+        public void AddNode_FileNodes_BoundedOnInsert_WithoutPrune()
+        {
+            // 3.1.1: FILE-node hard cap (10k) must be enforced on insert, not only in the 15s
+            // Prune timer, so a write-storm burst cannot spike node count between prune passes.
+            // Insert well past the cap and assert the live FILE-node count stays bounded WITHOUT
+            // ever calling Prune().
+            var graph = new EventGraph();
+            for (int i = 0; i < 13_000; i++)
+            {
+                graph.AddNode($"FILE_C:\\synthetic\\f{i}.bin", "FILE");
+            }
+
+            int fileNodes = graph.NodeCountOfType("FILE");
+            Assert.True(fileNodes <= 10_000, $"FILE nodes not bounded on insert: {fileNodes}");
+        }
+
+        [Fact]
+        public void AddNode_ExistingNodeReAdd_DoesNotTriggerUnboundedGrowth()
+        {
+            // Re-adding the same key must not grow the node set (regression guard for the
+            // 'added' detection in AddNode).
+            var graph = new EventGraph();
+            for (int i = 0; i < 1000; i++)
+            {
+                graph.AddNode("PROCESS_same", "PROCESS");
+            }
+            Assert.Equal(1, graph.NodeCount);
+        }
+
+        // 
         // GetProcessEdges
         // 
 

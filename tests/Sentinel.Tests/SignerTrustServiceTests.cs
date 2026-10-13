@@ -114,5 +114,22 @@ namespace Sentinel.Tests
             // Stale entry for non-existent file should be pruned
             Assert.False(_service.IsSignedFile(@"C:\cleanup\stale.exe"));
         }
+
+        [Fact]
+        public void Cache_IsBounded_UnderHeavyInsert()
+        {
+            // 3.1.1: the path-keyed cache must not grow without bound. Insert well past the
+            // 50k cap and confirm the cache trims itself rather than retaining everything.
+            // AddTestOverride routes through the same StoreVerdict/cap path as the live writes.
+            for (int i = 0; i < 60_000; i++)
+            {
+                _service.AddTestOverride($@"C:\synthetic\path_{i}\binary_{i}.exe", i % 2 == 0, "T");
+            }
+
+            // After exceeding the cap, the live entry count must be at or below the ceiling
+            // (never the full 60k we inserted). GetCachedCount exposes the current size.
+            int count = _service.GetCachedCount();
+            Assert.True(count <= 50_000, $"cache not bounded: {count} entries retained");
+        }
     }
 }
