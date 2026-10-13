@@ -17,6 +17,25 @@ namespace Sentinel.Core
         private const int MaxEventsPerChain = 500;
         private static readonly TimeSpan ChainRetention = TimeSpan.FromMinutes(2);
 
+        // Reflexive-loop guard. Sentinel runs as SYSTEM and continuously scans other
+        // processes (OpenProcess / ReadProcessMemory / handle enumeration) and writes its
+        // own logs, quarantine, and diagnostics. If that self-generated activity is fed
+        // back into the fusion pipeline it becomes a self-amplifying A->B->A loop that keeps
+        // every bounded buffer saturated and drives allocation churn (one FusedTelemetryContext
+        // per event) - a RAM-growth path distinct from the three unbounded-cache leaks fixed in
+        // 3.0.9. The response engine already self-excludes, but that runs AFTER ingestion/
+        // accumulation. We exclude our own PID here, at the single ingestion choke point,
+        // mirroring the proven `owningPid == myPid` filter used by the network scanners
+        // (NetworkMonitor et al). PID is constant for the process lifetime, so it is cached
+        // once rather than resolved per event on the hot path.
+        private static readonly int SelfPid = System.Net48Environment.ProcessId;
+
+        // Upper bound on distinct per-PID chains. The per-chain FIFO (500) and the 15s/2min
+        // cleanup bound each chain and drop empties, but nothing bounds the NUMBER of chains
+        // between cleanups. A burst of distinct PIDs could spike RAM in that window; this cap
+        // sheds the least-recently-touched chains on insert so a burst cannot run away.
+        private const int MaxTrackedPids = 8000;
+
         public TelemetryFusionEngine(EventGraph eventGraph)
         {
             _eventGraph = eventGraph;
@@ -26,6 +45,27 @@ namespace Sentinel.Core
         public FusedTelemetryContext FeedEvent(TelemetryEvent telemetryEvent)
         {
             var pid = telemetryEvent.ProcessId;
+
+            // Drop Sentinel's own activity before it enters any accumulator. We still return a
+            // valid (empty) context so callers that forward it to the detection engine do not
+            // NRE; it simply carries no event history and will not promote anything.
+            if (pid == SelfPid && SelfPid > 0)
+            {
+                return new FusedTelemetryContext
+                {
+                    TriggeringEvent = telemetryEvent,
+                    ProcessId = pid,
+                    ProcessName = telemetryEvent.ProcessName
+                };
+            }
+
+            // Shed excess chains on insert so a burst of distinct PIDs cannot spike RAM between
+            // the 15s cleanup passes. Only applies when adding a brand-new PID.
+            if (!_processChains.ContainsKey(pid) && _processChains.Count >= MaxTrackedPids)
+            {
+                EvictOldestChain();
+            }
+
             var chain = _processChains.GetOrAdd(pid, _ => new List<TelemetryEvent>());
 
             lock (chain)
@@ -103,6 +143,34 @@ namespace Sentinel.Core
             }
 
             return context;
+        }
+
+        // Evicts the chain whose most-recent event is oldest. Used as an insert-time safety
+        // valve when the number of tracked PIDs exceeds MaxTrackedPids, so a burst cannot
+        // outrun the periodic cleanup. O(n) over keys, but only runs at the cap boundary.
+        private void EvictOldestChain()
+        {
+            int oldestPid = 0;
+            DateTime oldest = DateTime.MaxValue;
+
+            foreach (var kvp in _processChains)
+            {
+                DateTime last;
+                lock (kvp.Value)
+                {
+                    last = kvp.Value.Count > 0 ? kvp.Value[kvp.Value.Count - 1].Timestamp : DateTime.MinValue;
+                }
+                if (last < oldest)
+                {
+                    oldest = last;
+                    oldestPid = kvp.Key;
+                }
+            }
+
+            if (oldestPid != 0)
+            {
+                _processChains.TryRemove(oldestPid, out _);
+            }
         }
 
         private void CleanupStaleChains(object? state)

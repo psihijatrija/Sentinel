@@ -137,6 +137,45 @@ namespace Sentinel.Tests
         }
 
         [Fact]
+        public void FeedEvent_SelfPid_IsExcludedFromAccumulation()
+        {
+            // Reflexive-loop guard: Sentinel's own activity must never enter the fusion
+            // accumulators, or it feeds on its own observations and spikes RAM.
+            int selfPid = System.Net48Environment.ProcessId;
+
+            for (int i = 0; i < 10; i++)
+            {
+                _engine.FeedEvent(new FileActivityTelemetry
+                {
+                    ProcessId = selfPid,
+                    ProcessName = "Sentinel.Service",
+                    FilePath = @"C:\Program Files\Sentinel\logs\events.jsonl",
+                    OperationType = "WRITE",
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+
+            var context = _engine.FeedEvent(new FileActivityTelemetry
+            {
+                ProcessId = selfPid,
+                ProcessName = "Sentinel.Service",
+                FilePath = @"C:\Program Files\Sentinel\logs\events.jsonl",
+                OperationType = "WRITE",
+                Timestamp = DateTime.UtcNow
+            });
+
+            // Context is still returned (callers forward it to detection), but it carries
+            // no accumulated history and no graph edges were created for our own file write.
+            Assert.NotNull(context);
+            Assert.Equal(selfPid, context.ProcessId);
+            Assert.Equal(0, context.EventCount60s);
+            Assert.False(context.HasFileWrites);
+
+            var edges = _eventGraph.GetProcessEdges($"PID_{selfPid}_Sentinel.Service");
+            Assert.Empty(edges);
+        }
+
+        [Fact]
         public void FeedEvent_BoundedChain_DoesNotGrowUnbounded()
         {
             // Feed 600 events (max is 500 per chain) - should not crash

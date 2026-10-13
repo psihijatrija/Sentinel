@@ -73,6 +73,24 @@ Every monitor feeds raw telemetry through the `TelemetryFusionEngine` before the
 
 The fusion layer is PASSIVE - it never blocks, kills, or modifies telemetry.
 
+**Reflexive-loop guard (ingestion self-exclusion).** `FeedEvent` drops any event whose
+`ProcessId` is Sentinel's own PID before it enters any accumulator (chain, `EventGraph`, or the
+derived context). The Service runs as SYSTEM and continuously scans other processes
+(`OpenProcess` / `ReadProcessMemory` / handle enumeration) and writes its own logs, quarantine,
+and diagnostics; without this guard that self-generated activity could be re-ingested as
+telemetry and re-scored - a self-amplifying A->B->A loop that keeps every bounded buffer saturated
+and drives per-event allocation churn. This is a RAM-growth path distinct from the three
+unbounded in-memory caches capped in 3.0.9 (`FileReputationEngine`, `FileScanIndex`,
+`HashReputationService`): those grew with the count of distinct files/hashes ever seen; this one
+grows with Sentinel observing its own observations. The `AdvancedResponseEngine` already
+self-excludes via `SelfPathGuard`, but that is a response-stage gate that runs *after*
+ingestion/accumulation; the fusion guard closes the loop at the single ingestion choke point,
+mirroring the `owningPid == myPid` filter the network scanners already use. The self-PID is cached
+once (constant for the process lifetime) rather than resolved per event on the hot path. In
+addition, `_processChains` caps the number of distinct tracked PIDs (`MaxTrackedPids`), shedding
+the least-recently-touched chain on insert so a burst of distinct PIDs cannot spike RAM between
+the periodic 15s/2min cleanup passes.
+
 ---
 
 ## Two-Process Architecture
