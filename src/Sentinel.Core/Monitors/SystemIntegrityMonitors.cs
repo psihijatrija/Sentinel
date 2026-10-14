@@ -2432,7 +2432,7 @@ namespace Sentinel.Core
                     rule.SetValue("IPSECCARestriction", "", RegistryValueKind.String); changed = true;
                 }
 
-                if (changed) { try { DnsFlushResolverCache(); } catch { } }
+                if (changed) { ReloadDnsClientPolicyAndCache(); }
                 return changed;
             }
             catch (Exception ex)
@@ -2447,6 +2447,13 @@ namespace Sentinel.Core
         // proven forum.hr path (hosts line + wildcard NRPT + DoH-off authority). IP blocks use
         // inbound/outbound Windows Firewall rules. Both gate on the always-on hardening posture.
         // 
+
+        // Domains previously enforced by Sentinel that are now retired (no longer blocked by default).
+        // On every startup, HostsFileGuard unconditionally strips the hosts lines and NRPT rule
+        // for each of these, so existing installs are cleaned up without any user action.
+        // v3.1.4: forum.hr retired (reverse shell behavioral detection covers the threat now).
+        private static readonly string[] RetiredDomainBlocks = new[] { "forum.hr" };
+        internal static string[] RetiredDomainBlocksForTest => RetiredDomainBlocks;
 
         // Track applied artifacts so we only write/log on change (idempotent self-heal) and so we
         // can tear a block down when it is later removed from the desired set (explicit unblock).
@@ -2591,40 +2598,173 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// Removes the NRPT rule for any domain we previously applied that is no longer in the
-        /// desired set (an explicit unblock).
-        /// Note: hosts-file lines are NEVER cleared/stripped - once sinkholed in hosts to 0.0.0.0,
-        /// entries remain intact so threats and malware cannot auto-allow themselves.
+        /// Removes the NRPT rule AND the hosts-file sinkhole lines for any domain we previously
+        /// applied that is no longer in the desired set (an explicit unblock), as well as any domain
+        /// in <see cref="RetiredDomainBlocks"/> (e.g. forum.hr) that is no longer desired.
+        ///
+        /// Previously, hosts lines were intentionally preserved on the theory that "threats cannot
+        /// auto-allow themselves". That logic applies to threat-driven blocks, not operator-driven
+        /// removals: when the operator explicitly unblocks a domain (or it is evicted from the
+        /// retired-seed list), the hosts entry must be cleaned up too, otherwise the domain stays
+        /// unreachable forever regardless of what the blocklist says.
         /// </summary>
         private void RemoveStaleDomainBlocks(HashSet<string> desired, string trigger)
         {
-            var stale = _appliedDomains.Where(d => !desired.Contains(d)).ToList();
+            var stale = _appliedDomains.Where(d => !desired.Contains(d)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // Also ensure any domain in RetiredDomainBlocks that is not desired is cleaned up
+            // unconditionally so existing and upgraded installs have their NRPT rule and hosts lines removed.
+            foreach (var domain in RetiredDomainBlocks)
+            {
+                if (!desired.Contains(domain))
+                    stale.Add(domain);
+            }
+
             if (stale.Count == 0) return;
 
+            var removedList = new List<string>();
             foreach (var domain in stale)
             {
-                // Delete the wildcard NRPT rule for this domain.
-                RemoveDomainNrptRule(NrptRuleGuidForDomain(domain));
+                // Delete the wildcard NRPT rule for this domain (both by GUID and by domain match).
+                bool nrptRemoved = RemoveDomainNrptRule(NrptRuleGuidForDomain(domain), domain);
+
+                // Strip the hosts-file sinkhole lines for this domain.
+                bool hostsRemoved = CleanHostsLinesForDomain(domain, trigger);
+
+                if (nrptRemoved || hostsRemoved || _appliedDomains.Contains(domain))
+                    removedList.Add(domain);
+
                 _appliedDomains.Remove(domain);
             }
 
-            _logger.LogWarning(
-                "[HostsFileGuard] Removed domain NRPT rule(s) [{Domains}] on unblock (hosts lines preserved) (trigger: {Trigger})",
-                string.Join(", ", stale), trigger);
+            if (removedList.Count > 0)
+            {
+                _logger.LogWarning(
+                    "[HostsFileGuard] Removed domain block(s) [{Domains}] — NRPT rule and hosts lines cleared (trigger: {Trigger})",
+                    string.Join(", ", removedList), trigger);
+            }
         }
 
-        /// <summary>Removes an NRPT wildcard rule by its Sentinel-owned GUID. Idempotent/best-effort.</summary>
-        private void RemoveDomainNrptRule(string ruleGuid)
+        /// <summary>Removes any hosts-file sinkhole lines for a domain (exact and www). Idempotent.</summary>
+        private bool CleanHostsLinesForDomain(string domain, string trigger)
+        {
+            try
+            {
+                if (!File.Exists(HostsFilePath)) return false;
+
+                var lines = File.ReadAllLines(HostsFilePath);
+                var hostsToRemove = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "0.0.0.0 " + domain,
+                    "0.0.0.0 www." + domain,
+                    "127.0.0.1 " + domain,
+                    "127.0.0.1 www." + domain,
+                };
+                var filtered = lines.Where(l =>
+                {
+                    var trimmed = l.Trim();
+                    if (hostsToRemove.Contains(trimmed)) return false;
+                    if (!trimmed.StartsWith("#"))
+                    {
+                        var parts = trimmed.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 2 && (parts[0] == "0.0.0.0" || parts[0] == "127.0.0.1"))
+                        {
+                            if (parts.Skip(1).Any(p =>
+                                string.Equals(p, domain, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(p, "www." + domain, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                }).ToArray();
+
+                if (filtered.Length < lines.Length)
+                {
+                    File.WriteAllLines(HostsFilePath, filtered, new UTF8Encoding(false));
+                    _lastKnownHash = ComputeFileHash(HostsFilePath);
+                    _logger.LogWarning(
+                        "[HostsFileGuard] Removed {N} hosts-file sinkhole line(s) for unblocked domain '{Domain}' (trigger: {Trigger})",
+                        lines.Length - filtered.Length, domain, trigger);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[HostsFileGuard] CleanHostsLinesForDomain error for {Domain}", domain);
+            }
+            return false;
+        }
+
+        /// <summary>Removes an NRPT wildcard rule by its Sentinel-owned GUID or domain suffix. Idempotent/best-effort.</summary>
+        internal bool RemoveDomainNrptRule(string ruleGuid, string? domain = null)
         {
             try
             {
                 using var policyRoot = Registry.LocalMachine.OpenSubKey(DnsPolicyConfigKey, true);
-                if (policyRoot == null) return;
-                if (Array.IndexOf(policyRoot.GetSubKeyNames(), ruleGuid) < 0) return;
-                policyRoot.DeleteSubKeyTree(ruleGuid, throwOnMissingSubKey: false);
-                try { DnsFlushResolverCache(); } catch { }
+                if (policyRoot == null) return false;
+                var subKeyNames = policyRoot.GetSubKeyNames();
+                bool deleted = false;
+
+                // 1. Direct GUID match (case-insensitive)
+                var matchingKey = subKeyNames.FirstOrDefault(k => string.Equals(k, ruleGuid, StringComparison.OrdinalIgnoreCase));
+                if (matchingKey != null)
+                {
+                    policyRoot.DeleteSubKeyTree(matchingKey, throwOnMissingSubKey: false);
+                    deleted = true;
+                }
+
+                // 2. Also check if any rule matches the domain name/suffix (e.g. ".forum.hr" or "forum.hr")
+                if (!string.IsNullOrWhiteSpace(domain))
+                {
+                    var dotDomain = "." + domain!.Trim().TrimStart('.');
+                    var bareDomain = domain!.Trim().TrimStart('.');
+                    foreach (var subKeyName in subKeyNames)
+                    {
+                        if (string.Equals(subKeyName, matchingKey, StringComparison.OrdinalIgnoreCase)) continue;
+                        using var sub = policyRoot.OpenSubKey(subKeyName, false);
+                        if (sub == null) continue;
+                        if (sub.GetValue("Name") is string[] names && names.Any(n =>
+                            string.Equals(n, dotDomain, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(n, bareDomain, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            policyRoot.DeleteSubKeyTree(subKeyName, throwOnMissingSubKey: false);
+                            deleted = true;
+                        }
+                    }
+                }
+
+                if (deleted)
+                {
+                    ReloadDnsClientPolicyAndCache();
+                    _logger.LogInformation("[HostsFileGuard] Removed NRPT wildcard rule for {Guid} / {Domain}", ruleGuid, domain ?? "");
+                }
+                return deleted;
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "[HostsFileGuard] RemoveDomainNrptRule error"); }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[HostsFileGuard] RemoveDomainNrptRule error");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Signals Dnscache to reload policy parameters (NRPT) via paramchange and flushes the resolver cache.
+        /// </summary>
+        private static void ReloadDnsClientPolicyAndCache()
+        {
+            try
+            {
+                using var scProc = Process.Start(new ProcessStartInfo("sc.exe", "control DnsCache paramchange")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                scProc?.WaitForExit(2000);
+            }
+            catch { }
+            try { DnsFlushResolverCache(); } catch { }
         }
 
         /// <summary>

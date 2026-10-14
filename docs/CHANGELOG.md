@@ -7,7 +7,12 @@
   from the original v2.8.7 seed, and `Load()` simply read it back on every restart. Added a
   `RetiredSeedDomains` eviction pass at the end of `Load()`: any domain in that set is removed
   from the in-memory blocklist and the cache is re-saved, so the entry is gone permanently after
-  the first service restart following this update. No user action required.
+  the first service restart following this update.
+- **`HostsFileGuard` retired domain blocks cleanup.** Added `RetiredDomainBlocks` ("forum.hr")
+  to `HostsFileGuard`: automatically removes stale NRPT wildcard rules (matching by GUID or domain)
+  and cleans hosts-file sinkhole lines on service startup and periodic checks. Also signals `Dnscache`
+  via `paramchange` and flushes DNS resolver cache so resolution is restored immediately. No user
+  action required.
 
 ### Changed
 - Version stamp 3.1.3 -> 3.1.4.

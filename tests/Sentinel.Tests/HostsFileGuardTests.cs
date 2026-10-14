@@ -255,6 +255,13 @@ namespace Sentinel.Tests
             Assert.DoesNotContain("Dnscache", HostsFileGuard.DnsPolicyConfigKeyForTest);
         }
 
+        [Fact]
+        public void RetiredDomainBlocks_ContainsForumHr()
+        {
+            // v3.1.4: forum.hr is retired; existing installs have their NRPT rule and hosts lines cleaned up.
+            Assert.Contains("forum.hr", HostsFileGuard.RetiredDomainBlocksForTest);
+        }
+
         // ---- Proactive host mutation gate (default-deny seam) --------------
 
         [Fact]
