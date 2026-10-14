@@ -57,6 +57,25 @@ namespace Sentinel.Tests
             Assert.False(svc.IsDomainBlocked("https://forum.hr/thread"));
         }
 
+        [Fact]
+        public void ForumHr_IsEvictedOnLoad_WhenPreviouslyPersisted()
+        {
+            // Simulate an existing install that has forum.hr in its persisted cache
+            // (written by a pre-v3.1.3 seed). On the next Load() it must be evicted automatically.
+            var store = new SecureCacheStore(_tempDir);
+            // Manually write forum.hr into the cache as if the old version had seeded it.
+            store.Save("blocklist-domains", "v1",
+                System.Text.Json.JsonSerializer.Serialize(new[] { "forum.hr" }));
+            store.Save("blocklist-seeded", "v1", "1"); // marker already set
+
+            var svc = new RuntimeBlocklistService(store, NullLogger<RuntimeBlocklistService>.Instance);
+            Assert.False(svc.IsDomainBlocked("forum.hr")); // must have been evicted on load
+
+            // Verify it also no longer persists — a second load must not bring it back.
+            var svc2 = new RuntimeBlocklistService(store, NullLogger<RuntimeBlocklistService>.Instance);
+            Assert.False(svc2.IsDomainBlocked("forum.hr"));
+        }
+
         // ---- Block / Unblock domains -----------------------------------------
 
         [Fact]

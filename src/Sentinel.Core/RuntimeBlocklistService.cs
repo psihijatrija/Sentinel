@@ -50,6 +50,13 @@ namespace Sentinel.Core
         // Users who want to block forum.hr can still call BlockDomain("forum.hr") explicitly.
         private static readonly string[] DefaultSeedDomains = Array.Empty<string>();
 
+        // Domains that were seeded by previous versions but should no longer be blocked.
+        // Loaded entries matching these are silently removed and the cache is re-saved,
+        // so existing installs are cleaned up without any user action.
+        // v3.1.3: forum.hr retired (behavioral reverse shell detection covers the threat now).
+        private static readonly HashSet<string> RetiredSeedDomains =
+            new(StringComparer.OrdinalIgnoreCase) { "forum.hr" };
+
         private readonly SecureCacheStore _cacheStore;
         private readonly ILogger<RuntimeBlocklistService> _logger;
 
@@ -269,6 +276,19 @@ namespace Sentinel.Core
                     _logger.LogInformation(
                         "[RuntimeBlocklist] Loaded {Domains} domain(s) and {Ips} IP(s)",
                         _domains.Count, _ips.Count);
+
+                // Evict any domain retired from the seed list (e.g. forum.hr in v3.1.3).
+                // Runs on every load so existing installs are cleaned up silently.
+                bool dirty = false;
+                foreach (var retired in RetiredSeedDomains)
+                {
+                    if (_domains.TryRemove(retired, out _))
+                    {
+                        _logger.LogInformation("[RuntimeBlocklist] Evicted retired seed domain: {Domain}", retired);
+                        dirty = true;
+                    }
+                }
+                if (dirty) Save();
             }
             catch (Exception ex)
             {

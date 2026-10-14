@@ -1,4 +1,17 @@
 # Changelog
+## [3.1.4] - 2026-10-14
+### Fixed
+- **`forum.hr` remained blocked on existing installs after v3.1.3.** The v3.1.3 change only
+  removed `forum.hr` from `DefaultSeedDomains`, preventing it from being re-seeded on fresh
+  installs. However, existing machines already had it written into `blocklist-domains.cache`
+  from the original v2.8.7 seed, and `Load()` simply read it back on every restart. Added a
+  `RetiredSeedDomains` eviction pass at the end of `Load()`: any domain in that set is removed
+  from the in-memory blocklist and the cache is re-saved, so the entry is gone permanently after
+  the first service restart following this update. No user action required.
+
+### Changed
+- Version stamp 3.1.3 -> 3.1.4.
+
 ## [3.1.3] - 2026-10-14
 ### Fixed
 - **Microsoft Store downloads broken by `CertDistrustList` containing active Microsoft roots.**
