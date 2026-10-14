@@ -42,11 +42,13 @@ namespace Sentinel.Core
         // Marker persisted once the first-run default seed has been applied, so a user who later
         // unblocks a seeded domain (e.g. forum.hr) does not get it silently re-added on restart.
 
-        // Domains blocked by default on a genuine first run (no persisted state yet). forum.hr is
-        // re-added here: it is the historical spy-pairing origin, and shipping it blocked restores
-        // the pre-removal policy without the old blind auto-cleanup. A user can still UnblockDomain
-        // it explicitly - the SeededKey marker ensures that removal survives restarts.
-        private static readonly string[] DefaultSeedDomains = new[] { "forum.hr" };
+        // Domains blocked by default on a genuine first run (no persisted state yet).
+        // v3.1.3: forum.hr removed from the default seed. The reverse shell detection layer
+        // (NetworkFacingParentShellRule, RawSocketRedirectRule) now covers the post-exploitation
+        // callback threat that justified the block. A domain block is the wrong primitive for
+        // that threat class (attacker just uses a different domain); behavioral kill is better.
+        // Users who want to block forum.hr can still call BlockDomain("forum.hr") explicitly.
+        private static readonly string[] DefaultSeedDomains = Array.Empty<string>();
 
         private readonly SecureCacheStore _cacheStore;
         private readonly ILogger<RuntimeBlocklistService> _logger;

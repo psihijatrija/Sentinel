@@ -252,11 +252,13 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void RiskyPairingOrigins_DefaultConfig_SeedsForumHrAsExampleAggravator()
+        public void RiskyPairingOrigins_DefaultConfig_IsEmptyV313()
         {
-            // forum.hr is retired as a hard block and lives on only as an example aggravator
-            // entry - behavior stays authoritative; this list never triggers action alone.
-            Assert.Contains("forum.hr", new SentinelConfig().RiskyPairingOrigins);
+            // v3.1.3: forum.hr removed from the default RiskyPairingOrigins seed.
+            // Behavioral reverse shell detection now covers the threat class.
+            // An empty array is valid; the aggravator only raises confidence when a
+            // behavioral pairing signal has already fired - it never acts alone.
+            Assert.Empty(new SentinelConfig().RiskyPairingOrigins);
         }
     }
 }

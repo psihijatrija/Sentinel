@@ -16,9 +16,20 @@ namespace Sentinel.Core
     /// Seed contents:
     ///   - StartCom Certification Authority root (distrusted by Microsoft/Mozilla/Google/Apple
     ///     since the 2016-2017 WoSign ownership scandal; must not appear in a trusted store).
-    ///   - The three roots enumerated in Registry\Certificates.reg, which that file removes
-    ///     from the Root store and pins into the Disallowed (Untrusted) store. Sentinel
-    ///     mirrors that policy: detect-on-presence, remediate-to-Disallowed.
+    ///
+    /// Removed in v3.1.3 (previously added in v3.0.4, sourced from Registry\Certificates.reg /
+    /// a local Zemana scan result):
+    ///   - Microsoft Time Stamp Root Certificate Authority 2014 (0119E81...)
+    ///   - Microsoft ECC TS Root Certificate Authority 2018 (31F9FC8...)
+    ///   - Microsoft ECC Product Root Certificate Authority 2018 (06F1AA3...)
+    ///
+    /// These three are active, CTL-vouched Microsoft roots used by Windows Update, the
+    /// Microsoft Store CDN, Authenticode time-stamping, and Windows component signing.
+    /// CertSuspicionAnalyzer.IsSuspicious() correctly returns false for them (they carry
+    /// prop 98/105), so RootStoreGuard's heuristic path would never remove them — but the
+    /// explicit distrust-list path bypasses the heuristic safety floor and does act on them,
+    /// causing RootStoreGuard to move them to Disallowed and break Store TLS on startup sweep.
+    /// They must not be on this list. The fix-up repair script is installer/repair-certs.ps1.
     ///
     /// Thumbprints are stored uppercase, hex, no separators (the format
     /// <see cref="System.Security.Cryptography.X509Certificates.X509Certificate2.Thumbprint"/>
@@ -34,12 +45,9 @@ namespace Sentinel.Core
             new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 // StartCom Certification Authority - globally distrusted CA (WoSign scandal).
+                // Distrusted by Microsoft, Mozilla, Google, and Apple since the 2016-2017 WoSign
+                // ownership and misissuance scandal. Should never appear in a trusted store.
                 ["3E2BF7F2031B96F38CE6C4D8A85D3E2D58476A0F"] = "StartCom Certification Authority (globally distrusted CA)",
-
-                // Roots enumerated in Registry\Certificates.reg (removed from Root, pinned to Disallowed).
-                ["0119E81BE9A14CD8E22F40AC118C687ECBA3F4D8"] = "Microsoft Time Stamp Root Certificate Authority 2014 (Certificates.reg distrust)",
-                ["31F9FC8BA3805986B721EA7295C65B3A44534274"] = "Microsoft ECC TS Root Certificate Authority 2018 (Certificates.reg distrust)",
-                ["06F1AA330B927B753A40E68CDF22E34BCBEF3352"] = "Microsoft ECC Product Root Certificate Authority 2018 (Certificates.reg distrust)",
             });
 
         /// <summary>All distrusted thumbprints (uppercase, no separators).</summary>

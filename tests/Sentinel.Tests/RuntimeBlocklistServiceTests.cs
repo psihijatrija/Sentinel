@@ -10,8 +10,10 @@ namespace Sentinel.Tests
     /// <summary>
     /// Tests for RuntimeBlocklistService - the shared runtime domain/IP blocklist that
     /// HostsFileGuard enforces. Verifies block/unblock, normalization, IP safety refusals,
-    /// first-run forum.hr seeding, persistence round-trip, and that an explicit unblock of a
-    /// seeded domain survives a restart (is not silently re-seeded).
+    /// persistence round-trip, and that an explicit unblock of a blocked domain survives a
+    /// restart (is not silently re-seeded).
+    ///
+    /// v3.1.3: forum.hr removed from DefaultSeedDomains. Tests updated accordingly.
     /// </summary>
     public class RuntimeBlocklistServiceTests : IDisposable
     {
@@ -36,23 +38,23 @@ namespace Sentinel.Tests
         // ---- First-run seeding ------------------------------------------------
 
         [Fact]
-        public void FirstRun_SeedsForumHrAsBlocked()
+        public void FirstRun_NoDefaultSeedDomains_EmptyBlocklist()
         {
+            // v3.1.3: DefaultSeedDomains is empty; a fresh instance has no blocked domains.
             var svc = NewService();
-            Assert.True(svc.IsDomainBlocked("forum.hr"));
-            Assert.Contains("forum.hr", svc.GetBlockedDomains());
+            Assert.False(svc.IsDomainBlocked("forum.hr"));
+            Assert.Empty(svc.GetBlockedDomains());
         }
 
         [Fact]
-        public void ForumHr_BlockCoversSubdomainsViaNormalizedApex()
+        public void ForumHr_IsNotBlockedByDefault_V313()
         {
-            // The block key is the bare apex; HostsFileGuard applies a wildcard NRPT (.forum.hr)
-            // covering all subdomains. Any subdomain input normalizes to a checkable apex form
-            // only when the caller passes the apex; here we assert the seeded apex is present and
-            // that a subdomain string normalizes to its own host (documented behavior).
+            // forum.hr was removed from the default seed in v3.1.3.
+            // Reverse shell detection (NetworkFacingParentShellRule / RawSocketRedirectRule)
+            // now covers the threat class that justified the domain block.
             var svc = NewService();
-            Assert.True(svc.IsDomainBlocked("forum.hr"));
-            Assert.True(svc.IsDomainBlocked("https://forum.hr/thread"));
+            Assert.False(svc.IsDomainBlocked("forum.hr"));
+            Assert.False(svc.IsDomainBlocked("https://forum.hr/thread"));
         }
 
         // ---- Block / Unblock domains -----------------------------------------
@@ -149,15 +151,15 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void ExplicitUnblockOfSeededDomain_SurvivesRestart_NotReSeeded()
+        public void ExplicitBlock_ThenUnblock_SurvivesRestart_NotReSeeded()
         {
-            // The whole point of the SeededKey marker: unblocking forum.hr must stick.
+            // Explicitly blocked domains that are later unblocked must not come back on restart.
             var first = NewService();
-            Assert.True(first.IsDomainBlocked("forum.hr"));
-            Assert.True(first.UnblockDomain("forum.hr"));
+            Assert.True(first.BlockDomain("example.com"));
+            Assert.True(first.UnblockDomain("example.com"));
 
             var second = NewService(); // restart
-            Assert.False(second.IsDomainBlocked("forum.hr"));
+            Assert.False(second.IsDomainBlocked("example.com"));
         }
     }
 }

@@ -278,11 +278,10 @@ namespace Sentinel.Core
         /// action or a detection on its own - it only raises confidence / lowers the chain
         /// threshold when a *behavioral* pairing signal has already fired. This deliberately
         /// avoids domain-identity trust as a verdict (an attacker controls the domain and can
-        /// move it), keeping behavior authoritative. Matched as a case-insensitive suffix so
-        /// "forum.hr" covers the apex and all subdomains. Seeded with the historical
-        /// forum.hr spy-pairing origin as an example; empty is a valid (behavior-only) config.
+        /// move it), keeping behavior authoritative. Matched as a case-insensitive suffix.
+        /// v3.1.3: forum.hr removed from the default seed; empty array is valid (behavior-only).
         /// </summary>
-        public string[] RiskyPairingOrigins { get; set; } = new[] { "forum.hr" };
+        public string[] RiskyPairingOrigins { get; set; } = Array.Empty<string>();
 
         // Dynamic polling intervals (configurable)
         public int DnsPollIntervalSeconds { get; set; } = 15;

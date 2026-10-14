@@ -1,4 +1,30 @@
 # Changelog
+## [3.1.3] - 2026-10-14
+### Fixed
+- **Microsoft Store downloads broken by `CertDistrustList` containing active Microsoft roots.**
+  Three thumbprints sourced from a local Zemana scan result (`Registry\Certificates.reg`) were
+  added to the distrust list in v3.0.4: Microsoft Time Stamp Root CA 2014
+  (`0119E81...`), Microsoft ECC TS Root CA 2018 (`31F9FC8...`), and Microsoft ECC Product Root CA
+  2018 (`06F1AA3...`). These are active, CTL-vouched Microsoft roots used by Windows Update, the
+  Microsoft Store CDN, Authenticode time-stamping, and Windows component signing.
+  `RootStoreGuard`'s autonomous startup sweep found them present in the trusted store and, because
+  the explicit distrust-list path bypasses `CertSuspicionAnalyzer`'s safety floor, moved all three
+  to the `Disallowed` store — causing every TLS connection chaining to those roots (including Store
+  downloads) to fail immediately. They have been removed from `CertDistrustList`. A one-time repair
+  script (`installer/repair-certs.ps1`) restores them from the Windows CTL and clears the
+  `Disallowed` entries; run it once from an elevated prompt if Store downloads are still broken.
+
+### Changed
+- **`forum.hr` removed from all default block lists.** Removed from `RuntimeBlocklistService.DefaultSeedDomains`
+  and `SentinelConfig.RiskyPairingOrigins`. The reverse shell detection layer added in v3.1.2
+  (`NetworkFacingParentShellRule`, `RawSocketRedirectRule`, network-layer elevation in
+  `NetworkMonitor`) now covers the post-exploitation callback threat class that justified the
+  domain block. A domain block is the wrong primitive for that threat (the attacker just uses a
+  different C2 domain); behavioral kill on the shell process is correct. Users can still call
+  `RuntimeBlocklistService.BlockDomain("forum.hr")` explicitly if desired. The underlying
+  block/unblock/NRPT mechanism is unchanged.
+- Version stamp 3.1.2 -> 3.1.3.
+
 ## [3.1.2] - 2026-10-14
 ### Added
 - **Three new reverse shell detection layers closing previously identified coverage gaps.**
