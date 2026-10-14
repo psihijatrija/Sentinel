@@ -1,4 +1,0 @@
-HEAD=
-MSG=
-BRANCH=
-TAGS=

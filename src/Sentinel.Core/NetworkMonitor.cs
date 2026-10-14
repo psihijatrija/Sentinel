@@ -45,6 +45,36 @@ namespace Sentinel.Core
             "cmd", "powershell", "pwsh", "mshta", "wscript", "cscript", "rundll32", "regsvr32", "bash", "sh"
         };
 
+        /// <summary>
+        /// Network-facing server processes that should NEVER spawn interactive shells under normal
+        /// operation. When a shell is seen with one of these as its parent AND has an outbound
+        /// connection to a non-standard port, it is elevated from the weak observe seed to a
+        /// kill-grade ReverseShell signal (single-signal, no chain required).
+        /// Kept in sync with <see cref="NetworkFacingParentShellRule.NetworkFacingParents"/>.
+        /// </summary>
+        private static readonly HashSet<string> NetworkFacingServiceParents = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "w3wp", "w3wp.exe",
+            "httpd", "httpd.exe",
+            "nginx", "nginx.exe",
+            "apache", "apache.exe", "apache2",
+            "java", "java.exe", "javaw", "javaw.exe",
+            "node", "node.exe",
+            "deno", "deno.exe",
+            "bun", "bun.exe",
+            "php", "php.exe", "php-cgi", "php-cgi.exe",
+            "python", "python.exe", "python3", "python3.exe",
+            "gunicorn", "uvicorn",
+            "ruby", "ruby.exe",
+            "sqlservr", "sqlservr.exe",
+            "mysqld", "mysqld.exe",
+            "postgres", "postgres.exe",
+            "mongod", "mongod.exe",
+            "jenkins", "jenkins.exe",
+            "redis-server", "memcached",
+            "smtpd", "named", "dovecot",
+        };
+
         private static readonly HashSet<int> StandardPorts = new() { 80, 443, 53, 8080, 8443 };
 
         /// <summary>
@@ -294,27 +324,65 @@ namespace Sentinel.Core
                         if (ShellProcesses.Contains(processName) && !StandardPorts.Contains(remotePort)
                             && ShouldEmitThrottled("ReverseShell", processName, imagePath))
                         {
-                            _ = _detectionEngine.EmitAsync(new DetectionEvent
+                            // Determine whether the shell's parent is a network-facing service
+                            // (IIS/Apache/Tomcat/Node/MSSQL/…). If so, this is almost certainly a
+                            // post-exploitation callback rather than a developer using SSH — elevate
+                            // the signal to Tier1/ReverseShell with kill authority (single-signal).
+                            // Otherwise keep it as the existing Tier2/observe seed.
+                            var (_, parentName) = _ancestryCache.GetParent(owningPid);
+                            bool isNetworkFacingParent = NetworkFacingServiceParents.Contains(parentName);
+
+                            if (isNetworkFacingParent)
                             {
-                                RuleName = "Reverse Shell: Suspicious Outbound Connection",
-                                Evidence = $"Shell process '{processName}' (PID {owningPid}) connected to non-standard remote port {remotePort} ({remoteIp}:{remotePort})",
-                                Reasoning = "A shell opened a non-HTTP(S) outbound connection. Often legitimate (ssh, scp, custom tools). " +
-                                            "Logged as an indicator; kill requires corroborating attack signals (injection, token theft, AMSI bypass, etc.).",
-                                Confidence = 0.45,
-                                Tier = DetectionTier.Tier2Indicator,
-                                AuthorizedResponse = ResponseAction.LogOnly,
-                                SignalType = SignalType.SuspiciousProcess,
-                                ProcessName = processName,
-                                ProcessId = owningPid,
-                                Metadata = new Dictionary<string, string>
+                                _ = _detectionEngine.EmitAsync(new DetectionEvent
                                 {
-                                    { "WeakObserveSeed", "true" },
-                                    { "RemoteAddress", remoteIp },
-                                    { "RemotePort", remotePort.ToString() },
-                                    { "LocalAddress", localIp },
-                                    { "LocalPort", localPort.ToString() }
-                                }
-                            });
+                                    RuleName = "Reverse Shell: Network-Facing Parent Spawned Shell",
+                                    Evidence = $"Shell process '{processName}' (PID {owningPid}) with network-facing parent '{parentName}' " +
+                                               $"connected to non-standard remote port {remotePort} ({remoteIp}:{remotePort})",
+                                    Reasoning = "A shell spawned by a network-facing service process (web server/DB/CI) " +
+                                                "opened an outbound connection to a non-standard port. This is the network-layer " +
+                                                "confirmation of an exploit-driven reverse shell callback.",
+                                    Confidence = 0.88,
+                                    Tier = DetectionTier.Tier1Behavioral,
+                                    AuthorizedResponse = ResponseAction.KillProcessTree,
+                                    SignalType = SignalType.ReverseShell,
+                                    Family = TerminalFamily.ReverseShell,
+                                    ProcessName = processName,
+                                    ProcessId = owningPid,
+                                    Metadata = new Dictionary<string, string>
+                                    {
+                                        { "RemoteAddress", remoteIp },
+                                        { "RemotePort", remotePort.ToString() },
+                                        { "LocalAddress", localIp },
+                                        { "LocalPort", localPort.ToString() },
+                                        { "ParentProcess", parentName }
+                                    }
+                                });
+                            }
+                            else
+                            {
+                                _ = _detectionEngine.EmitAsync(new DetectionEvent
+                                {
+                                    RuleName = "Reverse Shell: Suspicious Outbound Connection",
+                                    Evidence = $"Shell process '{processName}' (PID {owningPid}) connected to non-standard remote port {remotePort} ({remoteIp}:{remotePort})",
+                                    Reasoning = "A shell opened a non-HTTP(S) outbound connection. Often legitimate (ssh, scp, custom tools). " +
+                                                "Logged as an indicator; kill requires corroborating attack signals (injection, token theft, AMSI bypass, etc.).",
+                                    Confidence = 0.45,
+                                    Tier = DetectionTier.Tier2Indicator,
+                                    AuthorizedResponse = ResponseAction.LogOnly,
+                                    SignalType = SignalType.SuspiciousProcess,
+                                    ProcessName = processName,
+                                    ProcessId = owningPid,
+                                    Metadata = new Dictionary<string, string>
+                                    {
+                                        { "WeakObserveSeed", "true" },
+                                        { "RemoteAddress", remoteIp },
+                                        { "RemotePort", remotePort.ToString() },
+                                        { "LocalAddress", localIp },
+                                        { "LocalPort", localPort.ToString() }
+                                    }
+                                });
+                            }
                         }
 
                         // B. Outbound connection from temp/downloads path - observe only

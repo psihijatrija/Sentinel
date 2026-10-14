@@ -1,4 +1,43 @@
 # Changelog
+## [3.1.2] - 2026-10-14
+### Added
+- **Three new reverse shell detection layers closing previously identified coverage gaps.**
+
+  - **`NetworkFacingParentShellRule`** (`Rules.ReverseShell.cs`). Detects a shell or LOLBin (`cmd`, `powershell`, `pwsh`, `bash`, `mshta`, `wscript`, `cscript`, `rundll32`, `certutil`, `bitsadmin`, `forfiles`, …) spawned by any network-facing server process (IIS `w3wp`, Apache `httpd`, `nginx`, Tomcat/JBoss `java`/`javaw`, Node, PHP, Python/gunicorn, Ruby, MSSQL `sqlservr`, MySQL `mysqld`, Postgres, MongoDB, Jenkins, Redis, mail daemons). These processes have no legitimate reason to spawn interactive shells; a child shell is the textbook signal for exploit-driven command execution (e.g. web shell upload, SQL injection RCE, deserialization). Fires `Tier1Behavioral`, `SignalType.ReverseShell`, `Family = TerminalFamily.ReverseShell`, `KillProcessTree`; confidence 0.82 without payload markers in cmdline, 0.95 with download/encode/hidden-window markers. Registered as single-signal attack-class terminal in `ResponsePolicy.IsAttackClassTerminal`.
+
+  - **`RawSocketRedirectRule`** (`Rules.ReverseShell.cs`). Detects frameworkless reverse shells that bypass every named-pipe and port-based heuristic by routing a shell's stdin/stdout directly over a TCP socket. Five concrete patterns are covered: (1) Bash `/dev/tcp/` or `/dev/udp/` redirects; (2) Netcat/ncat `-e`/`--exec` (exec flag pipes a process over the socket); (3) ncat `-c` with a shell name; (4) Socat `exec:`/`system:` over TCP or OpenSSL; (5) PowerShell raw `TcpClient` + `StreamReader`/`StreamWriter`/`GetStream` cradle. Fires `Tier1Behavioral`, `SignalType.ReverseShell`, `Family = TerminalFamily.ReverseShell`, `KillProcessTree`, confidence 0.90. Also registered as single-signal attack-class terminal.
+
+  - **Context-aware elevation in `NetworkMonitor` check A** (`NetworkMonitor.cs`). The existing "shell outbound to non-standard port" check previously emitted a `WeakObserveSeed = true` / `LogOnly` seed for every shell regardless of context. It now resolves the shell's parent via `ProcessAncestryCache`: if the parent is a network-facing service (same set as `NetworkFacingParentShellRule`), the signal is elevated to `Tier1Behavioral / KillProcessTree / SignalType.ReverseShell / Family = TerminalFamily.ReverseShell` (confidence 0.88) — providing kill-grade network-layer confirmation when the process-creation rule fires. If the parent is not a server process, the original conservative `LogOnly` observe seed is preserved unchanged.
+
+### Changed
+- `ResponsePolicy.IsAttackClassTerminal` extended with two new single-signal kill entries: `"Reverse Shell: Network-Facing Parent Spawned Shell"` and `"Reverse Shell: Raw Socket I/O Redirect"`.
+- Version stamp 3.1.1 -> 3.1.2.
+
+## [3.0.9] - 2026-10-13
+### Added
+- **Reflexive-loop guard in `TelemetryFusionEngine` (ingestion self-exclusion).** `FeedEvent` now drops any event whose `ProcessId` is Sentinel's own PID *before* it enters any accumulator (per-PID chain, `EventGraph`, or the derived `FusedTelemetryContext`). The Service runs as SYSTEM and continuously scans other processes (`OpenProcess` / `ReadProcessMemory` / handle enumeration) and writes its own logs, quarantine, and diagnostics; without this guard that self-generated activity could be re-ingested and re-scored, a self-amplifying A->B->A loop that keeps every bounded buffer saturated and drives per-event `FusedTelemetryContext` allocation churn (the practical cause of runaway RAM, not an unbounded map). The `AdvancedResponseEngine` already self-excludes via `SelfPathGuard`, but that is a response-stage gate that runs *after* ingestion/accumulation; this closes the loop at the single ingestion choke point, mirroring the `owningPid == myPid` filter the network scanners already use. The self-PID is cached once (constant for the process lifetime) rather than resolved per event on the hot path. A dropped self-event still returns a valid empty context so callers that forward it to the detection engine do not NRE; it carries no event history and promotes nothing.
+- **Distinct-PID cap on `_processChains` (`MaxTrackedPids`, LRU shed on insert).** The per-chain FIFO (`MaxEventsPerChain`) and the 15s/2min cleanup already bound each chain and drop empties, but nothing bounded the *number* of chains between cleanup passes - a burst of distinct PIDs could spike RAM in that window. `FeedEvent` now sheds the least-recently-touched chain (`EvictOldestChain`, keyed on each chain's most-recent event timestamp) when a brand-new PID would exceed the cap, so a burst cannot outrun the periodic cleanup. Covered by new tests in `TelemetryFusionEngineTests`. The fusion layer remains PASSIVE (never blocks, kills, or mutates telemetry); this is a bounded-memory hardening only, no change to detection or response authority.
+
+### Changed
+- Version stamp 3.0.8 -> 3.0.9.
+
+## [3.0.8] - 2026-10-11
+### Added
+- **Branch-coverage tests for four security-critical Core classes (test-only; no behavior change).** Targeted the lowest-coverage, highest-risk-per-untested-branch classes identified from the measured cobertura baseline and raised each materially:
+  - **`QuarantineManager`** (18.8% line / 9.2% branch -> 44.3% / 50.0%). 15 new tests exercise the destructive quarantine/restore path that was effectively untested: full quarantine->restore round-trip recovers exact original bytes; the stored blob carries the `SENQ` vault magic and the plaintext marker is provably absent (DPAPI actually encrypts); the `MaxQuarantineFileBytes` cap refuses oversized files and leaves them on disk; a clean in-place delete does not set `WasLastQuarantineDeferred`; and every `RestoreAsync` guard throws as designed (blob outside the quarantine dir, `..` traversal destination, OS-critical destination, missing blob). Metadata parsing and `ListQuarantined` sidecar-skipping are covered. An anti-evasion invariant is now pinned both ways: an installer name in a trusted `\Downloads\` path is spared, but the same name in an arbitrary temp dir is still quarantined (name alone never self-authorizes, per `constraints.md`).
+  - **`InstallerHeuristics`** (-> 97.8% line / 93.0% branch). Added tests for the four previously-untested public allow-gates — `IsDirectXOrRuntimeRedist`, `IsPortableDownloadOrArchiveTool`, `IsOfflineImageWorkPath`, `IsBenignPortableWorkContext` — covering both the allow side and the anti-evasion deny side (e.g. a non-tool binary inside a folder named `uups` gets no blanket bypass).
+  - **`RulePackLoader` / `FragmentCorrelationRule`** (loader -> 51.6% line; rule -> 92.3% line / 77.8% branch). New fail-closed signature tests prove rejection of legacy HMAC packs, missing/invalid-base64/well-formed-but-untrusted RSA signatures, empty packs, and nonexistent files. The pure composite-correlation logic is covered: all-fragments-present fires `Tier1Behavioral` + `QuarantineAndKill` with `ChainConfirmed`, a missing fragment or below-floor signal count does not fire, matching is case-insensitive, and confidence is clamped into the `[0.85, 0.97]` band.
+  - **`IsoOriginResolver`** (-> 40.3% line / 45.0% branch). Covered the deterministic fail-closed paths of this read-only resolver: null/empty/garbage image paths and system-drive paths are not treated as mounted ISOs, invalid drive letters yield empty/null, system PIDs (<=4) resolve to null, and every well-formed drive-letter spelling returns safely without throwing.
+- Net result: full suite **2696 -> 2784 tests, all green**; `Sentinel.Core` coverage **39.69% -> 40.05% line, 37.53% -> 37.85% branch**. Build remains 0W/0E. No production code changed - this release only adds regression protection to existing behavior.
+
+### Changed
+- Version stamp 3.0.7 -> 3.0.8.
+
+## [3.0.7] - 2026-10-11
+### Changed
+- **Repository URLs updated from the old `github.com/CroatiaSecurity` org to `github.com/psihijatrija`.** Corrected the two actual GitHub URLs: the `LICENSE` copyright line (`github.com/psihijatrija/Sentinel`) and the 2.3.6 changelog porting link (`github.com/psihijatrija/GorstaksProtection`). Non-URL `CroatiaSecurity/C datasets` references (ML trainer docs) and the compiled Worker HMAC shared-secret constant in `Models.cs` (which must byte-match the Worker env `SENTINEL_SHARED_SECRET` per FR-11) are intentionally left unchanged.
+- Version stamp 3.0.6 -> 3.0.7.
+
 ## [3.0.6] - 2026-10-11
 ### Added
 - **Agent dashboard now runs on Edge/Chromium (WebView2) with graceful fallback.** `AgentDashboardForm` prefers the `Microsoft.Web.WebView2` control (modern CSS grid/flexbox/JS, no IE11 quirks) instead of the legacy WinForms `WebBrowser` with its `FEATURE_BROWSER_EMULATION` IE11 shim. WebView2 is initialized without `await` on the Agent STA thread (NFR-6) via the `CoreWebView2InitializationCompleted` event; the per-user browser profile lives under `%LocalAppData%\Sentinel\WebView2` (the install dir may be read-only for the interactive user). The embedded host is locked down: DevTools off, default context menus off, accelerator keys off, `NewWindowRequested` suppressed. **Graceful degradation (NFR-2):** if the Edge WebView2 Runtime is missing, the managed assemblies can't construct the control, or init otherwise fails, the form falls back to the legacy `WebBrowser` so Settings always renders instead of crashing. The installer publishes the Agent for the `win-x64` RID (framework-dependent) so the correct-bitness `WebView2Loader.dll` (verified x64, `Machine=0x8664`) lands at the publish root — a no-RID publish dropped the x86 loader and WebView2 would have silently fallen back forever.
@@ -2319,7 +2358,7 @@ AV false positive elimination: sensitive Win32/NT APIs moved out of the PE impor
 
 ## [2.3.6] - 2026-09-01
 
-Detection quality improvements ported from [GorstaksProtection](https://github.com/CroatiaSecurity/GorstaksProtection): sliding-window ransomware rules, full-path parent verification, ThreatFox live IOC feed, and a mandatory pre-action audit log.
+Detection quality improvements ported from [GorstaksProtection](https://github.com/psihijatrija/GorstaksProtection): sliding-window ransomware rules, full-path parent verification, ThreatFox live IOC feed, and a mandatory pre-action audit log.
 
 ### Fixed
 

@@ -713,7 +713,14 @@ namespace Sentinel.Core
                 || r.IndexOf("ETW/Event Log Manipulation", StringComparison.OrdinalIgnoreCase) >= 0
                 || r.Equals("ThreatIntelInjectionRule", StringComparison.OrdinalIgnoreCase)
                 || r.IndexOf("Remote Memory Injection", StringComparison.OrdinalIgnoreCase) >= 0
-                || r.IndexOf("ALLOCVM_REMOTE", StringComparison.OrdinalIgnoreCase) >= 0;
+                || r.IndexOf("ALLOCVM_REMOTE", StringComparison.OrdinalIgnoreCase) >= 0
+                // Reverse shell rules that are unambiguously attack-class:
+                // A network-facing service process (IIS/Apache/Tomcat/Node/MSSQL/etc.) spawning a
+                // shell is essentially never legitimate — single-signal kill is warranted.
+                || r.IndexOf("Reverse Shell: Network-Facing Parent Spawned Shell", StringComparison.OrdinalIgnoreCase) >= 0
+                // Raw socket redirection (bash /dev/tcp, netcat -e, socat exec, PS TcpClient cradle)
+                // bypasses framework pipe/port heuristics — single-signal kill warranted.
+                || r.IndexOf("Reverse Shell: Raw Socket I/O Redirect", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static bool IsNukeComposite(DetectionEvent detection)
