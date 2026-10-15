@@ -1,5 +1,9 @@
 # Changelog
-## [3.1.5] - 2026-10-15
+## [3.1.6] - 2026-10-15
+### Changed
+- Removed `Rules.DefenseTamper.cs` stub (tombstone comment file left over from v3.1.5 decision to drop the anti-tamper rule). No functional change.
+- Version stamp 3.1.5 → 3.1.6.
+
 ### Fixed
 - **Ransomware detections were silently demoted to Tier2 (LogOnly).** `RansomwareDetectionRule`
   emitted `SignalType.Ransomware` at `Tier1Behavioral`, but `ResponsePolicy.ClassifyTerminalOutcome`
