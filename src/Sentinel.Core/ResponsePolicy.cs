@@ -174,6 +174,35 @@ namespace Sentinel.Core
                 "WMI-Activity: Permanent",
                 "WMI Persistence + Policy Rewrite",
             }),
+            // v3.1.5: Ransomware - shadow copy deletion, wbadmin, mass encryption
+            ("Ransomware", new[]
+            {
+                "Ransomware",
+                "Shadow Copy Deletion",
+                "delete shadows",
+                "shadowcopy delete",
+                "wbadmin delete",
+                "bcdedit /set",
+                "bcdedit.exe /set",
+                "recover off",
+                "Mass-Encryption Chain",
+                "Active Mass-Encryption",
+                "RansomwareDetectionRule",
+                "SlidingWindowRansomware",
+                "SlidingWindowMassDeletion",
+                "Wiper I/O",
+                "wipeout",
+            }),
+            // v3.1.5: Raw disk access / MBR sector wiper
+            ("RawDiskAccess", new[]
+            {
+                "Raw Disk Access",
+                "Direct Physical Device I/O",
+                "PhysicalDrive",
+                "MBR Wiper",
+                "Sector Wiper",
+                "RawDiskAccess",
+            }),
         };
 
         /// <summary>
@@ -545,6 +574,9 @@ namespace Sentinel.Core
                     return TerminalFamily.ReverseShell.ToCanonicalString();
                 case SignalType.NetworkC2:
                     return TerminalFamily.C2Beacon.ToCanonicalString();
+                // v3.1.5: Ransomware signal is authoritative - no substring scan needed
+                case SignalType.Ransomware:
+                    return TerminalFamily.Ransomware.ToCanonicalString();
             }
 
             var haystack = string.Join(" ",

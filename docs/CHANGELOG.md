@@ -1,5 +1,46 @@
 # Changelog
-## [3.1.4] - 2026-10-14
+## [3.1.5] - 2026-10-15
+### Fixed
+- **Ransomware detections were silently demoted to Tier2 (LogOnly).** `RansomwareDetectionRule`
+  emitted `SignalType.Ransomware` at `Tier1Behavioral`, but `ResponsePolicy.ClassifyTerminalOutcome`
+  had no case for `SignalType.Ransomware` and no matching fragment in `TerminalOutcomes`. The signal
+  fell through to `NonKillGrade` and was unconditionally downgraded to `Tier2 / LogOnly` by
+  `ApplyTierLaw`. A fast locker (LockBit, BlackCat, Ryuk) deleting shadow copies would be logged
+  but not killed. Fixed by:
+  - Adding `TerminalFamily.Ransomware` to the enum and `KillGrade` set in `TerminalFamily.cs`.
+  - Adding a `SignalType.Ransomware` case to the `ClassifyTerminalOutcome` switch (authoritative,
+    no substring scan required).
+  - Adding a `"Ransomware"` entry to `TerminalOutcomes` covering vssadmin / wmic / wbadmin /
+    bcdedit patterns so composite/rule-name-based paths also classify correctly.
+  - All detections in `RansomwareDetectionRule` now declare `Family = TerminalFamily.Ransomware`.
+
+- **Ransomware pre-encryption pattern coverage expanded.** `Rules.Ransomware.cs` previously only
+  detected `vssadmin delete shadows` and three file extensions. Expanded to cover the full
+  pre-encryption playbook used by LockBit, BlackCat, Ryuk, Hive, Conti, WannaCry, etc.:
+  - Shadow copy deletion: `vssadmin delete shadows`, `wmic shadowcopy delete`, `wbadmin delete
+    catalog`, `wbadmin delete systemstatebackup`.
+  - Boot recovery disable: `bcdedit /set recoveryenabled no`, `bcdedit /set safeboot`.
+  - ~60 named ransomware file extensions (`.lockbit`, `.ryuk`, `.hive`, `.blackcat`, `.clop`,
+    `.revil`, `.conti`, `.maze`, `.wannacry`, `.darkside`, `.egregor`, `.phobos`, `.stop`, etc.)
+    plus generic locker suffixes.
+  - Ransom note creation detection (README, DECRYPT, HOW_TO_DECRYPT, HOW_TO_RESTORE, … prefixes).
+
+- **Raw disk access detections were silently demoted to Tier2 (LogOnly).** `RawDiskAccessMonitor`
+  emitted unsigned PhysicalDrive handle holders with `Tier1Behavioral / KillProcessTree` but
+  `SignalType = SuspiciousProcess` — which is not in `KillGradeTerminalFamilies`. `ApplyTierLaw`
+  demoted the event to `Tier2 / LogOnly`, letting a wiper process (HermeticWiper, CaddyWiper,
+  WhisperGate) continue overwriting MBR/sectors. Fixed by declaring
+  `Family = TerminalFamily.RawDiskAccess` on kill-grade events (confidence ≥ 0.85), making
+  `ClassifyTerminalFamily` authoritative without substring scanning. Volume-root-only handles
+  (trusted backup tools, signed binaries) remain Tier2 / LogOnly unchanged.
+  Added `"RawDiskAccess"` entry to `TerminalOutcomes` for composite/rule-name path consistency.
+
+### Changed
+- `TerminalFamily.cs`: added `Ransomware` and `RawDiskAccess` families; both are `KillGrade`.
+- `ResponsePolicy.cs`: added `Ransomware` and `RawDiskAccess` `TerminalOutcomes` blocks;
+  wired `SignalType.Ransomware` in `ClassifyTerminalOutcome` switch.
+- Version stamp 3.1.4 → 3.1.5.
+
 ### Fixed
 - **`forum.hr` remained blocked on existing installs after v3.1.3.** The v3.1.3 change only
   removed `forum.hr` from `DefaultSeedDomains`, preventing it from being re-seeded on fresh

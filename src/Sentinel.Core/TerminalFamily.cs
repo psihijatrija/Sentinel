@@ -45,6 +45,18 @@ namespace Sentinel.Core
 
         /// <summary>Executable WMI persistence / policy rewrite. Kill-grade.</summary>
         WmiPersistence,
+
+        /// <summary>
+        /// Ransomware: shadow copy / backup deletion, mass file encryption, wiper I/O.
+        /// Kill-grade - act before files are encrypted. v3.1.5.
+        /// </summary>
+        Ransomware,
+
+        /// <summary>
+        /// Raw disk access / MBR-sector wiper by an unsigned non-Windows process.
+        /// Kill-grade - sector overwrite is irreversible. v3.1.5.
+        /// </summary>
+        RawDiskAccess,
     }
 
     /// <summary>
@@ -68,6 +80,9 @@ namespace Sentinel.Core
                 [TerminalFamily.Evasion] = "Evasion",
                 [TerminalFamily.Injection] = "Injection",
                 [TerminalFamily.WmiPersistence] = "WmiPersistence",
+                // v3.1.5
+                [TerminalFamily.Ransomware] = "Ransomware",
+                [TerminalFamily.RawDiskAccess] = "RawDiskAccess",
             };
 
         // Families that, at sufficient confidence + chain confirmation, may authorize a kill.
@@ -81,6 +96,9 @@ namespace Sentinel.Core
             TerminalFamily.WmiPersistence,
             TerminalFamily.Evasion,
             TerminalFamily.Injection,
+            // v3.1.5: ransomware and wiper are solo kill-grade
+            TerminalFamily.Ransomware,
+            TerminalFamily.RawDiskAccess,
         };
 
         /// <summary>Canonical string name for a family (e.g. "C2Beacon").</summary>

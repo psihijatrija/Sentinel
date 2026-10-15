@@ -209,6 +209,9 @@ namespace Sentinel.Core
                             await _detectionEngine.EmitAsync(new DetectionEvent
                             {
                                 RuleName = "Raw Disk Access: Direct Physical Device I/O",
+                                // v3.1.5: declare typed family so ApplyTierLaw keeps Tier1 without
+                                // relying on RuleName substring matching in ClassifyTerminalOutcome.
+                                Family = (confidence >= 0.85) ? TerminalFamily.RawDiskAccess : (TerminalFamily?)null,
                                 Evidence = $"Process '{procName}' (PID {proc.Id}, Path: {imagePath}) " +
                                            $"has open handle to raw device: {devicePath}" +
                                            (isVolumeRootOnly ? " [volume root - LogOnly]" : ""),
@@ -232,6 +235,7 @@ namespace Sentinel.Core
                                     ["InWindowsDirectory"] = inWindows.ToString()
                                 }
                             });
+
                         }
                     }
                     catch { }
