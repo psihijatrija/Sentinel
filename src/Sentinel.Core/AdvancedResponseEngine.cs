@@ -260,7 +260,7 @@ namespace Sentinel.Core
                    r.Contains("Data Exfiltration: Cloud Sync");
         }
 
-        public async Task HandleAsync(DetectionEvent detection)
+        public async Task HandleAsync(DetectionEvent detection, Action<ResponseEvent>? observeResponse = null)
         {
             var stopwatch = Stopwatch.StartNew();
 
@@ -311,7 +311,7 @@ namespace Sentinel.Core
                                 Reason = reason,
                                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                             };
-                            await _eventLogger.LogEventAsync("response", selfLog);
+                            await RecordResponseAsync(selfLog, observeResponse);
                             return;
                         }
                     }
@@ -365,7 +365,7 @@ namespace Sentinel.Core
                     Reason = reason,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", ideLog);
+                await RecordResponseAsync(ideLog, observeResponse);
                 return;
             }
 
@@ -386,7 +386,7 @@ namespace Sentinel.Core
                     Reason = reason,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", gameLog);
+                await RecordResponseAsync(gameLog, observeResponse);
                 return;
             }
 
@@ -654,6 +654,44 @@ namespace Sentinel.Core
                 shouldIsolateNetwork = true;
             }
 
+            // Historical evidence must not target a newer process reusing the same PID.
+            // Query failures are uncertainty, never permission to kill a replacement process.
+            bool processAction = shouldKill || shouldQuarantineAndKill || shouldContainDocker || shouldContainVm;
+            int identityPid = detection.ProcessId;
+            if (shouldRemoveCertAndKillAdder && detection.Metadata != null &&
+                detection.Metadata.TryGetValue("AdderProcessId", out var adderIdentity))
+            {
+                processAction = true;
+                int.TryParse(adderIdentity, out identityPid);
+            }
+            if (processAction)
+            {
+                bool generationMatches = false;
+                try
+                {
+                    if (identityPid > 4)
+                    {
+                        using var process = Process.GetProcessById(identityPid);
+                        generationMatches = ProcessIdentitySafety.EvidenceCanReferToGeneration(
+                            detection.Timestamp, process.StartTime.ToUniversalTime(), DateTime.UtcNow);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await _eventLogger.LogEventAsync("response_identity_unavailable", new
+                    { ProcessId = identityPid, Reason = ex.GetType().Name }).ConfigureAwait(false);
+                }
+                if (!generationMatches)
+                {
+                    await RecordResponseAsync(new ResponseEvent
+                    {
+                        ProcessId = detection.ProcessId, ProcessName = detection.ProcessName,
+                        ActionTaken = "LOG", Reason = "Process generation could not be matched to the evidence; host action refused"
+                    }, observeResponse).ConfigureAwait(false);
+                    return;
+                }
+            }
+
             // MANDATORY pre-action audit (constraints: the tamper-resistant audit trail MUST be
             // written BEFORE any kill/block/quarantine/isolate/cert-removal fires). All should*
             // flags are finalized above; a destructive branch runs immediately below. Writing here
@@ -702,14 +740,14 @@ namespace Sentinel.Core
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
 
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await RecordResponseAsync(new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
                         ActionTaken = "LOG",
                         Reason = $"Triggered by rule: {detection.RuleName}. Cert removal skipped - not MITM-related. CertThumbprint={certThumb}",
                         ExecutionTimeMs = stopwatch.ElapsedMilliseconds
-                    });
+                    }, observeResponse);
                     return;
                 }
 
@@ -732,7 +770,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. CertThumbprint={certThumb}. AdderPID={adderPidStr}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
             }
             else if (shouldRemoveCert)
             {
@@ -759,7 +797,7 @@ namespace Sentinel.Core
                         : $"Triggered by rule: {detection.RuleName}. Cert removal skipped - not MITM-related. CertThumbprint={certThumb}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
             }
             else if (shouldQuarantineAndKill)
             {
@@ -769,14 +807,14 @@ namespace Sentinel.Core
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await RecordResponseAsync(new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
                         ActionTaken = "LOG",
                         Reason = $"Triggered by rule: {detection.RuleName}. QuarantineAndKill rate-limited (MaxKillsPerMinute).",
                         ExecutionTimeMs = stopwatch.ElapsedMilliseconds
-                    });
+                    }, observeResponse);
                     return;
                 }
 
@@ -836,7 +874,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Quarantined={quarantinedInfo}. InjectorQuarantined={injectorQuarantined}. TargetPID={targetPid}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
                 NotifyReinfectionCorrelator(detection);
             }
@@ -859,11 +897,11 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = "VPN_SHIELD",
+                    ActionTaken = _vpnShieldEngine != null ? "VPN_SHIELD" : "LOG",
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", shieldLog);
+                await RecordResponseAsync(shieldLog, observeResponse);
                 TryWriteWindowsEventLog(detection, shieldLog.ActionTaken, shieldLog.Reason);
             }
             else if (shouldIsolateNetwork)
@@ -873,14 +911,14 @@ namespace Sentinel.Core
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await RecordResponseAsync(new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
                         ActionTaken = "LOG",
                         Reason = $"Triggered by rule: {detection.RuleName}. NetworkIsolate rate-limited (MaxNetworkIsolatesPerMinute).",
                         ExecutionTimeMs = stopwatch.ElapsedMilliseconds
-                    });
+                    }, observeResponse);
                     return;
                 }
 
@@ -922,7 +960,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Target={targetIp}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
             }
             else if (shouldRemoveRegistryEntry)
@@ -1000,7 +1038,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. {removalLog}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
             }
             else if (shouldKill && detection.ProcessId > 4)
@@ -1033,14 +1071,14 @@ namespace Sentinel.Core
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await RecordResponseAsync(new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
                         ActionTaken = "LOG",
                         Reason = $"Triggered by rule: {detection.RuleName}. Kill rate-limited (MaxKillsPerMinute).",
                         ExecutionTimeMs = stopwatch.ElapsedMilliseconds
-                    });
+                    }, observeResponse);
                     return;
                 }
 
@@ -1080,7 +1118,7 @@ namespace Sentinel.Core
                     Reason = reasonText,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
                 NotifyReinfectionCorrelator(detection);
             }
@@ -1091,7 +1129,7 @@ namespace Sentinel.Core
                 // dismount the image, and delete the backing .iso. Delegated to the (now wired)
                 // IsolationResponseEngine so the injection-safe Dismount-DiskImage path is reused.
                 // Rate-limited on the same kill budget as any other kill (chain-confirmed bypasses).
-                await HandleIsoDismountAsync(detection, reason, chainAuthorized, stopwatch);
+                await HandleIsoDismountAsync(detection, reason, chainAuthorized, stopwatch, observeResponse);
                 NotifyReinfectionCorrelator(detection);
             }
             else
@@ -1106,7 +1144,7 @@ namespace Sentinel.Core
                     Reason = reason,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await RecordResponseAsync(responseLog, observeResponse);
                 // LogOnly never writes Windows Event Log (CriticalOnly trail)
             }
         }
@@ -1119,20 +1157,20 @@ namespace Sentinel.Core
         /// A missing IsolationResponseEngine (e.g. Agent-side) also degrades to kill-only.
         /// </summary>
         private async Task HandleIsoDismountAsync(
-            DetectionEvent detection, string reason, bool chainAuthorized, Stopwatch stopwatch)
+            DetectionEvent detection, string reason, bool chainAuthorized, Stopwatch stopwatch, Action<ResponseEvent>? observeResponse)
         {
             if (!TryConsumeKillBudget(chainAuthorized))
             {
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                await _eventLogger.LogEventAsync("response", new ResponseEvent
+                await RecordResponseAsync(new ResponseEvent
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
                     ActionTaken = "LOG",
                     Reason = $"Triggered by rule: {detection.RuleName}. DismountVolume rate-limited (MaxKillsPerMinute).",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
-                });
+                }, observeResponse);
                 return;
             }
 
@@ -1174,8 +1212,18 @@ namespace Sentinel.Core
                 Reason = $"Triggered by rule: {detection.RuleName}. {reason}",
                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
             };
-            await _eventLogger.LogEventAsync("response", responseLog);
+            await RecordResponseAsync(responseLog, observeResponse);
             TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
+        }
+
+        private async Task RecordResponseAsync(ResponseEvent response, Action<ResponseEvent>? observer)
+        {
+            response.Outcome = response.ActionTaken.StartsWith("LOG", StringComparison.OrdinalIgnoreCase)
+                ? ResponseExecutionOutcome.Observed
+                : response.ActionTaken.IndexOf("FAILED", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? ResponseExecutionOutcome.Failed : ResponseExecutionOutcome.Attempted;
+            await _eventLogger.LogEventAsync("response", response).ConfigureAwait(false);
+            observer?.Invoke(response);
         }
 
         private void NotifyReinfectionCorrelator(DetectionEvent detection)

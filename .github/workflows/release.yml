@@ -119,6 +119,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Diagnostic replay failed" }
           $report = Get-Content "$dir/replay.json" -Raw | ConvertFrom-Json
           if ($report.InputCount -ne 2 -or $report.Composites.Count -ne 1 -or $report.Composites[0].AuthorizedResponse -ne 'LogOnly') { throw "Unexpected replay outcome" }
+          & $diag replay-behavioral "$dir/events.jsonl" "$dir/config.json" | Set-Content "$dir/behavioral.json"
+          if ($LASTEXITCODE -ne 0) { throw "Behavioral replay failed" }
+          & $diag benchmark-replay "$dir/events.jsonl" 3 | Set-Content "$dir/benchmark.json"
+          if ($LASTEXITCODE -ne 0) { throw "Replay benchmark failed" }
+          $benchmark = Get-Content "$dir/benchmark.json" -Raw | ConvertFrom-Json
+          if ($benchmark.Iterations -ne 3 -or $benchmark.EventsPerIteration -ne 2) { throw "Invalid replay benchmark" }
+          & $diag export-private "$dir/events.jsonl" "$dir/private.zip"
+          if ($LASTEXITCODE -ne 0) { throw "Private export failed" }
+          Expand-Archive "$dir/private.zip" "$dir/private"
+          $private = Get-Content "$dir/private/redacted_events.json" -Raw | ConvertFrom-Json
+          if (!$private.RelativeTime -or ([datetime]$private.Events[0].Timestamp).Year -ne 2000) { throw "Absolute dates leaked into private export" }
           & $diag preview-export "$dir/events.jsonl"
           if ($LASTEXITCODE -ne 0) { throw "Export preview failed" }
           & $diag export "$dir/events.jsonl" "$dir/investigation.zip"

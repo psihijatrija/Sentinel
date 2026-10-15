@@ -37,8 +37,9 @@ namespace Sentinel.Core
     ///
     /// v1.5.0: Addresses critical gap - EDRSilencer is open-source and trivial to deploy.
     /// </summary>
-    public sealed class WfpIntegrityMonitor : BackgroundService
+    public sealed class WfpIntegrityMonitor : BackgroundService, ISensorProgressSource
     {
+        public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(2));
         private readonly DetectionEngine _detectionEngine;
         private readonly ILogger<WfpIntegrityMonitor> _logger;
 
@@ -104,6 +105,7 @@ namespace Sentinel.Core
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
+                    Progress.Failed(ex.GetType().Name);
                     _logger.LogDebug(ex, "[WfpIntegrityMonitor] Error in scan cycle");
                 }
 
@@ -121,7 +123,7 @@ namespace Sentinel.Core
                 // Run netsh wfp show filters to export all active WFP filters
                 var psi = new ProcessStartInfo
                 {
-                    FileName = "netsh",
+                    FileName = Path.Combine(Environment.SystemDirectory, "netsh.exe"),
                     Arguments = $"wfp show filters file=\"{tempFile}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -130,7 +132,10 @@ namespace Sentinel.Core
                 };
 
                 using var process = Process.Start(psi);
-                if (process == null) return;
+                if (process == null) throw new IOException("WFP collector did not start.");
+                // Drain both pipes immediately so diagnostic output cannot deadlock the child.
+                var standardOutput = process.StandardOutput.ReadToEndAsync();
+                var standardError = process.StandardError.ReadToEndAsync();
 
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(15000);
@@ -138,27 +143,50 @@ namespace Sentinel.Core
                 try { await process.WaitForExitAsync(cts.Token); }
                 catch (OperationCanceledException)
                 {
-                    try { process.Kill(); } catch { }
-                    return;
+                    try { process.Kill(); }
+                    catch (Exception ex) { _logger.LogDebug(ex, "[WfpIntegrityMonitor] Collector termination failed"); }
+                    ct.ThrowIfCancellationRequested();
+                    throw new TimeoutException("WFP collection exceeded 15 seconds.");
                 }
 
-                if (!File.Exists(tempFile)) return;
+                await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
+                if (process.ExitCode != 0) throw new IOException("WFP collector exited with code " + process.ExitCode);
+                if (!File.Exists(tempFile)) throw new IOException("WFP collector produced no snapshot.");
 
                 // Read and parse the XML output
                 string content;
                 using (var fs = new FileStream(tempFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (var reader = new StreamReader(fs, Encoding.UTF8))
                 {
+                    if (fs.Length > 8 * 1024 * 1024) throw new InvalidDataException("WFP snapshot exceeds 8 MiB.");
                     content = await reader.ReadToEndAsync();
                 }
 
+                ValidateSnapshot(content);
                 await AnalyzeWfpFiltersAsync(content, ct);
+                Progress.Succeeded();
             }
             finally
             {
                 // Always clean up temp file
-                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+                try { if (File.Exists(tempFile)) File.Delete(tempFile); }
+                catch (Exception ex) { _logger.LogDebug(ex, "[WfpIntegrityMonitor] Snapshot cleanup failed"); }
             }
+        }
+
+        internal static void ValidateSnapshot(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content)) throw new InvalidDataException("Empty WFP snapshot.");
+            var settings = new System.Xml.XmlReaderSettings
+            {
+                DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null,
+                MaxCharactersInDocument = 8 * 1024 * 1024
+            };
+            using var text = new StringReader(content);
+            using var reader = System.Xml.XmlReader.Create(text, settings);
+            bool element = false;
+            while (reader.Read()) element |= reader.NodeType == System.Xml.XmlNodeType.Element;
+            if (!element) throw new InvalidDataException("WFP snapshot has no document element.");
         }
 
         private async Task AnalyzeWfpFiltersAsync(string filterXml, CancellationToken ct)
@@ -346,7 +374,7 @@ namespace Sentinel.Core
                 // handled by the targeted removal path; the operator recommendation is logged below.
                 var psi = new ProcessStartInfo
                 {
-                    FileName = "netsh",
+                    FileName = Path.Combine(Environment.SystemDirectory, "netsh.exe"),
                     Arguments = "wfp set options netevents = on",
                     UseShellExecute = false,
                     CreateNoWindow = true,

@@ -1,4 +1,17 @@
 # Changelog
+## [3.1.8] - 2026-10-15
+
+- Preserve bounded incident history and pending response evaluations across service restarts without restoring stale PID/action authority. Retain corrupt state and expose persistence degradation.
+- Report observed, attempted and confirmed response outcomes separately. A LogOnly decision no longer masquerades as an executed response or suppresses a later action. Replace unsafe PID-lock pruning with bounded lock stripes.
+- Refuse process actions when current PID creation time is newer than the evidence or cannot be checked. The remaining termination-helper race is documented rather than claimed solved.
+- Add historical behavioral replay alongside weighted replay, semantic output comparison, private exports without absolute dates, and an offline replay benchmark.
+- Add root-store/WFP collection-progress reporting, bounded validated WFP inventories, bounded IPC requests and a connection deadline. Retain unreadable host observation baselines.
+- Validate restore journals and reject network/device/link/alternate-stream destinations before read-back or restoration.
+- Publish optional periodic audit checkpoints independently of incident packs. Minimize evidence payloads before transmission and expose confirmed storage receipts in diagnostics.
+- Require a private deployment credential for all Worker `/report/*` mutations. Set Worker `SENTINEL_REPORT_SHARED_SECRET` and matching encrypted client `ReportingProxySharedSecret`; evidence storage also requires an `EVIDENCE_STORE` KV binding. Public compatibility credentials remain lookup-only. Local detection/evidence continue without remote configuration.
+- Fix actual DropOldest eviction accounting in the enrichment bus. Pin runtime model bytes, isolate model initialization failures, and make future training reports describe the exact saved held-out-evaluated model. Existing models were not retrained.
+- Add a scoped adversarial review with fixed findings and remaining risks. Consolidate regular tests/coverage into one run; version-changing pushes use the single Windows release validation gate before packaging.
+
 ## [3.1.7] - 2026-10-15
 ### Added
 - Windows/.NET Framework 4.8 diagnostic CLI for historical weighted-correlation replay,

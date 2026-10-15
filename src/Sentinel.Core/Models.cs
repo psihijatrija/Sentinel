@@ -502,6 +502,9 @@ namespace Sentinel.Core
         public string? AbuseIpDbApiKey { get; set; }
         public string? UrlhausAuthToken { get; set; }
         public string? MalwareBazaarApiKey { get; set; }
+        /// <summary>Deployment-only reporting credential, loaded from the admin-protected
+        /// encrypted store. Never defaults to the public compatibility proxy credential.</summary>
+        public string? ReportingProxySharedSecret { get; set; }
         public bool ReportToMalwareBazaar { get; set; } = true;
         public bool ReportToUrlhaus { get; set; } = true;
 
@@ -514,7 +517,8 @@ namespace Sentinel.Core
         public string? ProxyEndpoint { get; set; } = "https://sentinel-threat-proxy.znastidobrostoje-6ee.workers.dev";
 
         /// <summary>
-        /// HMAC key for the threat-proxy Worker. Compiled into the binary.
+        /// Public compatibility HMAC for Worker lookups. Compiled into the binary;
+        /// it cannot establish private origin or authorize mutating /report/* routes.
         /// Must match Worker env SENTINEL_SHARED_SECRET. Split concat so a PE
         /// dump is not one line. Admin --set-config can rotate via DPAPI
         /// config.enc (length >= 16). Short plants are ignored.
@@ -684,11 +688,14 @@ namespace Sentinel.Core
         public bool KillAuthorized => AuthorizedResponse >= ResponseAction.KillProcess;
     }
 
+    public enum ResponseExecutionOutcome { Observed, Attempted, Confirmed, Failed }
+
     public class ResponseEvent
     {
         public int ProcessId { get; set; }
         public string ProcessName { get; set; } = string.Empty;
         public string ActionTaken { get; set; } = string.Empty;
+        public ResponseExecutionOutcome Outcome { get; set; } = ResponseExecutionOutcome.Observed;
         public string Reason { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
         public double ExecutionTimeMs { get; set; }

@@ -285,6 +285,7 @@ namespace Sentinel.Core
         private readonly JsonlEventLogger? _eventLogger;
         private readonly DetectionEngine? _detectionEngine;
         private readonly UnifiedEtwSession? _etw;
+        private readonly ThreatReportService? _threatReports;
         private byte[] _token = Array.Empty<byte>();
 
         // v2.0.4 CRIT-1: Server-side nonce tracking to prevent replay attacks within the 60s window.
@@ -304,7 +305,7 @@ namespace Sentinel.Core
             ILogger<ServiceAgentIpcHost> logger,
             MonitorRegistry? registry = null,
             CertRemediator? certRemediator = null,
-            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null)
+            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null, ThreatReportService? threatReports = null)
         {
             _metrics = metrics;
             _weighted = weighted;
@@ -315,6 +316,7 @@ namespace Sentinel.Core
             _eventLogger = eventLogger;
             _detectionEngine = detectionEngine;
             _etw = etw;
+            _threatReports = threatReports;
             _certRemediator = certRemediator;
         }
 
@@ -381,11 +383,16 @@ namespace Sentinel.Core
 
         private async Task HandleClientAsync(NamedPipeServerStream pipe, CancellationToken ct)
         {
+            using var session = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            session.CancelAfter(TimeSpan.FromSeconds(5));
+            // Framework pipe reads/writes do not all expose cancellable overloads.
+            // Closing this connection bounds both slow reads and blocked response writes.
+            using var closeOnTimeout = session.Token.Register(() => pipe.Dispose());
             using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
 
             // One request per connection (simple + avoids session fixation).
-            var line = await reader.ReadLineAsync().ConfigureAwait(false);
+            var line = await ReadBoundedRequestAsync(reader, session.Token).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(line))
             {
                 await writer.WriteLineAsync("{\"ok\":false,\"error\":\"empty\"}").ConfigureAwait(false);
@@ -444,6 +451,7 @@ namespace Sentinel.Core
                         snap.Pipeline = _detectionEngine?.GetTelemetryHealth() ?? new TelemetryPipelineSnapshot();
             snap.Etw = _etw?.LastHealthSnapshot ?? new EtwHealthSnapshot();
                         snap.AuditIntegrityDegraded = _eventLogger?.AuditIntegrityDegraded ?? true;
+                        snap.EvidenceAnchoring = _threatReports?.AnchorStatus ?? new EvidenceAnchorStatus("Unknown");
                         if (_registry != null)
                         {
                             var st = _registry.GetStats();
@@ -518,6 +526,21 @@ namespace Sentinel.Core
             {
                 _logger.LogDebug(ex, "[IPC] Bad request");
                 await writer.WriteLineAsync("{\"ok\":false,\"error\":\"bad_request\"}").ConfigureAwait(false);
+            }
+        }
+
+        internal static async Task<string> ReadBoundedRequestAsync(TextReader reader, CancellationToken ct)
+        {
+            const int maximumCharacters = 65536;
+            var line = new StringBuilder();
+            var character = new char[1];
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                int count = await reader.ReadAsync(character, 0, 1).ConfigureAwait(false);
+                if (count == 0 || character[0] == '\n') return line.ToString().TrimEnd('\r');
+                if (line.Length >= maximumCharacters) throw new InvalidDataException("IPC request exceeds 64 Ki characters.");
+                line.Append(character[0]);
             }
         }
 

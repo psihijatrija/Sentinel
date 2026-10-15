@@ -102,12 +102,16 @@ namespace Sentinel.Core
             var incident = _incidentManager.RegisterDetection(detection);
 
             // 2. Route through ResponseCoordinator (handles dedup, locking, chain trace holds)
-            var result = await _responseCoordinator.ExecuteResponseAsync(detection);
+            var result = await _responseCoordinator.ExecuteResponseAsync(detection, incidentId: incident.Id);
 
             if (result.Outcome == ResponseOutcome.Executed)
             {
                 _logger.LogDebug("[Orchestrator] Response executed for PID {Pid}: {Action}",
                     detection.ProcessId, detection.AuthorizedResponse);
+            }
+            else if (result.Outcome == ResponseOutcome.Attempted)
+            {
+                _logger.LogDebug("[Orchestrator] Response attempted for PID {Pid}; host outcome remains unverified", detection.ProcessId);
             }
             else if (result.Outcome == ResponseOutcome.Deduplicated)
             {
@@ -198,7 +202,7 @@ namespace Sentinel.Core
             var respStats = _responseCoordinator.GetStats();
 
             var overallHealth = SystemHealth.Healthy;
-            if (monStats.Failed > 0 || monStats.Stale > 0)
+            if (monStats.Failed > 0 || monStats.Stale > 0 || incStats.PersistenceDegraded)
                 overallHealth = SystemHealth.Degraded;
             if (busStats.DropRate > 0.05) // >5% signal drop rate
                 overallHealth = SystemHealth.Degraded;

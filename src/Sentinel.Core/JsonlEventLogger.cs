@@ -66,21 +66,10 @@ namespace Sentinel.Core
 
                     // Only apply production ACLs if this is the default production path in CommonApplicationData
                     var prodDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Sentinel");
-                    if (directory.StartsWith(prodDir))
+                    if (string.Equals(directory, prodDir, StringComparison.OrdinalIgnoreCase) ||
+                        directory.StartsWith(prodDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     {
-                        // v2.0.8: SYSTEM + Admins full; Interactive Users read (tray Agent UI).
-                        // Not Builtin\Users - service accounts / non-interactive malware must not
-                        // harvest detection history for recon of what Sentinel is watching.
-                        var dirInfo = new DirectoryInfo(directory);
-                        var security = dirInfo.GetAccessControl();
-                        security.SetAccessRuleProtection(true, false);
-                        var systemSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null);
-                        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(systemSid, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
-                        var adminSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null);
-                        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(adminSid, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
-                        var interactiveSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.InteractiveSid, null);
-                        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(interactiveSid, System.Security.AccessControl.FileSystemRights.Read, System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
-                        dirInfo.SetAccessControl(security);
+                        ApplyProductionDirectoryAcl(directory);
                     }
                 }
                 catch
@@ -100,6 +89,25 @@ namespace Sentinel.Core
             _auditLogFilePath = Path.Combine(sentinelDir,
                 $"audit-{DateTime.UtcNow:yyyy-MM-dd}.jsonl");
             TryOpenAuditFileInternal();
+        }
+
+        // Keep Windows ACL resolution at the Windows-only boundary.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void ApplyProductionDirectoryAcl(string directory)
+        {
+                        // v2.0.8: SYSTEM + Admins full; Interactive Users read (tray Agent UI).
+                        // Not Builtin\Users - service accounts / non-interactive malware must not
+                        // harvest detection history for recon of what Sentinel is watching.
+                        var dirInfo = new DirectoryInfo(directory);
+                        var security = dirInfo.GetAccessControl();
+                        security.SetAccessRuleProtection(true, false);
+                        var systemSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null);
+                        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(systemSid, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+                        var adminSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null);
+                        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(adminSid, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+                        var interactiveSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.InteractiveSid, null);
+                        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(interactiveSid, System.Security.AccessControl.FileSystemRights.Read, System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+                        dirInfo.SetAccessControl(security);
         }
 
         private void TryOpenAuditFileInternal()

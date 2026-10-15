@@ -66,7 +66,7 @@ namespace Sentinel.Core
                     FullMode = BoundedChannelFullMode.DropOldest,
                     SingleWriter = false,
                     SingleReader = true
-                });
+                }, _ => Interlocked.Increment(ref _totalDropped));
 
             _dispatchTask = Task.Run(DispatchLoopAsync);
         }
@@ -96,8 +96,8 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// Publishes an enrichment signal asynchronously (awaits channel space).
-        /// Use this only when backpressure feedback is needed.
+        /// Publishes with cancellation. This DropOldest channel remains non-blocking;
+        /// eviction is reflected by TotalDropped, not by waiting for capacity.
         /// </summary>
         public async ValueTask PublishAsync(EnrichmentSignal signal, CancellationToken ct = default)
         {

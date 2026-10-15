@@ -19,7 +19,7 @@ namespace Sentinel.Core.Ml
         private PredictionEngine<PeFeatureVector, MlBinaryPrediction>? _peEngine;
         private PredictionEngine<UrlFeatureVector, MlBinaryPrediction>? _urlEngine;
         private PredictionEngine<CommandLineFeatureVector, MlBinaryPrediction>? _cmdEngine;
-        private bool _initAttempted;
+        private volatile bool _initAttempted;
         private bool _peReady;
         private bool _urlReady;
         private bool _cmdReady;
@@ -242,13 +242,12 @@ namespace Sentinel.Core.Ml
             lock (_gate)
             {
                 if (_initAttempted) return;
-                _initAttempted = true;
                 try
                 {
                     _ml = new MLContext(seed: 42);
-                    _peReady = TryLoadPeModel();
-                    _urlReady = TryLoadUrlModel();
-                    _cmdReady = TryLoadCmdModel();
+                    _peReady = TryInitializeModel("PE", TryLoadPeModel);
+                    _urlReady = TryInitializeModel("URL", TryLoadUrlModel);
+                    _cmdReady = TryInitializeModel("command-line", TryLoadCmdModel);
                     _logger?.LogInformation(
                         "[MlThreatScorer] Models loaded: PE={Pe}, URL={Url}, Cmd={Cmd}",
                         _peReady, _urlReady, _cmdReady);
@@ -260,14 +259,51 @@ namespace Sentinel.Core.Ml
                     _urlReady = false;
                     _cmdReady = false;
                 }
+                finally { _initAttempted = true; }
             }
+        }
+
+        private bool TryInitializeModel(string name, Func<bool> load)
+        {
+            try { return load(); }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[MlThreatScorer] {Model} unavailable; other models remain independent", name);
+                return false;
+            }
+        }
+
+        private MemoryStream OpenVerifiedModel(string path)
+        {
+            var snapshot = new MemoryStream();
+            try
+            {
+                using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    var buffer = new byte[81920];
+                    int count;
+                    while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        if (snapshot.Length + count > 64 * 1024 * 1024) throw new InvalidDataException("Model exceeds 64 MiB.");
+                        snapshot.Write(buffer, 0, count);
+                    }
+                }
+                snapshot.Position = 0;
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                string actual = BitConverter.ToString(sha.ComputeHash(snapshot)).Replace("-", "").ToLowerInvariant();
+                if (!ModelIntegrity.IsApproved(Path.GetFileName(path), actual))
+                    throw new InvalidDataException("Model bytes do not match a release-reviewed integrity pin.");
+                snapshot.Position = 0;
+                return snapshot; // ML consumes the exact verified bytes, independent of later file writes.
+            }
+            catch { snapshot.Dispose(); throw; }
         }
 
         private bool TryLoadPeModel()
         {
             var path = ResolveModelPath("pe_model.zip");
             if (path == null || _ml == null) return false;
-            using var fs = File.OpenRead(path);
+            using var fs = OpenVerifiedModel(path);
             var model = _ml.Model.Load(fs, out _);
             _peEngine = _ml.Model.CreatePredictionEngine<PeFeatureVector, MlBinaryPrediction>(model);
             return true;
@@ -277,7 +313,7 @@ namespace Sentinel.Core.Ml
         {
             var path = ResolveModelPath("url_model.zip");
             if (path == null || _ml == null) return false;
-            using var fs = File.OpenRead(path);
+            using var fs = OpenVerifiedModel(path);
             var model = _ml.Model.Load(fs, out _);
             _urlEngine = _ml.Model.CreatePredictionEngine<UrlFeatureVector, MlBinaryPrediction>(model);
             return true;
@@ -287,13 +323,13 @@ namespace Sentinel.Core.Ml
         {
             var path = ResolveModelPath("cmdline_model.zip");
             if (path == null || _ml == null) return false;
-            using var fs = File.OpenRead(path);
+            using var fs = OpenVerifiedModel(path);
             var model = _ml.Model.Load(fs, out _);
             _cmdEngine = _ml.Model.CreatePredictionEngine<CommandLineFeatureVector, MlBinaryPrediction>(model);
             return true;
         }
 
-        private static string? ResolveModelPath(string fileName)
+        private string? ResolveModelPath(string fileName)
         {
             // 1) Next to the executable / single-file extract dir
             var baseDir = AppContext.BaseDirectory;
@@ -326,7 +362,7 @@ namespace Sentinel.Core.Ml
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { _logger?.LogDebug(ex, "[MlThreatScorer] Development model lookup failed"); }
 
             return null;
         }

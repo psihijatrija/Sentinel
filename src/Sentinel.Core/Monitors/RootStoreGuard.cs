@@ -29,8 +29,9 @@ namespace Sentinel.Core.Monitors
     /// hard safety floor so OS/public trust anchors are never touched. A failing cycle logs and
     /// continues (graceful degradation) - it must never crash the monitor group.
     /// </summary>
-    public sealed class RootStoreGuard : BackgroundService
+    public sealed class RootStoreGuard : BackgroundService, ISensorProgressSource
     {
+        public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(4));
         private readonly DetectionEngine _detectionEngine;
         private readonly SentinelConfig _config;
         private readonly CertRemediator _remediator;
@@ -78,7 +79,7 @@ namespace Sentinel.Core.Monitors
             // Startup sweep immediately, then poll.
             try { await SweepAsync(ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
-            catch (Exception ex) { _logger.LogError(ex, "[RootStoreGuard] Startup sweep failed"); }
+            catch (Exception ex) { Progress.Failed(ex.GetType().Name); _logger.LogError(ex, "[RootStoreGuard] Startup sweep failed"); }
 
             while (!ct.IsCancellationRequested)
             {
@@ -88,7 +89,7 @@ namespace Sentinel.Core.Monitors
                     await SweepAsync(ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (Exception ex) { _logger.LogDebug(ex, "[RootStoreGuard] Sweep error"); }
+                catch (Exception ex) { Progress.Failed(ex.GetType().Name); _logger.LogDebug(ex, "[RootStoreGuard] Sweep error"); }
             }
         }
 
@@ -96,6 +97,7 @@ namespace Sentinel.Core.Monitors
         {
             // Collect suspicious roots across the trusted stores (dedup by thumbprint).
             var suspicious = new Dictionary<string, X509Certificate2>(StringComparer.OrdinalIgnoreCase);
+            bool complete = true;
 
             foreach (var (name, location, label) in TrustStores)
             {
@@ -120,16 +122,23 @@ namespace Sentinel.Core.Monitors
                             if (!suspicious.ContainsKey(norm))
                                 suspicious[norm] = new X509Certificate2(cert.RawData);
                         }
-                        catch { /* per-cert best effort */ }
+                        catch (Exception ex)
+                        {
+                            complete = false;
+                            _logger.LogDebug(ex, "[RootStoreGuard] Certificate evaluation failed in {Label}", label);
+                        }
                         finally { cert.Dispose(); }
                     }
                 }
                 catch (Exception ex)
                 {
+                    complete = false;
                     _logger.LogDebug(ex, "[RootStoreGuard] Store read failed for {Label}", label);
                 }
             }
 
+            if (complete) Progress.Succeeded();
+            else Progress.Failed("One or more trust stores/certificates could not be evaluated; coverage incomplete");
             if (suspicious.Count == 0) return;
 
             // Autonomous removal is a host mutation - gate on ActiveResponse. If disabled, we

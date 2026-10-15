@@ -4193,4 +4193,56 @@ namespace Sentinel.Core
         }
     }
 
+    /// <summary>Periodic checkpoint anchoring, independent of incident-pack creation.</summary>
+    public sealed class EvidenceCheckpointMonitor : BackgroundService, ISensorProgressSource
+    {
+        private readonly JsonlEventLogger _events;
+        private readonly ThreatReportService _reports;
+        private readonly ILogger<EvidenceCheckpointMonitor> _logger;
+        private string? _lastConfirmed;
+        public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(12));
+
+        public EvidenceCheckpointMonitor(JsonlEventLogger events, ThreatReportService reports,
+            ILogger<EvidenceCheckpointMonitor> logger)
+        { _events = events; _reports = reports; _logger = logger; }
+
+        protected override async Task ExecuteAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var checkpoint = _events.GetAuditCheckpoint();
+                    if (checkpoint != null && _reports.EvidenceAnchoringConfigured)
+                    {
+                        string identity = checkpoint.File + ":" + checkpoint.Sequence + ":" + checkpoint.Hash;
+                        if (_lastConfirmed != identity)
+                        {
+                            bool confirmed = await _reports.TryReportEvidenceAsync(new EvidenceSummary
+                            {
+                                ReportId = identity, ManifestSha256 = checkpoint.Hash,
+                                LedgerFile = checkpoint.File, LedgerSequence = checkpoint.Sequence, LedgerHash = checkpoint.Hash
+                            }, ct).ConfigureAwait(false);
+                            if (confirmed) _lastConfirmed = identity;
+                            else Progress.Failed("Remote checkpoint storage was not confirmed; local evidence retained");
+                            await _events.LogEventAsync("evidence_checkpoint_receipt", new
+                            { checkpoint.File, checkpoint.Sequence, checkpoint.Hash, Status = _reports.AnchorStatus }, ct).ConfigureAwait(false);
+                            if (confirmed) Progress.Succeeded();
+                        }
+                        else Progress.Succeeded();
+                    }
+                    // Unconfigured remains Unknown, never represented as protected evidence.
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    Progress.Failed(ex.GetType().Name);
+                    _logger.LogWarning(ex, "Periodic evidence checkpoint failed; local evidence retained");
+                }
+                try { await Task.Delay(TimeSpan.FromMinutes(5), ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            }
+        }
+    }
+
 }

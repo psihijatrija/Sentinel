@@ -32,8 +32,9 @@ namespace Sentinel.Core
         private readonly JsonlEventLogger _eventLogger;
         private readonly ILogger<ResponseCoordinator> _logger;
 
-        // Per-PID response locks (prevents concurrent responses on same process)
-        private readonly ConcurrentDictionary<int, SemaphoreSlim> _pidLocks = new();
+        // Bounded lock stripes serialize each PID without unsafe idle-lock removal.
+        private readonly SemaphoreSlim[] _pidLocks = Enumerable.Range(0, 512)
+            .Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
         // Response history: PID -> last response timestamp (deduplication window)
         private readonly ConcurrentDictionary<int, ResponseRecord> _responseHistory = new();
@@ -46,6 +47,8 @@ namespace Sentinel.Core
         private long _totalResponsesDeduplicated;
         private long _totalResponsesDeferred;
         private long _totalResponsesFailed;
+        private long _totalResponsesAttempted;
+        private long _totalResponsesObserved;
 
         private static readonly TimeSpan DeduplicationWindow = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan ChainTraceHoldTimeout = TimeSpan.FromSeconds(10);
@@ -74,7 +77,7 @@ namespace Sentinel.Core
         /// Handles deduplication, locking, chain trace deferral, and incident marking.
         /// This is the ONLY entry point for response actions.
         /// </summary>
-        public async Task<ResponseResult> ExecuteResponseAsync(DetectionEvent detection)
+        public async Task<ResponseResult> ExecuteResponseAsync(DetectionEvent detection, CancellationToken cancellationToken = default, string? incidentId = null)
         {
             var result = new ResponseResult
             {
@@ -106,8 +109,8 @@ namespace Sentinel.Core
             }
 
             // 3. Acquire per-PID lock (serialize responses on same PID)
-            var pidLock = _pidLocks.GetOrAdd(pid > 0 ? pid : -1, _ => new SemaphoreSlim(1, 1));
-            if (!await pidLock.WaitAsync(LockAcquireTimeout))
+            var pidLock = _pidLocks[(pid > 0 ? pid : 0) % _pidLocks.Length];
+            if (!await pidLock.WaitAsync(LockAcquireTimeout, cancellationToken))
             {
                 result.Outcome = ResponseOutcome.LockTimeout;
                 result.Reason = $"Could not acquire response lock for PID {pid} within {LockAcquireTimeout.TotalSeconds}s";
@@ -124,35 +127,47 @@ namespace Sentinel.Core
                     return result;
                 }
 
-                // 5. Execute the response via AdvancedResponseEngine
-                await _responseEngine.HandleAsync(detection);
-
-                // 6. Record the response
-                Interlocked.Increment(ref _totalResponsesExecuted);
-                if (pid > 0)
+                // Persist evaluation intent; recovered Pending records are review-only.
+                if (detection.Tier == DetectionTier.Tier1Behavioral)
+                    _incidentManager.BeginResponseEvaluation(pid, detection.AuthorizedResponse, incidentId);
+                ResponseEvent? execution = null;
+                await _responseEngine.HandleAsync(detection, response => execution = response).ConfigureAwait(false);
+                var outcome = execution?.Outcome ?? ResponseExecutionOutcome.Observed;
+                var actualAction = execution?.ActionTaken ?? "LOG";
+                result.Reason = execution?.Reason ?? "No host action was reported";
+                _incidentManager.CompleteResponseEvaluation(pid, outcome, actualAction, result.Reason, incidentId);
+                if (outcome == ResponseExecutionOutcome.Confirmed)
                 {
-                    _responseHistory[pid] = new ResponseRecord
+                    Interlocked.Increment(ref _totalResponsesExecuted);
+                    if (pid > 0) _responseHistory[pid] = new ResponseRecord
                     {
-                        Timestamp = DateTimeOffset.UtcNow,
-                        Action = detection.AuthorizedResponse,
-                        RuleName = detection.RuleName
+                        Timestamp = DateTimeOffset.UtcNow, Action = detection.AuthorizedResponse, RuleName = detection.RuleName
                     };
+                    result.Outcome = ResponseOutcome.Executed;
+                    result.ExecutedAt = DateTimeOffset.UtcNow;
                 }
-
-                // 7. Mark incident as responded
-                if (pid > 0 && detection.KillAuthorized && detection.Tier == DetectionTier.Tier1Behavioral)
+                else if (outcome == ResponseExecutionOutcome.Attempted)
                 {
-                    _incidentManager.MarkRespondedByPid(pid, detection.AuthorizedResponse.ToString());
+                    Interlocked.Increment(ref _totalResponsesAttempted);
+                    result.Outcome = ResponseOutcome.Attempted;
                 }
-
-                result.Outcome = ResponseOutcome.Executed;
-                result.ExecutedAt = DateTimeOffset.UtcNow;
+                else if (outcome == ResponseExecutionOutcome.Failed)
+                {
+                    Interlocked.Increment(ref _totalResponsesFailed);
+                    result.Outcome = ResponseOutcome.Failed;
+                }
+                else
+                {
+                    Interlocked.Increment(ref _totalResponsesObserved);
+                    result.Outcome = ResponseOutcome.Observed;
+                }
             }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _totalResponsesFailed);
                 result.Outcome = ResponseOutcome.Failed;
                 result.Reason = ex.Message;
+                _incidentManager.CompleteResponseEvaluation(pid, ResponseExecutionOutcome.Failed, "FAILED", ex.GetType().Name, incidentId);
                 _logger.LogError(ex, "[ResponseCoordinator] Response failed for PID {Pid}", pid);
             }
             finally
@@ -229,7 +244,9 @@ namespace Sentinel.Core
             TotalDeduplicated = Interlocked.Read(ref _totalResponsesDeduplicated),
             TotalDeferred = Interlocked.Read(ref _totalResponsesDeferred),
             TotalFailed = Interlocked.Read(ref _totalResponsesFailed),
-            ActiveLocks = _pidLocks.Count(kv => kv.Value.CurrentCount == 0),
+            TotalAttempted = Interlocked.Read(ref _totalResponsesAttempted),
+            TotalObserved = Interlocked.Read(ref _totalResponsesObserved),
+            ActiveLocks = _pidLocks.Count(semaphore => semaphore.CurrentCount == 0),
             ActiveChainTraceHolds = _chainTraceHolds.Count
         };
 
@@ -255,17 +272,13 @@ namespace Sentinel.Core
                     _chainTraceHolds.TryRemove(pid, out _);
             }
 
-            // Prune PID locks that are no longer needed (no recent response)
-            foreach (var (pid, semaphore) in _pidLocks)
-            {
-                if (!_responseHistory.ContainsKey(pid) && semaphore.CurrentCount == 1)
-                    _pidLocks.TryRemove(pid, out _);
-            }
+            // Lock stripes are bounded and retained. Removing an apparently idle semaphore
+            // can race with a waiter and let the same PID execute under two different locks.
         }
 
         public void Dispose()
         {
-            foreach (var (_, semaphore) in _pidLocks)
+            foreach (var semaphore in _pidLocks)
                 semaphore.Dispose();
         }
     }
@@ -280,7 +293,9 @@ namespace Sentinel.Core
         Deduplicated,
         DeferredForChainTrace,
         LockTimeout,
-        Failed
+        Failed,
+        Observed,
+        Attempted
     }
 
     public sealed class ResponseResult
@@ -306,6 +321,8 @@ namespace Sentinel.Core
         public long TotalDeduplicated { get; set; }
         public long TotalDeferred { get; set; }
         public long TotalFailed { get; set; }
+        public long TotalAttempted { get; set; }
+        public long TotalObserved { get; set; }
         public int ActiveLocks { get; set; }
         public int ActiveChainTraceHolds { get; set; }
     }

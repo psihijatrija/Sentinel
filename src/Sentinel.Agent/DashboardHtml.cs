@@ -865,6 +865,7 @@ function loadOps() {{
                 ['Correlation P50', (ops.CorrelationLatencyMsP50 || ops.correlationLatencyMsP50 || 0) + 'ms'],
                 ['Monitors', (ops.RunningMonitors || ops.runningMonitors || 0) + '/' + (ops.RegisteredMonitors || ops.registeredMonitors || 0)],
                 ['Sensor progress', healthy + ' verified / ' + degraded + ' degraded / ' + unknown + ' unknown'],
+                ['Off-host evidence anchoring', (ops.EvidenceAnchoring || ops.evidenceAnchoring || {{}}).State || (ops.EvidenceAnchoring || ops.evidenceAnchoring || {{}}).state || 'Unknown'],
                 ['Audit integrity', !ops.hasOwnProperty('AuditIntegrityDegraded') && !ops.hasOwnProperty('auditIntegrityDegraded') ? 'Unknown' : (ops.AuditIntegrityDegraded || ops.auditIntegrityDegraded) ? 'Degraded' : 'Available'],
                 ['Plugins', ops.PluginCount || ops.pluginCount || 0],
                 ['Weighted Correlation', (ops.WeightedCorrelationEnabled || ops.weightedCorrelationEnabled) ? 'Enabled' : 'Disabled'],

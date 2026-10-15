@@ -924,3 +924,36 @@ reuses weighted correlation with an injected historical clock and no response en
 CLI verifies chains/manifests, inspects interrupted restores and exports allowlisted,
 redacted investigation copies. See `tools/Sentinel.Diagnostics/README.md` for contracts
 and `docs/QUALITY_REVIEW.md` for limits, ratings and remaining validation.
+
+## Restart continuity and response dispositions (3.1.8)
+
+Incident state is atomically checkpointed under `ProgramData/Sentinel/incidents` with
+an enforced 20 MiB output limit. Unreadable state is retained and not overwritten;
+persistence failure is exposed in system health. Each incident retains its latest
+256 detection entries plus total/omitted counts; the existing event/audit streams
+remain the detailed historical source. Recovered records have `RecoveredHistory`
+set and never restore PID mappings, successful-response suppression, or correlation
+state. Pending response evaluations survive for review, not automatic execution.
+
+The coordinator distinguishes observed, attempted, confirmed and failed outcomes.
+A request to kill is not evidence of a kill. Only confirmed results mark an incident
+Responded or suppress another response. Legacy helpers which do not verify their
+host result are reported as attempts. Response serialization uses 512 fixed lock
+stripes to bound memory and avoid the race caused by replacing idle PID semaphores.
+
+`replay-behavioral` evaluates historical detection events through behavioral and
+weighted correlation with an injected clock and tier law. No process lookups,
+signature checks, graph plugins or host actions run during replay. Historical image
+identity is unknown; signed-app exemptions are not simulated. This is detection-level
+replay, not a complete telemetry collector/rule/response reproduction.
+
+`export-private` creates a derived allowlisted ZIP with timestamps shifted to a
+synthetic UTC epoch, retaining intervals. `benchmark-replay` measures this offline
+pipeline on the executing runtime; it does not measure the installed service.
+
+Every five minutes, the grouped evidence-checkpoint monitor can anchor a changed
+ledger checkpoint independently of incident-pack creation. A separate deployment
+reporting credential is required for all Worker mutations; the public compatibility
+credential remains lookup-only. Source-side minimization removes raw host/process/
+indicator fields before evidence requests leave the host. Confirmed storage receipts
+are distinct from source authentication or a guarantee against administrator tamper.

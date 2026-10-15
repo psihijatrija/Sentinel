@@ -15,7 +15,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 try
 {
     if (args.Length < 2) throw new ArgumentException(
-        "Usage: verify-ledger FILE [TRUSTED_CHECKPOINT_JSON] | verify-pack DIRECTORY | replay EVENTS_JSONL [CONFIG_JSON] | compare-replays OLD_JSON NEW_JSON | inspect-restore JOURNAL | preview-export EVENTS_JSONL | export EVENTS_JSONL OUTPUT_ZIP");
+        "Usage: verify-ledger FILE [TRUSTED_CHECKPOINT_JSON] | verify-pack DIRECTORY | replay EVENTS_JSONL [CONFIG_JSON] | replay-behavioral EVENTS_JSONL [CONFIG_JSON] | compare-replays OLD_JSON NEW_JSON | inspect-restore JOURNAL | preview-export EVENTS_JSONL | export EVENTS_JSONL OUTPUT_ZIP | export-private EVENTS_JSONL OUTPUT_ZIP | benchmark-replay EVENTS_JSONL [ITERATIONS]");
     object result;
     switch (args[0])
     {
@@ -30,9 +30,37 @@ try
             result = new EvidencePackVerifier().Verify(args[1], cancellation.Token);
             break;
         case "replay" when args.Length is 2 or 3:
+        case "replay-behavioral" when args.Length is 2 or 3:
             var config = args.Length == 3 ? JsonSerializer.Deserialize<WeightedCorrelationConfig>(ReadShared(args[2]), options)
                 ?? throw new InvalidDataException("Null replay configuration") : new WeightedCorrelationConfig();
-            result = await new DetectionReplay().RunAsync(ReadDetections(args[1]), config, cancellation.Token);
+            result = await new DetectionReplay().RunAsync(ReadDetections(args[1]), config, cancellation.Token, includeBehavioral: args[0] == "replay-behavioral");
+            break;
+        case "benchmark-replay" when args.Length is 2 or 3:
+            int iterations = args.Length == 3 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 5;
+            if (iterations < 1 || iterations > 50) throw new ArgumentException("Iterations must be between 1 and 50.");
+            var benchmarkInput = ReadDetections(args[1]);
+            var replay = new DetectionReplay();
+            var benchmarkConfig = new WeightedCorrelationConfig();
+            await replay.RunAsync(benchmarkInput, benchmarkConfig, cancellation.Token, includeBehavioral: true);
+            var elapsed = new List<double>();
+            long memoryBefore = GC.GetTotalMemory(false);
+            DetectionReplayReport? last = null;
+            for (int i = 0; i < iterations; i++)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                last = await replay.RunAsync(benchmarkInput, benchmarkConfig, cancellation.Token, includeBehavioral: true);
+                elapsed.Add(timer.Elapsed.TotalMilliseconds);
+            }
+            elapsed.Sort();
+            using (var process = System.Diagnostics.Process.GetCurrentProcess())
+                result = new { Scope = "Offline detection-level replay only; not live sensor/service performance",
+                    Runtime = Environment.Version.ToString(), EngineVersion = last!.EngineVersion, last.InputSha256,
+                    EventsPerIteration = benchmarkInput.Count, Iterations = iterations,
+                    MedianMilliseconds = elapsed[elapsed.Count / 2],
+                    P95Milliseconds = elapsed[(int)Math.Ceiling(elapsed.Count * 0.95) - 1],
+                    ManagedBytesBefore = memoryBefore, ManagedBytesAfter = GC.GetTotalMemory(false),
+                    PeakWorkingSetBytes = process.PeakWorkingSet64 };
             break;
         case "compare-replays" when args.Length == 3:
             result = ReplayComparison.Compare(
@@ -48,7 +76,8 @@ try
                 Fields = new[] { "Timestamp", "ProcessAlias", "Category", "Confidence", "Tier", "SignalType", "RequestedAction" } };
             break;
         case "export" when args.Length == 3:
-            var redacted = new InvestigationExport().Redact(ReadDetections(args[1]));
+        case "export-private" when args.Length == 3:
+            var redacted = new InvestigationExport().Redact(ReadDetections(args[1]), relativeTime: args[0] == "export-private");
             cancellation.Token.ThrowIfCancellationRequested();
             using (var file = new FileStream(args[2], FileMode.CreateNew, FileAccess.Write, FileShare.Read | FileShare.Delete))
             using (var zip = new ZipArchive(file, ZipArchiveMode.Create))

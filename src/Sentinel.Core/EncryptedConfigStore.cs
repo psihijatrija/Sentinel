@@ -183,6 +183,11 @@ namespace Sentinel.Core
                     // Threat-proxy HMAC and endpoint are compiled into the binary.
                     // Disk overrides cannot redirect or blank reporting.
 
+                    case "ReportingProxySharedSecret":
+                        if (threatConfig != null && kvp.Value.Length >= 32)
+                            threatConfig.ReportingProxySharedSecret = kvp.Value;
+                        break;
+
                     // Sentinel per-deployment
                     case "TrustedUsbDevices":
                         config.TrustedUsbDevices = kvp.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);

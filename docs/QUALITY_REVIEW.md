@@ -126,3 +126,72 @@ an installer release exists.
 - Full Windows Framework suite, native ETW/DPAPI behavior, installer creation and publication
   are delegated to the Windows GitHub Actions release gate. Do not infer success from
   local checks; consult the actual workflow/release result.
+
+## Follow-up implementation and audit
+
+The numeric table above records the initial 3.1.7 assessment; it is not a measured
+before/after protection benchmark. Do not compare it with independent reviewers'
+numbers as if all reviews used the same rubric. The work below addresses additional
+implementation gaps. Ratings are not raised simply because more code was added.
+
+- **Restart continuity:** durable bounded incident timelines, total/omitted event
+  counts, pending response evaluations and stable IDs. Recovered history never
+  restores stale PID mappings, suppression or action authority. Corrupt state is
+  preserved and failures reach system health.
+- **Response safety and explanations:** actual engine dispositions reach the
+  coordinator; LogOnly no longer masquerades as an executed response. Attempts do
+  not become confirmed outcomes. Fixed lock stripes remove a concurrency race.
+  Temporal process-generation checks refuse stale evidence, with the remaining
+  handle/use race explicitly recorded in the adversarial review.
+- **Replay:** optional behavioral correlation plus weighted correlation, historical
+  clocks, tier-law evaluation, output comparison and a repeatable runtime benchmark.
+  Collector/rule input, live identity, graph/plugins and host effects remain outside
+  this offline replay's scope.
+- **Evidence continuity:** optional five-minute remote checkpoint publication now
+  runs independently of incident-pack creation. Private deployment authentication,
+  receipt validation and visible configuration/failure states replace implied
+  protection from the public compatibility credential.
+- **Privacy:** evidence payloads are minimized on the client before transmission.
+  Private exports remove absolute dates while retaining intervals.
+- **Sensor progress:** root-store evaluation and WFP collection expose incomplete
+  reads, unavailable commands, timeouts and malformed inventories. Uninstrumented
+  monitors remain Unknown. Corrupt host observation baselines are retained.
+- **Recovery safety:** restore inspection validates schema, state, content hash and
+  canonical local paths; it refuses network/device/link/alternate-stream targets.
+  Neither recovery history nor a journal authorizes automatic action replay.
+
+The adversarial findings, fixes and remaining risks are in
+[ADVERSARIAL_REVIEW.md](ADVERSARIAL_REVIEW.md). Windows deployment, enterprise PKI,
+false-positive and sustained performance evidence are still separate requirements.
+At the owner's request, intermediate test runs stopped; final verification follows
+completion of the code changes, not each edit.
+
+### Current provisional assessment
+
+Same conservative engineering rubric as the original table. These are source-based
+judgments, not measured protection percentages. Final release validation is recorded
+by the linked GitHub Actions run; that cannot substitute for deployment/attack data.
+
+| Segment | 3.1.7 | Current code | Evidence behind the change or limit |
+| --- | ---: | ---: | --- |
+| Architecture and modularity | 7 | 7 | New state-store boundary; shared/static policy remains |
+| Telemetry and sensor health | 6 | 7 | More explicit collectors; corrected enrichment-drop accounting; remaining coverage Unknown |
+| Behavioral correlation | 7 | 8 | Historical behavioral replay, isolated clock/identity dependencies and output comparison |
+| Response authorization and safety | 6 | 7 | Actual dispositions, bounded serialization, temporal PID check; handle-bound execution still needed |
+| Memory, module and injection monitoring | 6 | 6 | No new Windows injection/anti-cheat evaluation |
+| Certificate trust integrity | 6 | 6 | Collection degradation exposed; private-PKI remediation compatibility unresolved |
+| Network integrity | 6 | 6 | No VPN/DHCP/Wi-Fi workload evidence added |
+| Host-state reconciliation | 6 | 7 | Unreadable baselines retained rather than silently replaced |
+| Incident lifecycle and restart continuity | 4 | 7 | Durable history, stable IDs, pending evaluations, no stale authority recovery |
+| Evidence integrity and independent verification | 6 | 7 | Independent periodic anchoring with private write credentials and confirmed receipts |
+| Privacy and investigation exports | 6 | 7 | Source-side minimization and removal of absolute dates in private exports |
+| Threat-intelligence proxy | 6 | 7 | Public compatibility credential no longer authorizes report mutations |
+| Offline ML | 4 | 5 | Pinned artifacts and initialization fixes; future metrics bind to saved model; original provenance/calibration absent |
+| IPC and service/agent boundaries | 6 | 7 | Bounded request and connection lifetime; final Windows boundary validation required |
+| Diagnostics and user explanations | 6 | 7 | Attempts distinguished from confirmed outcomes and explicit anchoring states |
+| Regression testing and evaluation | 6 | 6 | Additional cases prepared; no new independent attack/benign benchmark |
+| Performance and resource budgets | 4 | 5 | Bounded locks/state writes, corrected drops and repeatable offline benchmark; live sustained budgets unmeasured |
+| Packaging and update integrity | 5 | 5 | Installer pipeline retained; signing and interrupted-update/rollback assurance absent |
+
+Unchanged scores identify work this pass did not establish. A claim that all segments
+are 10/10 would still be unsupported, including for code paths with real fixes.

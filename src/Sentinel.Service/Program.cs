@@ -425,6 +425,9 @@ namespace Sentinel.Service
                     services.AddSingleton<DetectionEngine>();
 
                     // v1.3.2: Orchestration layer
+                    services.AddSingleton<IIncidentStateStore>(_ => new IncidentStateStore(Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                        "Sentinel", "incidents", "state.json")));
                     services.AddSingleton<IncidentManager>();
                     services.AddSingleton<MonitorRegistry>();
                     services.AddSingleton<StartupSequencer>();
@@ -780,6 +783,7 @@ namespace Sentinel.Service
                             ("ClfsExploitationMonitor",         s => s.GetRequiredService<ClfsExploitationMonitor>()),
                             ("StateReconciliationMonitor",      s => s.GetRequiredService<StateReconciliationMonitor>()),
                             ("HostIntegrityInventoryMonitor",    s => s.GetRequiredService<HostIntegrityInventoryMonitor>()),
+                            ("EvidenceCheckpointMonitor",       s => s.GetRequiredService<EvidenceCheckpointMonitor>()),
                             ("TrustedHostModuleIntegrityMonitor", s => s.GetRequiredService<TrustedHostModuleIntegrityMonitor>()),
                             ("AggressiveUnsignedDllSweepMonitor", s => s.GetRequiredService<AggressiveUnsignedDllSweepMonitor>()),
                             ("RootStoreGuard",                  s => s.GetRequiredService<RootStoreGuard>())
@@ -806,6 +810,7 @@ namespace Sentinel.Service
                     services.AddSingleton<IHostIntegrityInventory, HostIntegrityInventory>();
                     services.AddSingleton<HostIntegrityHistory>();
                     services.AddSingleton<HostIntegrityInventoryMonitor>();
+                    services.AddSingleton<EvidenceCheckpointMonitor>();
                     // Registry-driven DLL-load-point integrity (audio APOs + print monitors/processors).
                     // Observe-only (Tier2/LogOnly). Does not duplicate PrintSpoolerMonitor (filesystem
                     // driver store) or WinsockLspIntegrityMonitor (Winsock catalog).

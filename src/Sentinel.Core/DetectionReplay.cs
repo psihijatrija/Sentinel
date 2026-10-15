@@ -14,7 +14,7 @@ namespace Sentinel.Core
     public sealed class DetectionReplay
     {
         public async Task<DetectionReplayReport> RunAsync(IEnumerable<DetectionEvent> events,
-            WeightedCorrelationConfig config, CancellationToken cancellationToken = default)
+            WeightedCorrelationConfig config, CancellationToken cancellationToken = default, bool includeBehavioral = false)
         {
             if (events == null) throw new ArgumentNullException(nameof(events));
             if (config == null) throw new ArgumentNullException(nameof(config));
@@ -32,12 +32,26 @@ namespace Sentinel.Core
                 fingerprint = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(ordered))))
                     .Replace("-", "").ToLowerInvariant();
             var report = new DetectionReplayReport { Configuration = settings, InputSha256 = fingerprint };
+            if (includeBehavioral)
+                report.Scope = "Detection-level behavioral + weighted correlation with tier law; no live identity, telemetry rules, graph, plugins or response execution";
             foreach (var detection in ordered) detection.Metadata ??= new Dictionary<string, string>();
             report.SkippedDerivedCount = ordered.RemoveAll(e =>
                 e.Metadata.TryGetValue("WeightedCorrelation", out var derived) && derived == "true" ||
                 e.RuleName == "Weighted Correlation: Multi-Signal Threat");
             DateTime now = ordered.FirstOrDefault()?.Timestamp ?? new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var engine = new WeightedCorrelationEngine(settings, utcNow: () => now);
+            // Unknown historical image identity never acquires a live or recorded trust grant.
+            var behavioral = includeBehavioral ? new BehavioralCorrelationEngine(() => now, _ => false) : null;
+            behavioral?.Initialize(async composite =>
+            {
+                ResponsePolicy.ApplyTierLaw(composite);
+                composite.AuthorizedResponse = ResponseAction.LogOnly;
+                composite.Metadata["ReplayOnly"] = "true";
+                composite.Metadata["ReplaySource"] = "BehavioralCorrelation";
+                report.BehavioralComposites.Add(composite);
+                // The live pipeline feeds behavioral composites into weighted correlation.
+                await engine.RegisterSignalAsync(composite).ConfigureAwait(false);
+            });
             engine.Initialize(composite =>
             {
                 // Hypothetical recommendations are never actionable replay outputs.
@@ -50,6 +64,14 @@ namespace Sentinel.Core
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 now = detection.Timestamp;
+                if (behavioral != null)
+                {
+                    bool consultant = detection.Metadata.TryGetValue("ConsultantSignal", out var flag) && flag == "true";
+                    if (consultant) detection.Tier = DetectionTier.Tier2Indicator;
+                    else ResponsePolicy.ApplyTierLaw(detection);
+                    detection.AuthorizedResponse = ResponseAction.LogOnly;
+                    await behavioral.RegisterSignalAsync(detection).ConfigureAwait(false);
+                }
                 await engine.RegisterSignalAsync(detection).ConfigureAwait(false);
                 report.InputCount++;
                 if (detection.ProcessId > 0)
@@ -70,6 +92,7 @@ namespace Sentinel.Core
         public WeightedCorrelationConfig Configuration { get; set; } = new();
         public List<ReplayStep> Steps { get; set; } = new();
         public List<DetectionEvent> Composites { get; set; } = new();
+        public List<DetectionEvent> BehavioralComposites { get; set; } = new();
     }
 
     public sealed class ReplayComparison
@@ -78,17 +101,24 @@ namespace Sentinel.Core
         public string CurrentEngineVersion { get; set; } = "";
         public int PreviousCompositeCount { get; set; }
         public int CurrentCompositeCount { get; set; }
+        public int PreviousBehavioralCompositeCount { get; set; }
+        public int CurrentBehavioralCompositeCount { get; set; }
+        public bool BehavioralOutputsChanged { get; set; }
         public List<int> ChangedStepIndexes { get; set; } = new();
 
         public static ReplayComparison Compare(DetectionReplayReport previous, DetectionReplayReport current)
         {
             if (string.IsNullOrEmpty(previous.InputSha256) || previous.InputSha256 != current.InputSha256 ||
-                previous.Steps.Count != current.Steps.Count)
+                previous.Steps.Count != current.Steps.Count || previous.Scope != current.Scope)
                 throw new ArgumentException("Replay comparison requires reports from the same normalized input events.");
             var result = new ReplayComparison
             {
                 PreviousEngineVersion = previous.EngineVersion, CurrentEngineVersion = current.EngineVersion,
-                PreviousCompositeCount = previous.Composites.Count, CurrentCompositeCount = current.Composites.Count
+                PreviousCompositeCount = previous.Composites.Count, CurrentCompositeCount = current.Composites.Count,
+                PreviousBehavioralCompositeCount = previous.BehavioralComposites.Count,
+                CurrentBehavioralCompositeCount = current.BehavioralComposites.Count,
+                BehavioralOutputsChanged = JsonSerializer.Serialize(previous.BehavioralComposites) !=
+                    JsonSerializer.Serialize(current.BehavioralComposites)
             };
             for (int i = 0; i < previous.Steps.Count; i++)
             {

@@ -7,7 +7,40 @@ on:
     branches: [ main, master ]
 
 jobs:
+  route:
+    name: Select validation workflow
+    runs-on: windows-latest
+    outputs:
+      release: ${{ steps.route.outputs.release }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+    - name: Route version changes to the release gate
+      id: route
+      shell: pwsh
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        $release = $false
+        if ($env:EVENT_NAME -eq 'push') {
+          $parents = @(git rev-list --max-count=2 HEAD)
+          if ($LASTEXITCODE -ne 0) { throw "Cannot inspect commit parents" }
+          if ($parents.Count -ge 2) {
+            $changed = @(git diff --name-only HEAD^ HEAD)
+            if ($LASTEXITCODE -ne 0) { throw "Cannot determine changed files" }
+            $release = $changed -contains 'version.txt'
+          }
+          $global:LASTEXITCODE = 0
+        }
+        "release=$($release.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append
+        if ($release) {
+          "This version change is built and tested by the Release workflow before packaging. The ordinary suite is skipped to avoid duplicate runs." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+        }
+
   build:
+    needs: route
+    if: needs.route.outputs.release != 'true'
     runs-on: windows-latest
 
     steps:
@@ -38,12 +71,16 @@ jobs:
     - name: Build (warnings as errors)
       run: dotnet build Sentinel.sln -c Release --no-restore -warnaserror
 
-    - name: Test
+    # Collect coverage and TRX results in one execution of the Framework suite.
+    # A second uninstrumented run added waiting without checking different behavior.
+    - name: Windows Framework tests with coverage
       run: >
         dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj
-        -c Release --no-build --verbosity normal
+        -c Release --verbosity normal
         --logger "trx;LogFileName=test-results.trx"
         --results-directory ${{ github.workspace }}/TestResults
+        /p:CollectCoverage=true
+        /p:CoverletOutputFormat=cobertura
 
     - name: Upload test results
       if: always()
@@ -52,17 +89,6 @@ jobs:
         name: test-results
         path: ${{ github.workspace }}/TestResults/*.trx
         if-no-files-found: ignore
-
-    # Coverage runs as its own step: coverlet.msbuild instruments at test-build time, so it
-    # cannot use the --no-build artifacts from the Test step above. It builds+tests again with
-    # instrumentation and emits a cobertura report. Not gated on a threshold yet (the baseline
-    # is ~40% line on Sentinel.Core); the number is published so regressions are visible.
-    - name: Coverage
-      run: >
-        dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj
-        -c Release
-        /p:CollectCoverage=true
-        /p:CoverletOutputFormat=cobertura
 
     - name: Upload coverage report
       if: always()

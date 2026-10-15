@@ -10,7 +10,24 @@ namespace Sentinel.Core
     {
         private readonly ConcurrentDictionary<int, List<DetectionEvent>> _signalBuffers = new();
         private Func<DetectionEvent, Task>? _emitCallback;
-        private DateTime _lastPruneTime = DateTime.UtcNow;
+        private DateTime _lastPruneTime;
+        private readonly Func<DateTime> _utcNow;
+        private readonly Func<int, bool> _hasVerifiedImage;
+
+        public BehavioralCorrelationEngine() : this(() => DateTime.UtcNow, HasVerifiedImage) { }
+
+        internal BehavioralCorrelationEngine(Func<DateTime> utcNow, Func<int, bool> hasVerifiedImage)
+        {
+            _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
+            _hasVerifiedImage = hasVerifiedImage ?? throw new ArgumentNullException(nameof(hasVerifiedImage));
+            _lastPruneTime = _utcNow();
+        }
+
+        private static bool HasVerifiedImage(int pid)
+        {
+            var path = SecurityValidation.GetProcessImagePath(pid);
+            return !string.IsNullOrEmpty(path) && SecurityValidation.VerifyAuthenticodeSignature(path!);
+        }
 
         private static readonly HashSet<string> ElectronAndJitApps = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -68,8 +85,7 @@ namespace Sentinel.Core
             var stem = Sentinel.Core.StringNet48.ReplaceIgnoreCase(signal.ProcessName, ".exe", "");
             if (ElectronAndJitApps.Contains(stem))
             {
-                var path = ResolveImagePath(pid);
-                if (!string.IsNullOrEmpty(path) && SecurityValidation.VerifyAuthenticodeSignature(path!))
+                if (_hasVerifiedImage(pid))
                 {
                     if (signal.Tier != DetectionTier.Tier1Behavioral)
                     {
@@ -107,7 +123,7 @@ namespace Sentinel.Core
                     buffer.RemoveAt(0);
                 }
 
-                var cutoff = DateTime.UtcNow - CorrelationWindow;
+                var cutoff = _utcNow() - CorrelationWindow;
                 buffer.RemoveAll(s => s.Timestamp < cutoff);
             }
 
@@ -756,7 +772,7 @@ namespace Sentinel.Core
                 AuthorizedResponse = ResponseAction.QuarantineAndKill,
                 Evidence = $"[COMPOSITE] {evidence} (PID {pid})",
                 Reasoning = reasoning,
-                Timestamp = DateTime.UtcNow,
+                Timestamp = _utcNow(),
                 Metadata = new Dictionary<string, string>
                 {
                     [ResponsePolicy.ChainConfirmedKey] = "true",
@@ -822,20 +838,15 @@ namespace Sentinel.Core
 
         private void PruneHostWideLocked()
         {
-            var cutoff = DateTime.UtcNow - CorrelationWindow;
+            var cutoff = _utcNow() - CorrelationWindow;
             _hostWideDelivery.RemoveAll(s => s.Timestamp < cutoff);
             while (_hostWideDelivery.Count > 40)
                 _hostWideDelivery.RemoveAt(0);
         }
 
-        private static string? ResolveImagePath(int pid)
-        {
-            return SecurityValidation.GetProcessImagePath(pid);
-        }
-
         private void PruneStaleBuffers()
         {
-            var now = DateTime.UtcNow;
+            var now = _utcNow();
             if (now - _lastPruneTime < PruneInterval)
                 return;
             _lastPruneTime = now;

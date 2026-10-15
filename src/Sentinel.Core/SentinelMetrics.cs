@@ -182,6 +182,7 @@ namespace Sentinel.Core
         public TelemetryPipelineSnapshot Pipeline { get; set; } = new();
         public EtwHealthSnapshot Etw { get; set; } = new();
         public bool AuditIntegrityDegraded { get; set; }
+        public EvidenceAnchorStatus EvidenceAnchoring { get; set; } = new("Unknown");
         public Dictionary<string, SensorProgressSnapshot> SensorProgress { get; set; } = new();
         public int PluginCount { get; set; }
         public bool WeightedCorrelationEnabled { get; set; }

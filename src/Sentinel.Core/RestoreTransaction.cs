@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +17,7 @@ namespace Sentinel.Core
         {
             cancellationToken.ThrowIfCancellationRequested();
             destination = Path.GetFullPath(destination);
+            RequireLocalPath(destination);
             if (File.Exists(destination) || Directory.Exists(destination))
                 throw new IOException("Restore destination already exists; refusing to overwrite it.");
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -53,8 +55,20 @@ namespace Sentinel.Core
         public RestoreRecoveryAssessment Inspect(string journalPath)
         {
             using var stream = new FileStream(journalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > 64 * 1024) throw new InvalidDataException("Restore journal exceeds 64 KiB.");
             var record = JsonSerializer.Deserialize<RestoreTransactionRecord>(stream)
                 ?? throw new InvalidDataException("Missing restore journal.");
+            if (record.SchemaVersion != 1 || !Guid.TryParseExact(record.Id, "N", out _) ||
+                record.Sha256 == null || record.Sha256.Length != 64 ||
+                record.Sha256.Any(c => !Uri.IsHexDigit(c)) ||
+                (record.State != "Prepared" && record.State != "Applied" && record.State != "Verified") ||
+                string.IsNullOrEmpty(record.VaultFile) || Path.GetFileName(record.VaultFile) != record.VaultFile ||
+                record.DestinationExistedBefore)
+                throw new InvalidDataException("Invalid or unsupported restore journal.");
+            RequireLocalPath(record.Destination);
+            if (!string.Equals(Path.GetFullPath(record.Destination), record.Destination, StringComparison.OrdinalIgnoreCase) ||
+                record.StagingPath != record.Destination + ".sentinel-restore-" + record.Id)
+                throw new InvalidDataException("Restore journal contains inconsistent paths.");
             bool verified = !string.IsNullOrEmpty(record.Destination) && File.Exists(record.Destination) &&
                 Matches(record.Destination, record.Sha256);
             return new RestoreRecoveryAssessment
@@ -63,6 +77,32 @@ namespace Sentinel.Core
                 Recommendation = verified ? "Destination content matches; retain vault until operator confirms completion" :
                     "Interrupted or changed restore; retain vault and review destination/staging manually"
             };
+        }
+
+        private static void RequireLocalPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path) ||
+                path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal))
+                throw new InvalidDataException("Restore paths must be absolute local paths; network/device paths are refused.");
+            foreach (var part in path.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '\\' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (part.Length == 2 && part[1] == ':') continue; // Windows drive root.
+                string stem = part.Split('.')[0].ToUpperInvariant();
+                if (part.IndexOf(':') >= 0 || part.EndsWith(".", StringComparison.Ordinal) || part.EndsWith(" ", StringComparison.Ordinal) ||
+                    stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+                    (stem.Length == 4 && (stem.StartsWith("COM", StringComparison.Ordinal) || stem.StartsWith("LPT", StringComparison.Ordinal)) &&
+                        stem[3] >= '1' && stem[3] <= '9'))
+                    throw new InvalidDataException("Device names, alternate streams and ambiguous restore paths are refused.");
+            }
+            // A local-looking path through a junction can otherwise reach a remote target.
+            var current = Path.GetFullPath(path);
+            while (!string.IsNullOrEmpty(current))
+            {
+                if ((File.Exists(current) || Directory.Exists(current)) &&
+                    (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Linked restore paths require manual review.");
+                current = Path.GetDirectoryName(current);
+            }
         }
 
         private static void WriteJournal(string path, RestoreTransactionRecord record)

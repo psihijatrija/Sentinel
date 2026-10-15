@@ -110,9 +110,12 @@ export default {
       });
     }
 
-    if (!env.SENTINEL_SHARED_SECRET || env.SENTINEL_SHARED_SECRET.length < 16) {
+    const evidenceRoute = url.pathname.startsWith('/report/');
+    const authenticationSecret = evidenceRoute ? env.SENTINEL_REPORT_SHARED_SECRET : env.SENTINEL_SHARED_SECRET;
+    if (!authenticationSecret || authenticationSecret.length < (evidenceRoute ? 32 : 16) ||
+        (evidenceRoute && authenticationSecret === env.SENTINEL_SHARED_SECRET)) {
       return new Response(JSON.stringify({
-        error: 'Service misconfigured: SENTINEL_SHARED_SECRET required'
+        error: evidenceRoute ? 'Separate deployment reporting credential required' : 'Service authentication is not configured'
       }), {
         status: 503,
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
@@ -170,7 +173,7 @@ export default {
       // v2.0.8 payload: timestamp.nonce.path.body
       const signatureValid = await verifySignature(
         signature,
-        env.SENTINEL_SHARED_SECRET,
+        authenticationSecret,
         timestamp,
         nonce,
         url.pathname,

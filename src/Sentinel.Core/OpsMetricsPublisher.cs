@@ -21,6 +21,7 @@ namespace Sentinel.Core
         private readonly JsonlEventLogger? _eventLogger;
         private readonly DetectionEngine? _detectionEngine;
         private readonly UnifiedEtwSession? _etw;
+        private readonly ThreatReportService? _threatReports;
         private readonly PluginRegistry _plugins;
         private readonly WeightedCorrelationConfig _weightedConfig;
         private readonly ILogger<OpsMetricsPublisher> _logger;
@@ -32,7 +33,7 @@ namespace Sentinel.Core
             WeightedCorrelationConfig weightedConfig,
             ILogger<OpsMetricsPublisher> logger,
             MonitorRegistry? monitorRegistry = null,
-            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null)
+            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null, ThreatReportService? threatReports = null)
         {
             _metrics = metrics;
             _plugins = plugins;
@@ -42,6 +43,7 @@ namespace Sentinel.Core
             _eventLogger = eventLogger;
             _detectionEngine = detectionEngine;
             _etw = etw;
+            _threatReports = threatReports;
 
             var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
             _outputPath = Path.Combine(programData, "Sentinel", "ops_metrics.json");
@@ -86,6 +88,7 @@ namespace Sentinel.Core
             snap.Pipeline = _detectionEngine?.GetTelemetryHealth() ?? new TelemetryPipelineSnapshot();
             snap.Etw = _etw?.LastHealthSnapshot ?? new EtwHealthSnapshot();
             snap.AuditIntegrityDegraded = _eventLogger?.AuditIntegrityDegraded ?? true;
+            snap.EvidenceAnchoring = _threatReports?.AnchorStatus ?? new EvidenceAnchorStatus("Unknown");
 
             if (_monitorRegistry != null)
             {

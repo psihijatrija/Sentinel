@@ -180,7 +180,7 @@ namespace Sentinel.Core
             lock (_networkTamper)
             {
                 _networkTamper.Add(signal);
-                var cutoff = DateTime.UtcNow - CorrelationWindow;
+                var cutoff = _utcNow() - CorrelationWindow;
                 _networkTamper.RemoveAll(s => s.Timestamp < cutoff);
                 while (_networkTamper.Count > 40)
                     _networkTamper.RemoveAt(0);
@@ -203,7 +203,7 @@ namespace Sentinel.Core
             List<DetectionEvent> snapshot;
             lock (_networkTamper)
             {
-                var cutoff = DateTime.UtcNow - CorrelationWindow;
+                var cutoff = _utcNow() - CorrelationWindow;
                 _networkTamper.RemoveAll(s => s.Timestamp < cutoff);
                 snapshot = new List<DetectionEvent>(_networkTamper);
             }
@@ -217,8 +217,8 @@ namespace Sentinel.Core
 
             // Re-emit cooldown so a burst of tamper signals doesn't spam shield actions
             // (the shield engine is single-flight anyway, but keep the log clean).
-            if (DateTime.UtcNow - _lastVpnShieldEmit < VpnShieldReEmitCooldown) return;
-            _lastVpnShieldEmit = DateTime.UtcNow;
+            if (_utcNow() - _lastVpnShieldEmit < VpnShieldReEmitCooldown) return;
+            _lastVpnShieldEmit = _utcNow();
 
             var vectorList = string.Join(" + ", vectors);
             var composite = new DetectionEvent
@@ -236,7 +236,7 @@ namespace Sentinel.Core
                             "active man-in-the-middle on the local path. Sentinel raises a protective VPN " +
                             "tunnel to shield the user's traffic while it cleans the network, then drops the " +
                             "tunnel once the path is verified clean.",
-                Timestamp = DateTime.UtcNow,
+                Timestamp = _utcNow(),
                 Metadata = new Dictionary<string, string>
                 {
                     [ResponsePolicy.ChainConfirmedKey] = "true",

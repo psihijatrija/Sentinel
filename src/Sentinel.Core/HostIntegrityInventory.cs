@@ -67,6 +67,7 @@ namespace Sentinel.Core
     public sealed class HostIntegrityHistory
     {
         private readonly string _path;
+        private bool _loadFailed;
         public HostIntegrityHistory(string? customDirectory = null)
         {
             var directory = customDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -79,15 +80,25 @@ namespace Sentinel.Core
         public HostIntegritySnapshot? Load()
         {
             if (!File.Exists(_path)) return null;
-            using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var snapshot = JsonSerializer.Deserialize<HostIntegritySnapshot>(stream);
-            if (snapshot == null || snapshot.SchemaVersion != 1 || snapshot.Network == null || snapshot.RootCertificates == null || snapshot.ObservedContexts == null)
-                throw new InvalidDataException("Unsupported or corrupt integrity observation baseline.");
-            return snapshot;
+            try
+            {
+                using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (stream.Length > 20 * 1024 * 1024) throw new InvalidDataException("Integrity observation baseline exceeds 20 MiB.");
+                var snapshot = JsonSerializer.Deserialize<HostIntegritySnapshot>(stream);
+                if (snapshot == null || snapshot.SchemaVersion != 1 || snapshot.Network == null || snapshot.RootCertificates == null || snapshot.ObservedContexts == null)
+                    throw new InvalidDataException("Unsupported or corrupt integrity observation baseline.");
+                return snapshot;
+            }
+            catch
+            {
+                _loadFailed = true;
+                throw; // Monitor logs degradation and preserves the unreadable baseline.
+            }
         }
 
         public void Save(HostIntegritySnapshot snapshot)
         {
+            if (_loadFailed) throw new InvalidDataException("Unreadable integrity history retained; automatic replacement refused.");
             var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(snapshot));
             var temp = _path + ".tmp";
             using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.Read | FileShare.Delete))

@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.ML;
 using Microsoft.ML.Data;
 using Sentinel.Core.Ml;
@@ -91,6 +93,29 @@ namespace Sentinel.MlTrainer
             return 0;
         }
 
+        private static void WriteTrainingReport(string modelPath, string sourcePath, string csvPath,
+            int rows, BinaryClassificationMetrics metrics, string[] features)
+        {
+            static string Digest(string path)
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            }
+            var report = new
+            {
+                SchemaVersion = 1, CreatedUtc = DateTimeOffset.UtcNow,
+                Model = Path.GetFileName(modelPath), ModelSha256 = Digest(modelPath),
+                SourceSha256 = Digest(sourcePath), CsvSha256 = Digest(csvPath),
+                Seed = 42, TestFraction = 0.2, Rows = rows, Features = features,
+                TrainerVersion = typeof(MLContext).Assembly.GetName().Version?.ToString(),
+                ModelIsEvaluatedTrainOnlyArtifact = true,
+                EvaluationScope = "Seeded internal random split; not an independent, family-separated or temporal malware benchmark",
+                metrics.Accuracy, metrics.AreaUnderRocCurve, metrics.F1Score,
+                metrics.PositivePrecision, metrics.PositiveRecall, metrics.NegativePrecision, metrics.NegativeRecall
+            };
+            File.WriteAllText(modelPath + ".training.json", JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+        }
+
         private static BinaryClassificationMetrics TrainPeModel(MLContext ml, string zipPath, string outPath)
         {
             string csvPath = ExtractCsv(zipPath);
@@ -116,9 +141,9 @@ namespace Sentinel.MlTrainer
                 var metrics = ml.BinaryClassification.Evaluate(
                     predictions, labelColumnName: nameof(PeFeatureVector.Label));
 
-                var fullModel = pipeline.Fit(data);
-                using var fs = File.Create(outPath);
-                ml.Model.Save(fullModel, data.Schema, fs);
+                // Ship the exact train-only model whose held-out metrics were measured.
+                using (var fs = File.Create(outPath)) ml.Model.Save(model, data.Schema, fs);
+                WriteTrainingReport(outPath, zipPath, csvPath, rows.Count, metrics, PeFeatureVector.FeatureNames);
                 return metrics;
             }
             finally
@@ -258,9 +283,9 @@ namespace Sentinel.MlTrainer
                 var metrics = ml.BinaryClassification.Evaluate(
                     predictions, labelColumnName: nameof(UrlFeatureVector.Label));
 
-                var fullModel = pipeline.Fit(data);
-                using var fs = File.Create(outPath);
-                ml.Model.Save(fullModel, data.Schema, fs);
+                // Ship the exact train-only model whose held-out metrics were measured.
+                using (var fs = File.Create(outPath)) ml.Model.Save(model, data.Schema, fs);
+                WriteTrainingReport(outPath, zipPath, csvPath, rows.Count, metrics, UrlFeatureVector.FeatureNames);
                 return metrics;
             }
             finally
@@ -320,9 +345,9 @@ namespace Sentinel.MlTrainer
                 var metrics = ml.BinaryClassification.Evaluate(
                     predictions, labelColumnName: nameof(CommandLineFeatureVector.Label));
 
-                var fullModel = pipeline.Fit(data);
-                using var fs = File.Create(outPath);
-                ml.Model.Save(fullModel, data.Schema, fs);
+                // Ship the exact train-only model whose held-out metrics were measured.
+                using (var fs = File.Create(outPath)) ml.Model.Save(model, data.Schema, fs);
+                WriteTrainingReport(outPath, csvPathDirect ?? zipPath!, csvPath, rows.Count, metrics, CommandLineFeatureVector.FeatureNames);
                 return metrics;
             }
             finally

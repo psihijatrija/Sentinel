@@ -36,6 +36,34 @@ namespace Sentinel.Core
         private readonly ConcurrentDictionary<string, Incident> _activeIncidents = new();
         private readonly ConcurrentDictionary<int, string> _pidToIncident = new(); // PID -> IncidentId
         private long _incidentCounter;
+        private readonly object _stateGate = new();
+        private readonly IIncidentStateStore? _stateStore;
+        public bool PersistenceDegraded { get; private set; }
+        private bool _disposed;
+        private bool _stateChanged;
+        private const int MaximumDetectionsPerIncident = 256;
+
+        private void SaveState()
+        {
+            if (_stateStore == null || !_stateChanged) return;
+            try
+            {
+                _stateStore.Save(new IncidentStateSnapshot
+                {
+                    TotalCreated = _incidentCounter,
+                    Incidents = _activeIncidents.Values.ToList()
+                });
+                if (PersistenceDegraded) _logger.LogInformation("Incident history persistence recovered");
+                PersistenceDegraded = false;
+                _stateChanged = false;
+            }
+            catch (Exception ex)
+            {
+                if (!PersistenceDegraded)
+                    _logger.LogError(ex, "Incident history persistence degraded; detection remains active");
+                PersistenceDegraded = true;
+            }
+        }
 
         private static readonly TimeSpan GroupingWindow = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan AutoCloseDelay = TimeSpan.FromMinutes(5);
@@ -44,11 +72,32 @@ namespace Sentinel.Core
         public IncidentManager(
             ProcessAncestryCache ancestryCache,
             JsonlEventLogger eventLogger,
-            ILogger<IncidentManager> logger)
+            ILogger<IncidentManager> logger,
+            IIncidentStateStore? stateStore = null)
         {
             _ancestryCache = ancestryCache;
             _eventLogger = eventLogger;
             _logger = logger;
+            _stateStore = stateStore;
+            if (_stateStore != null)
+            {
+                try
+                {
+                    var snapshot = _stateStore.Load();
+                    _incidentCounter = snapshot.TotalCreated;
+                    foreach (var incident in snapshot.Incidents)
+                    {
+                        incident.RecoveredHistory = true;
+                        _activeIncidents[incident.Id] = incident;
+                    }
+                    // Deliberately do not restore PID mappings, correlation or action authority.
+                }
+                catch (Exception ex)
+                {
+                    PersistenceDegraded = true;
+                    _logger.LogError(ex, "Incident history recovery failed; prior state retained on disk");
+                }
+            }
             _lifecycleTimer = new System.Threading.Timer(ProcessLifecycles, null, LifecycleTickInterval, LifecycleTickInterval);
         }
 
@@ -58,35 +107,56 @@ namespace Sentinel.Core
         /// </summary>
         public Incident RegisterDetection(DetectionEvent detection)
         {
-            var incidentId = FindOrCreateIncident(detection);
-            var incident = _activeIncidents[incidentId];
-
-            lock (incident)
+            lock (_stateGate)
             {
-                incident.Detections.Add(new IncidentDetection
-                {
-                    DetectionEvent = detection,
-                    ReceivedAt = DateTimeOffset.UtcNow
-                });
+                if (_disposed) throw new ObjectDisposedException(nameof(IncidentManager));
+                if (detection == null) throw new ArgumentNullException(nameof(detection));
+                // Detach persisted history from caller-owned mutable metadata.
+                detection = System.Text.Json.JsonSerializer.Deserialize<DetectionEvent>(
+                    System.Text.Json.JsonSerializer.Serialize(detection))!;
+                detection.Metadata ??= new Dictionary<string, string>();
+                var incidentId = FindOrCreateIncident(detection);
+                var incident = _activeIncidents[incidentId];
 
-                // Escalate severity based on detection count and confidence
-                EscalateSeverity(incident);
-
-                // Transition state if needed
-                if (incident.State == IncidentState.Open && incident.Detections.Count >= 2)
+                lock (incident)
                 {
-                    incident.State = IncidentState.Active;
-                    incident.LastStateChange = DateTimeOffset.UtcNow;
+                    incident.Detections.Add(new IncidentDetection
+                    {
+                        DetectionEvent = detection,
+                        ReceivedAt = DateTimeOffset.UtcNow
+                    });
+
+                    // Escalate severity based on detection count and confidence
+                    var priorSeverity = incident.Severity;
+                    EscalateSeverity(incident);
+                    if (incident.Severity < priorSeverity) incident.Severity = priorSeverity;
+
+                    incident.TotalDetectionCount++;
+                    if (incident.Detections.Count > MaximumDetectionsPerIncident)
+                    {
+                        incident.Detections.RemoveAt(0);
+                        incident.OmittedDetectionCount++;
+                    }
+
+                    // Transition state if needed
+                    if (incident.State == IncidentState.Open && incident.Detections.Count >= 2)
+                    {
+                        incident.State = IncidentState.Active;
+                        incident.LastStateChange = DateTimeOffset.UtcNow;
+                    }
+
+                    incident.LastActivity = DateTimeOffset.UtcNow;
                 }
 
-                incident.LastActivity = DateTimeOffset.UtcNow;
+                _logger.LogDebug(
+                    "[IncidentManager] Detection '{Rule}' on PID {Pid} -> Incident {Id} (state={State}, severity={Severity}, detections={Count})",
+                    detection.RuleName, detection.ProcessId, incidentId, incident.State, incident.Severity, incident.Detections.Count);
+
+                _stateChanged = true;
+                SaveState();
+                return incident;
+
             }
-
-            _logger.LogDebug(
-                "[IncidentManager] Detection '{Rule}' on PID {Pid} -> Incident {Id} (state={State}, severity={Severity}, detections={Count})",
-                detection.RuleName, detection.ProcessId, incidentId, incident.State, incident.Severity, incident.Detections.Count);
-
-            return incident;
         }
 
         /// <summary>
@@ -94,15 +164,22 @@ namespace Sentinel.Core
         /// </summary>
         public void MarkResponded(string incidentId, string actionTaken)
         {
-            if (_activeIncidents.TryGetValue(incidentId, out var incident))
+            lock (_stateGate)
             {
-                lock (incident)
+                if (_disposed) return;
+                if (_activeIncidents.TryGetValue(incidentId, out var incident) && !incident.RecoveredHistory)
                 {
-                    incident.State = IncidentState.Responded;
-                    incident.ResponseAction = actionTaken;
-                    incident.RespondedAt = DateTimeOffset.UtcNow;
-                    incident.LastStateChange = DateTimeOffset.UtcNow;
+                    lock (incident)
+                    {
+                        incident.State = IncidentState.Responded;
+                        incident.ResponseAction = actionTaken;
+                        incident.RespondedAt = DateTimeOffset.UtcNow;
+                        incident.LastStateChange = DateTimeOffset.UtcNow;
+                        _stateChanged = true;
+                    }
                 }
+
+                SaveState();
             }
         }
 
@@ -114,6 +191,46 @@ namespace Sentinel.Core
             if (_pidToIncident.TryGetValue(pid, out var incidentId))
             {
                 MarkResponded(incidentId, actionTaken);
+            }
+        }
+
+        public void BeginResponseEvaluation(int pid, ResponseAction requestedAction, string? incidentId = null)
+        {
+            lock (_stateGate)
+            {
+                if (_disposed) return;
+                string? id = incidentId;
+                if (id == null && !_pidToIncident.TryGetValue(pid, out id)) return;
+                if (!_activeIncidents.TryGetValue(id, out var incident) || incident.RecoveredHistory) return;
+                incident.ResponseEvaluation = new IncidentResponseEvaluation
+                {
+                    Id = Guid.NewGuid().ToString("N"), RequestedAction = requestedAction,
+                    StartedUtc = DateTimeOffset.UtcNow, State = "Pending"
+                };
+                _stateChanged = true;
+                SaveState();
+            }
+        }
+
+        public void CompleteResponseEvaluation(int pid, ResponseExecutionOutcome outcome, string action, string reason, string? incidentId = null)
+        {
+            lock (_stateGate)
+            {
+                if (_disposed) return;
+                string? id = incidentId;
+                if (id == null && !_pidToIncident.TryGetValue(pid, out id)) return;
+                if (!_activeIncidents.TryGetValue(id, out var incident) || incident.RecoveredHistory) return;
+                if (incident.ResponseEvaluation == null && outcome == ResponseExecutionOutcome.Observed) return;
+                if (incident.ResponseEvaluation != null)
+                {
+                    incident.ResponseEvaluation.State = outcome.ToString();
+                    incident.ResponseEvaluation.CompletedUtc = DateTimeOffset.UtcNow;
+                    incident.ResponseEvaluation.Reason = reason;
+                }
+                incident.ResponseAction = action;
+                if (outcome == ResponseExecutionOutcome.Confirmed) MarkResponded(id, action);
+                _stateChanged = true;
+                SaveState();
             }
         }
 
@@ -145,6 +262,8 @@ namespace Sentinel.Core
             TotalCreated = _incidentCounter,
             ActiveCount = _activeIncidents.Count(i => i.Value.State != IncidentState.Closed),
             RespondedCount = _activeIncidents.Count(i => i.Value.State == IncidentState.Responded),
+            PersistenceDegraded = PersistenceDegraded,
+            RecoveredCount = _activeIncidents.Count(i => i.Value.RecoveredHistory),
             ClosedCount = _activeIncidents.Count(i => i.Value.State == IncidentState.Closed)
         };
 
@@ -160,7 +279,7 @@ namespace Sentinel.Core
             if (pid > 0 && _pidToIncident.TryGetValue(pid, out var existingId))
             {
                 if (_activeIncidents.TryGetValue(existingId, out var existing) &&
-                    existing.State != IncidentState.Closed &&
+                    !existing.RecoveredHistory && existing.State != IncidentState.Closed &&
                     DateTimeOffset.UtcNow - existing.LastActivity < GroupingWindow)
                 {
                     return existingId;
@@ -189,7 +308,7 @@ namespace Sentinel.Core
             if (detection.Metadata.TryGetValue("SHA256", out var hash) && !string.IsNullOrEmpty(hash))
             {
                 var hashIncident = _activeIncidents.Values.FirstOrDefault(i =>
-                    i.State != IncidentState.Closed &&
+                    !i.RecoveredHistory && i.State != IncidentState.Closed &&
                     i.Hashes.Contains(hash) &&
                     DateTimeOffset.UtcNow - i.LastActivity < GroupingWindow);
 
@@ -206,7 +325,8 @@ namespace Sentinel.Core
             }
 
             // 4. Create new incident
-            var newId = $"INC-{Interlocked.Increment(ref _incidentCounter):D6}";
+            Interlocked.Increment(ref _incidentCounter);
+            var newId = "INC-" + Guid.NewGuid().ToString("N");
             var newIncident = new Incident
             {
                 Id = newId,
@@ -278,75 +398,91 @@ namespace Sentinel.Core
 
         private void ProcessLifecycles(object? state)
         {
-            var now = DateTimeOffset.UtcNow;
-            var toClose = new List<string>();
-
-            foreach (var (id, incident) in _activeIncidents)
+            lock (_stateGate)
             {
-                lock (incident)
+                if (_disposed) return;
+                var now = DateTimeOffset.UtcNow;
+                var toClose = new List<string>();
+
+                foreach (var (id, incident) in _activeIncidents)
                 {
-                    // Auto-close responded incidents after 5 minutes of inactivity
-                    if (incident.State == IncidentState.Responded &&
-                        now - incident.LastActivity > AutoCloseDelay)
+                    lock (incident)
                     {
-                        incident.State = IncidentState.Closed;
-                        incident.ClosedAt = now;
-                        toClose.Add(id);
-                    }
+                        // Auto-close responded incidents after 5 minutes of inactivity
+                        if (incident.State == IncidentState.Responded &&
+                            now - incident.LastActivity > AutoCloseDelay)
+                        {
+                            incident.State = IncidentState.Closed;
+                            incident.ClosedAt = now;
+                            toClose.Add(id);
+                        }
 
-                    // Auto-close stale open/active incidents (no new detections in 10 minutes)
-                    if ((incident.State == IncidentState.Open || incident.State == IncidentState.Active) &&
-                        now - incident.LastActivity > TimeSpan.FromMinutes(10))
-                    {
-                        incident.State = IncidentState.Closed;
-                        incident.ClosedAt = now;
-                        incident.ResponseAction = "AutoClosed (stale)";
-                        toClose.Add(id);
-                    }
-                }
-            }
-
-            // Log closed incidents and clean up PID mappings
-            foreach (var id in toClose)
-            {
-                if (_activeIncidents.TryGetValue(id, out var closed))
-                {
-                    _ = _eventLogger.LogEventAsync("incident_closed", new
-                    {
-                        IncidentId = id,
-                        closed.Severity,
-                        closed.State,
-                        closed.ResponseAction,
-                        DetectionCount = closed.Detections.Count,
-                        Duration = (closed.ClosedAt ?? now) - closed.CreatedAt,
-                        closed.IsReinfection
-                    });
-
-                    // Remove PID mappings for closed incident
-                    foreach (var pid in closed.InvolvedPids)
-                    {
-                        _pidToIncident.TryRemove(pid, out _);
+                        // Auto-close stale open/active incidents (no new detections in 10 minutes)
+                        if ((incident.State == IncidentState.Open || incident.State == IncidentState.Active) &&
+                            now - incident.LastActivity > TimeSpan.FromMinutes(10) &&
+                            incident.ResponseEvaluation?.State != "Pending")
+                        {
+                            incident.State = IncidentState.Closed;
+                            incident.ClosedAt = now;
+                            incident.ClosureReason = "No recent activity; host outcome not verified";
+                            toClose.Add(id);
+                        }
                     }
                 }
 
-                // Remove from active after 30 minutes (keep for querying)
-                // Actually keep in memory for now - prune separately
-            }
-
-            // Prune incidents closed more than 30 minutes ago
-            var pruneThreshold = now - TimeSpan.FromMinutes(30);
-            foreach (var (id, inc) in _activeIncidents)
-            {
-                if (inc.State == IncidentState.Closed && inc.ClosedAt < pruneThreshold)
+                if (toClose.Count > 0) _stateChanged = true;
+                // Log closed incidents and clean up PID mappings
+                foreach (var id in toClose)
                 {
-                    _activeIncidents.TryRemove(id, out _);
+                    if (_activeIncidents.TryGetValue(id, out var closed))
+                    {
+                        _ = _eventLogger.LogEventAsync("incident_closed", new
+                        {
+                            IncidentId = id,
+                            closed.Severity,
+                            closed.State,
+                            closed.ResponseAction,
+                            DetectionCount = closed.TotalDetectionCount,
+                        closed.OmittedDetectionCount, closed.ClosureReason,
+                            Duration = (closed.ClosedAt ?? now) - closed.CreatedAt,
+                            closed.IsReinfection
+                        });
+
+                        // Remove PID mappings for closed incident
+                        foreach (var pid in closed.InvolvedPids)
+                        {
+                            if (_pidToIncident.TryGetValue(pid, out var mapped) && mapped == id)
+                                _pidToIncident.TryRemove(pid, out _);
+                        }
+                    }
+
+                    // Remove from active after 30 minutes (keep for querying)
+                    // Actually keep in memory for now - prune separately
                 }
+
+                // Prune incidents closed more than 30 minutes ago
+                var pruneThreshold = now - TimeSpan.FromMinutes(30);
+                foreach (var (id, inc) in _activeIncidents)
+                {
+                    if (inc.State == IncidentState.Closed && inc.ClosedAt < pruneThreshold)
+                    {
+                        if (_activeIncidents.TryRemove(id, out _)) _stateChanged = true;
+                    }
+                }
+
+                SaveState();
             }
         }
 
         public void Dispose()
         {
             _lifecycleTimer.Dispose();
+            lock (_stateGate)
+            {
+                if (_disposed) return;
+                SaveState();
+                _disposed = true;
+            }
         }
     }
 
@@ -372,6 +508,9 @@ namespace Sentinel.Core
 
     public sealed class Incident
     {
+        /// <summary>Recovered evidence only: never rebind old PIDs or replay responses.</summary>
+        public bool RecoveredHistory { get; set; }
+        public IncidentResponseEvaluation? ResponseEvaluation { get; set; }
         public string Id { get; set; } = "";
         public IncidentState State { get; set; } = IncidentState.Open;
         public IncidentSeverity Severity { get; set; } = IncidentSeverity.Low;
@@ -382,11 +521,24 @@ namespace Sentinel.Core
         public DateTimeOffset? ClosedAt { get; set; }
         public int PrimaryPid { get; set; }
         public string PrimaryProcessName { get; set; } = "";
+        public string? ClosureReason { get; set; }
         public string? ResponseAction { get; set; }
         public bool IsReinfection { get; set; }
         public HashSet<int> InvolvedPids { get; set; } = new();
         public HashSet<string> Hashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public long TotalDetectionCount { get; set; }
+        public long OmittedDetectionCount { get; set; }
         public List<IncidentDetection> Detections { get; set; } = new();
+    }
+
+    public sealed class IncidentResponseEvaluation
+    {
+        public string Id { get; set; } = "";
+        public ResponseAction RequestedAction { get; set; }
+        public DateTimeOffset StartedUtc { get; set; }
+        public DateTimeOffset? CompletedUtc { get; set; }
+        public string State { get; set; } = "Pending";
+        public string? Reason { get; set; }
     }
 
     public sealed class IncidentDetection
@@ -397,6 +549,8 @@ namespace Sentinel.Core
 
     public sealed class IncidentStats
     {
+        public bool PersistenceDegraded { get; set; }
+        public int RecoveredCount { get; set; }
         public long TotalCreated { get; set; }
         public int ActiveCount { get; set; }
         public int RespondedCount { get; set; }

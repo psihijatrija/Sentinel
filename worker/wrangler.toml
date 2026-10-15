@@ -16,3 +16,10 @@ name = "RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "0" # Auto-assigned by Cloudflare on deploy
 simple = { limit = 60, period = 60 }
+
+# Mutating /report/* routes require a deployment-only credential distinct from
+# the public lookup compatibility credential. Provision it with:
+# wrangler secret put SENTINEL_REPORT_SHARED_SECRET
+# Configure the matching client ReportingProxySharedSecret in its encrypted store.
+# Evidence anchors additionally need an EVIDENCE_STORE KV namespace binding.
+# Never put deployment secret values in this file.
