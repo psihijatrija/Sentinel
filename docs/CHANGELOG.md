@@ -29,6 +29,8 @@
   verify restored content and retain the encrypted vault for recovery review.
 
 ### Release workflow
+- Handle an expected missing release without leaving a failing native exit status;
+  genuine lookup/authentication errors still block publication.
 - Keep the product, tests and diagnostics on `net48-windows`; no Linux CI/product target.
 - Require the Windows Framework test suite and Worker tests before installer publication.
 - Attach a directly copyable Worker JavaScript file, Windows Framework diagnostics ZIP
