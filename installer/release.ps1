@@ -26,12 +26,17 @@
 
 .PARAMETER DryRun
     Print every action without changing files, committing, pushing, or publishing.
+
+.PARAMETER PrepareOnly
+    Bump and stamp release metadata without building, committing or publishing.
+    Use when the requested Windows installer will be built by GitHub Actions.
 #>
 [CmdletBinding()]
 param(
     [string]$Version,
     [switch]$NoPublish,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,7 +117,11 @@ Write-Step "Next version:    $Next"
 
 if ($DryRun) {
     Write-Host "[DryRun] Would set version.txt -> $Next" -ForegroundColor Yellow
-    Write-Host "[DryRun] Would run build.ps1, commit, push$(if (-not $NoPublish) {', and publish GitHub release'})." -ForegroundColor Yellow
+    if ($PrepareOnly) {
+        Write-Host "[DryRun] Would stamp release metadata only; Windows GitHub Actions builds the installer." -ForegroundColor Yellow
+    } else {
+        Write-Host "[DryRun] Would run build.ps1, commit, push$(if (-not $NoPublish) {', and publish GitHub release'})." -ForegroundColor Yellow
+    }
     return
 }
 
@@ -139,6 +148,12 @@ if (Test-Path $ReadmePath) {
 }
 
 #  2. Build installer (publishes, stamps, compiles Inno Setup, copies to releases\) 
+if ($PrepareOnly) {
+    Write-Step "Stamping release metadata for the Windows GitHub Actions build"
+    & (Join-Path $PSScriptRoot "build.ps1") -StampOnly
+    return
+}
+
 Write-Step "Building installer via build.ps1"
 & (Join-Path $PSScriptRoot "build.ps1")
 if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed" }

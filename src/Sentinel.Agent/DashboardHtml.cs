@@ -722,6 +722,12 @@ function renderEvents(events, containerId) {{
             var d = parsed.data;
             title = d.RuleName || d.ActionTaken || type;
             detail = d.ProcessName ? (d.ProcessName + ' (PID ' + d.ProcessId + ')') : (d.Evidence || '');
+            if (type === 'integrity_change') {{
+                title = (d.Scope || 'Integrity') + ': ' + (d.Change || 'Observation');
+                detail = (d.ObjectId || '') + ' - ' + (d.Attribution || 'Attribution unknown');
+            }}
+            if (type === 'response' && d.Reason) detail += ' - ' + d.Reason;
+            if (d.Metadata && d.Metadata.CorrelationDecision) detail += ' - Correlation: ' + d.Metadata.CorrelationDecision;
         }} else {{
             title = type;
         }}
@@ -837,14 +843,29 @@ function loadOps() {{
             var telRecv = ops.TelemetryReceived || ops.telemetryReceived || 0;
             var telDrop = ops.TelemetryDropped || ops.telemetryDropped || 0;
             var dropRate = telRecv > 0 ? ((telDrop / telRecv) * 100).toFixed(2) : '0.00';
+            var sensors = ops.SensorProgress || ops.sensorProgress || {{}};
+            var healthy = 0, degraded = 0, unknown = 0;
+            for (var sensorName in sensors) {{
+                if (!sensors.hasOwnProperty(sensorName)) continue;
+                var sensorInfo = sensors[sensorName] || {{}};
+                var sensorState = sensorInfo.State || sensorInfo.state || 'Unknown';
+                if (sensorState === 'Healthy') healthy++;
+                else if (sensorState === 'Failed' || sensorState === 'Stale') degraded++;
+                else unknown++;
+            }}
             var metrics = [
                 ['Telemetry/sec', ops.TelemetryPerSecond || ops.telemetryPerSecond || 0],
                 ['Detections/sec', ops.DetectionsPerSecond || ops.detectionsPerSecond || 0],
                 ['Detections Total', ops.DetectionsTotal || ops.detectionsTotal || 0],
                 ['Responses Total', ops.ResponsesTotal || ops.responsesTotal || 0],
                 ['Drop Rate', dropRate + '%'],
+                ['Queue wait P95', (ops.QueueWaitMsP95 || ops.queueWaitMsP95 || 0).toFixed(1) + 'ms'],
+                ['Pipeline', (ops.Pipeline || ops.pipeline || {{}}).State || (ops.pipeline || {{}}).state || 'Unknown'],
+                ['Oldest queued', ((ops.Pipeline || ops.pipeline || {{}}).OldestQueuedAgeMs || 0).toFixed(1) + 'ms'],
                 ['Correlation P50', (ops.CorrelationLatencyMsP50 || ops.correlationLatencyMsP50 || 0) + 'ms'],
                 ['Monitors', (ops.RunningMonitors || ops.runningMonitors || 0) + '/' + (ops.RegisteredMonitors || ops.registeredMonitors || 0)],
+                ['Sensor progress', healthy + ' verified / ' + degraded + ' degraded / ' + unknown + ' unknown'],
+                ['Audit integrity', !ops.hasOwnProperty('AuditIntegrityDegraded') && !ops.hasOwnProperty('auditIntegrityDegraded') ? 'Unknown' : (ops.AuditIntegrityDegraded || ops.auditIntegrityDegraded) ? 'Degraded' : 'Available'],
                 ['Plugins', ops.PluginCount || ops.pluginCount || 0],
                 ['Weighted Correlation', (ops.WeightedCorrelationEnabled || ops.weightedCorrelationEnabled) ? 'Enabled' : 'Disabled'],
                 ['Product Version', ops.ProductVersion || ops.productVersion || '\u2014']

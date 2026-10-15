@@ -16,7 +16,11 @@ correlation engine is explainable: every composite emits the score breakdown and
 ATT&CK techniques that fired.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.1.6 (single source of truth: `version.txt`)
+**Version:** 3.1.7 (single source of truth: `version.txt`)
+
+Engineering assessment, provisional subsystem ratings and remaining validation:
+[quality review](docs/QUALITY_REVIEW.md). Offline replay, evidence verification,
+restore inspection and private exports: [diagnostics](tools/Sentinel.Diagnostics/README.md).
 
 ## Legal Disclaimer
 

@@ -25,6 +25,17 @@ namespace Sentinel.Core
         private FileStream? _auditFileStream;
         private StreamWriter? _auditWriter;
         private bool _auditDegraded;
+        private EvidenceLedger? _auditLedger;
+        private long _lastChainedDroppedEvents;
+        private volatile bool _auditIntegrityDegraded;
+        public bool AuditIntegrityDegraded => _auditDegraded || _auditIntegrityDegraded;
+        private volatile AuditChainCheckpoint? _auditCheckpoint;
+        public AuditChainCheckpoint? GetAuditCheckpoint()
+        {
+            var checkpoint = _auditCheckpoint;
+            return AuditIntegrityDegraded || checkpoint == null ? null : new AuditChainCheckpoint
+            { File = checkpoint.File, Sequence = checkpoint.Sequence, Hash = checkpoint.Hash };
+        }
 
         public string LogFilePath => _logFilePath;
         private long _droppedEvents;
@@ -113,6 +124,8 @@ namespace Sentinel.Core
                 _auditFileStream = new FileStream(_auditLogFilePath, FileMode.Append, FileAccess.Write,
                     FileShare.Read | FileShare.Delete);
                 _auditWriter = new StreamWriter(_auditFileStream) { AutoFlush = true };
+                _auditLedger = new EvidenceLedger(Path.Combine(Path.GetDirectoryName(_auditLogFilePath)!,
+                    $"audit-chain-{DateTime.UtcNow:yyyy-MM-dd}.jsonl"));
                 _auditDegraded = false;
 
                 // Prune audit files older than 90 days
@@ -121,6 +134,38 @@ namespace Sentinel.Core
             catch
             {
                 _auditDegraded = true;
+            }
+        }
+
+        private void AppendIntegrityRecord(string json)
+        {
+            try
+            {
+                if (_auditLedger == null) throw new IOException("Audit ledger unavailable.");
+                long dropped = DroppedEvents;
+                if (dropped > _lastChainedDroppedEvents)
+                {
+                    _auditLedger.Append(JsonSerializer.Serialize(new
+                    {
+                        AuditType = "EVIDENCE_GAP", Timestamp = DateTime.UtcNow,
+                        Reason = "Event logger discarded records; their content and attribution are unknown",
+                        CounterScope = "Current logger instance; counter resets after restart",
+                        DroppedSincePreviousCheckpoint = dropped - _lastChainedDroppedEvents
+                    }));
+                    _lastChainedDroppedEvents = dropped;
+                }
+                var checkpoint = _auditLedger.Append(json);
+                _auditCheckpoint = new AuditChainCheckpoint
+                {
+                    File = Path.GetFileName(_auditLogFilePath).Replace("audit-", "audit-chain-"),
+                    Sequence = checkpoint.Sequence, Hash = checkpoint.Hash
+                };
+                _auditIntegrityDegraded = false;
+            }
+            catch (Exception ex)
+            {
+                _auditIntegrityDegraded = true;
+                System.Diagnostics.Trace.TraceWarning("Evidence ledger append failed: {0}", ex.Message);
             }
         }
 
@@ -155,9 +200,7 @@ namespace Sentinel.Core
             int processId,
             string justification)
         {
-            TryOpenAuditFileInternal();
-            if (_auditDegraded || _auditWriter == null) return;
-
+            if (_disposed) return;
             var entry = new
             {
                 AuditType       = "PRE_ACTION",
@@ -177,6 +220,9 @@ namespace Sentinel.Core
             await _auditSemaphore.WaitAsync();
             try
             {
+                TryOpenAuditFileInternal();
+                if (_auditDegraded || _auditWriter == null) return;
+                AppendIntegrityRecord(json);
                 await _auditWriter.WriteLineAsync(json);
             }
             catch
@@ -196,9 +242,7 @@ namespace Sentinel.Core
             bool succeeded,
             string? errorMessage = null)
         {
-            TryOpenAuditFileInternal();
-            if (_auditDegraded || _auditWriter == null) return;
-
+            if (_disposed) return;
             var entry = new
             {
                 AuditType    = "ACTION_OUTCOME",
@@ -214,6 +258,9 @@ namespace Sentinel.Core
             await _auditSemaphore.WaitAsync();
             try
             {
+                TryOpenAuditFileInternal();
+                if (_auditDegraded || _auditWriter == null) return;
+                AppendIntegrityRecord(json);
                 await _auditWriter.WriteLineAsync(json);
             }
             catch
@@ -245,9 +292,6 @@ namespace Sentinel.Core
         {
             try
             {
-                TryOpenAuditFileInternal();
-                if (_auditDegraded || _auditWriter == null) return;
-
                 var entry = new
                 {
                     AuditType      = "SERVICE_STOP_SUSPECTED",
@@ -263,8 +307,14 @@ namespace Sentinel.Core
 
                 // Best-effort synchronous write - cannot await on a dying process. The audit
                 // writer is AutoFlush, so the line hits disk immediately.
-                _auditWriter.WriteLine(json);
-                _auditWriter.Flush();
+                if (!_auditSemaphore.Wait(0)) return;
+                try
+                {
+                    TryOpenAuditFileInternal();
+                    if (_auditDegraded || _auditWriter == null) return;
+                    AppendIntegrityRecord(json); _auditWriter.WriteLine(json); _auditWriter.Flush();
+                }
+                finally { _auditSemaphore.Release(); }
             }
             catch
             {
@@ -283,9 +333,6 @@ namespace Sentinel.Core
         {
             try
             {
-                TryOpenAuditFileInternal();
-                if (_auditDegraded || _auditWriter == null) return;
-
                 var entry = new
                 {
                     AuditType = "SERVICE_STOP_EXPECTED",
@@ -295,8 +342,17 @@ namespace Sentinel.Core
                     Uptime    = uptime
                 };
 
-                _auditWriter.WriteLine(JsonSerializer.Serialize(entry));
-                _auditWriter.Flush();
+                if (!_auditSemaphore.Wait(0)) return;
+                try
+                {
+                    TryOpenAuditFileInternal();
+                    if (_auditDegraded || _auditWriter == null) return;
+                    var json = JsonSerializer.Serialize(entry);
+                    AppendIntegrityRecord(json);
+                    _auditWriter.WriteLine(json);
+                    _auditWriter.Flush();
+                }
+                finally { _auditSemaphore.Release(); }
             }
             catch
             {
@@ -385,7 +441,7 @@ namespace Sentinel.Core
                     TryOpenFileInternal();
                     if (_isDegraded || _writer == null)
                     {
-                        // Still degraded
+                        Interlocked.Increment(ref _droppedEvents);
                         return;
                     }
                 }
@@ -433,6 +489,37 @@ namespace Sentinel.Core
                 {
                     await _writer.WriteLineAsync(jsonLine);
                 }
+                // Preserve critical response observations and inventory/gap history in
+                // the companion chain without flooding it with Tier2 LogOnly responses.
+                bool chainEvent = type == "integrity_change" || type == "integrity_coverage_restored" ||
+                    type == "integrity_baseline_unavailable" || type == "integrity_reconciled_after_visibility_gap" ||
+                    type == "certificate_provenance" ||
+                    type == "detection" && data is DetectionEvent diagnostic &&
+                        (diagnostic.RuleName.StartsWith("Telemetry: ETW ", StringComparison.Ordinal) ||
+                         diagnostic.RuleName.StartsWith("State Reconciliation: ", StringComparison.Ordinal)) ||
+                    type == "response" && data is ResponseEvent response && response.ActionTaken != "LOG";
+                if (chainEvent)
+                {
+                    await _auditSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        TryOpenAuditFileInternal();
+                        AppendIntegrityRecord(jsonLine);
+                    }
+                    finally { _auditSemaphore.Release(); }
+                }
+            }
+            catch (IOException ex)
+            {
+                _isDegraded = true;
+                Interlocked.Increment(ref _droppedEvents);
+                System.Diagnostics.Trace.TraceWarning("Event logger write failed: {0}", ex.Message);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _isDegraded = true;
+                Interlocked.Increment(ref _droppedEvents);
+                System.Diagnostics.Trace.TraceWarning("Event logger access failed: {0}", ex.Message);
             }
             finally
             {

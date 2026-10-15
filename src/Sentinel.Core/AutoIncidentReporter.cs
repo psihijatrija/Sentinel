@@ -80,6 +80,7 @@ namespace Sentinel.Core
         private readonly ThreatReportService _threatReportService;
         private readonly ToastService? _toastService;
         private readonly SentinelEventLogWriter? _windowsEventLog;
+        private readonly JsonlEventLogger? _eventLogger;
         private readonly ILogger<AutoIncidentReporter> _logger;
         private readonly string _reportRoot;
         private readonly string _productVersion;
@@ -95,13 +96,15 @@ namespace Sentinel.Core
             ILogger<AutoIncidentReporter> logger,
             ToastService? toastService = null,
             SentinelConfig? sentinelConfig = null,
-            SentinelEventLogWriter? windowsEventLog = null)
+            SentinelEventLogWriter? windowsEventLog = null,
+            JsonlEventLogger? eventLogger = null)
         {
             _config = config ?? new AutoIncidentReportingConfig();
             _sentinelConfig = sentinelConfig ?? new SentinelConfig();
             _threatReportService = threatReportService;
             _toastService = toastService;
             _windowsEventLog = windowsEventLog;
+            _eventLogger = eventLogger;
             _logger = logger;
             _productVersion = typeof(AutoIncidentReporter).Assembly.GetName().Version?.ToString() ?? "1.8.0";
 
@@ -822,6 +825,7 @@ namespace Sentinel.Core
                 }
                 catch { /* origin proof is optional; summary still useful */ }
 
+                var checkpoint = _eventLogger?.GetAuditCheckpoint();
                 var summary = new EvidenceSummary
                 {
                     ReportId = reportId,
@@ -838,7 +842,10 @@ namespace Sentinel.Core
                     Ips = indicators.Ips.Where(ip => !IsPrivateOrLocalIp(ip)).Take(10).ToArray(),
                     Urls = indicators.Urls.Take(10).ToArray(),
                     ManifestSha256 = manifestSha256,
-                    ManifestHmacSha256 = manifestHmac
+                    ManifestHmacSha256 = manifestHmac,
+                    LedgerFile = checkpoint?.File ?? "",
+                    LedgerSequence = checkpoint?.Sequence ?? 0,
+                    LedgerHash = checkpoint?.Hash ?? ""
                 };
 
                 await _threatReportService.ReportEvidenceAsync(summary).ConfigureAwait(false);

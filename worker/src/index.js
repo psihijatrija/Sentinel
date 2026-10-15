@@ -160,7 +160,12 @@ export default {
     }
 
     try {
-      const rawBody = await request.text();
+      const rawBody = await readLimitedBody(request, 65536);
+      if (rawBody === null) {
+        return new Response(JSON.stringify({ error: 'Request body exceeds 64 KiB' }), {
+          status: 413, headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
 
       // v2.0.8 payload: timestamp.nonce.path.body
       const signatureValid = await verifySignature(
@@ -208,8 +213,11 @@ export default {
       }
 
       const body = JSON.parse(rawBody);
+      if (url.pathname === '/report/evidence') {
+        return await storeEvidenceAnchor(body, env, corsHeaders);
+      }
 
-      if (!body.type || !body.value) {
+      if (!body || !body.type || !body.value) {
         return new Response(JSON.stringify({ error: 'Missing type or value' }), {
           status: 400,
           headers: { 'Content-Type': 'application/json', ...corsHeaders }
@@ -565,4 +573,60 @@ async function verifySignature(signatureHex, sharedSecret, timestamp, nonce, pat
   } catch {
     return false;
   }
+}
+
+
+// Read a bounded body before HMAC verification; Content-Length is not trusted.
+async function readLimitedBody(request, maximumBytes) {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maximumBytes) { await reader.cancel(); return null; }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const joined = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder('utf-8', { fatal: true }).decode(joined);
+}
+
+// Authenticated, minimal evidence anchors. KV is optional: never acknowledge
+// durable storage unless the configured store confirms put(). No upstream calls.
+async function storeEvidenceAnchor(body, env, corsHeaders) {
+  const respond = (data, status) => new Response(JSON.stringify(data), {
+    status, headers: { 'Content-Type': 'application/json', ...corsHeaders }
+  });
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return respond({ error: 'Invalid evidence summary' }, 400);
+  const hashPattern = /^[a-fA-F0-9]{64}$/;
+  if (typeof body.ReportId !== 'string' || body.ReportId.length < 1 || body.ReportId.length > 256 ||
+      !hashPattern.test(body.ManifestSha256 || '')) return respond({ error: 'ReportId and manifest SHA-256 are required' }, 400);
+  const hasLedger = body.LedgerSequence != null && body.LedgerSequence !== 0;
+  if (hasLedger && (!Number.isSafeInteger(body.LedgerSequence) || body.LedgerSequence < 1 ||
+      !hashPattern.test(body.LedgerHash || '') || !/^audit-chain-\d{4}-\d{2}-\d{2}\.jsonl$/.test(body.LedgerFile || ''))) {
+    return respond({ error: 'Invalid ledger checkpoint' }, 400);
+  }
+  if (!env.EVIDENCE_STORE || typeof env.EVIDENCE_STORE.put !== 'function') {
+    return respond({ error: 'Evidence storage is not configured' }, 503);
+  }
+  const digest = async value => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))]
+    .map(byte => byte.toString(16).padStart(2, '0')).join('');
+  // Do not retain host/user/process names, paths, raw evidence or indicators.
+  const anchor = {
+    schemaVersion: 1, reportIdHash: await digest(body.ReportId),
+    manifestSha256: body.ManifestSha256.toLowerCase(),
+    ledger: hasLedger ? { file: body.LedgerFile, sequence: body.LedgerSequence, hash: body.LedgerHash.toLowerCase() } : null
+  };
+  const serialized = JSON.stringify(anchor);
+  const key = 'evidence:v1:' + await digest(serialized);
+  try {
+    await env.EVIDENCE_STORE.put(key, serialized, { expirationTtl: 90 * 24 * 60 * 60 });
+  } catch (_) { return respond({ error: 'Evidence storage unavailable' }, 503); }
+  return respond({ success: true, receipt: key, retentionDays: 90 }, 200);
 }

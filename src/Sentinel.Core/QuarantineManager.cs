@@ -13,6 +13,7 @@ namespace Sentinel.Core
     public class QuarantineManager
     {
         private readonly string _quarantineDir = null!;
+        private readonly RestoreTransaction _restoreTransactions;
         // Optional .senq suffix marks Sentinel quarantine vault blobs (not in-place ransomware).
         private static readonly Regex MetadataRegex = new(@"^q_([a-fA-F0-9]+)_([a-zA-Z0-9_\-\s\.]+?)(?:\.senq)?$", RegexOptions.Compiled);
 
@@ -39,8 +40,9 @@ namespace Sentinel.Core
 
         public string QuarantineDirectory => _quarantineDir;
 
-        public QuarantineManager(string? customPath = null)
+        public QuarantineManager(string? customPath = null, RestoreTransaction? restoreTransactions = null)
         {
+            _restoreTransactions = restoreTransactions ?? new RestoreTransaction();
             if (!string.IsNullOrWhiteSpace(customPath))
             {
                 _quarantineDir = customPath!;
@@ -564,15 +566,9 @@ namespace Sentinel.Core
             if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
                 Directory.CreateDirectory(destDir);
 
-            await System.IO.FileNet48.WriteAllBytesAsync(destinationPath, plain);
-
-            try
-            {
-                File.Delete(quarantineFilePath);
-                var meta = quarantineFilePath + ".meta";
-                if (File.Exists(meta)) File.Delete(meta);
-            }
-            catch { }
+            // Retain the encrypted source and metadata through crash recovery. The
+            // operator can remove the vault only after reviewing a verified restore.
+            _restoreTransactions.Restore(quarantineFilePath, destinationPath, plain);
 
             return destinationPath;
         }

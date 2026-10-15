@@ -854,3 +854,38 @@ See CHANGELOG.md for full history. Key fixes:
 - **v1.4.4:** 15 red-team findings fixed (command injection, handle leaks, HMAC weakness, socket exhaustion, installer race conditions)
 - **v1.1.0:** Cache poisoning, process name spoofing, self-exclusion bypass
 - **v1.0.1:** RAM disk staging, WSL evasion, raw disk bypass, print spooler exfil, sandbox escape
+
+
+## Reliability and investigation changes (pending release)
+
+Sensor progress is separate from supervisor task liveness. A running task is not proof
+that a provider is available or a collection cycle succeeded. Uninstrumented monitors
+remain Unknown. Native ETW query results, provider enable status, loss counters, exact
+queue evictions, queue age and processing waits are observable. Zero ETW events alone
+is not proof of tampering. Missing providers on custom/debloated Windows degrade
+coverage; they do not authorize response or certify a clean endpoint.
+
+Read-only root-certificate/network inventories retain the previous snapshot when a
+collection fails. Context identifiers group observations; they never authorize trust,
+exclusions, automatic baseline acceptance or changed hardening. Root observations record
+presence/fingerprint and observation time, not a proven installer or actor. CurrentUser
+stores refer to the account running the service, not all interactive users. Hashing
+network configuration reduces plaintext exposure but is not a promise of anonymity.
+
+A companion daily audit hash chain can expose changed/reordered records. Trusted
+checkpoints retained independently are necessary to expose truncated suffixes or rewritten
+history. A machine administrator controlling every copy can still replace evidence.
+Incident-summary anchoring is optional and requires configured off-host KV storage;
+local tests do not establish remote durability. A shared-key receipt proves neither
+incident truth nor integrity against the remote account owner. Audit integrity degrades
+explicitly if the chain cannot be written/verified or reaches its daily size cap.
+
+Replay is offline weighted-correlation evaluation. It cannot issue host actions, run
+plugins or reproduce telemetry that was never captured. Restores use a write-ahead
+journal, non-overwriting staging and read-back verification, and retain the encrypted
+vault. Recovery inspection is read-only; it never trusts a journal to authorize replay,
+delete evidence or run restored files. Process termination remains irreversible.
+
+Redacted bundles are derived evidence. Their manifest checks content consistency,
+not original origin/custody. Timestamps and behavioral categories remain sensitive;
+preview exports before sharing them.

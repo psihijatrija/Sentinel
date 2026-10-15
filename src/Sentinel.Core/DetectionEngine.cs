@@ -21,13 +21,7 @@ namespace Sentinel.Core
         // v1.8.1 RT-MED-1: Bound the queue to prevent memory exhaustion under adversarial
         // process-creation storms. DropOldest keeps the newest telemetry for scoring.
         private const int TelemetryChannelCapacity = 10_000;
-        private readonly Channel<FusedTelemetryContext> _telemetryChannel =
-            Channel.CreateBounded<FusedTelemetryContext>(new BoundedChannelOptions(TelemetryChannelCapacity)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false
-            });
+        private readonly TelemetryQueue _telemetryChannel;
 
         // 1D terminal-class fast lane (FEAT-002): a second, smaller high-priority queue drained
         // with precedence so terminal-class telemetry (BYOVD loaders, kernel-exploit scaffolds,
@@ -38,13 +32,7 @@ namespace Sentinel.Core
         // observe-until-chain, and the mandatory pre-action audit still apply. Routing in
         // SubmitTelemetry is mutually exclusive, so an event enters exactly one lane.
         private const int PriorityChannelCapacity = 1_000;
-        private readonly Channel<FusedTelemetryContext> _priorityChannel =
-            Channel.CreateBounded<FusedTelemetryContext>(new BoundedChannelOptions(PriorityChannelCapacity)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false
-            });
+        private readonly TelemetryQueue _priorityChannel;
         private readonly ConcurrentDictionary<(string, int), DateTime> _dedupCache = new();
         private int _dedupOps;
         private readonly SentinelMetrics _metrics;
@@ -59,6 +47,7 @@ namespace Sentinel.Core
         private readonly ILogger<DetectionEngine> _logger;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _processingTask;
+        private long _lastProcessedUtcTicks;
         private SentinelOrchestrator? _orchestrator;
 
         /// <summary>
@@ -82,6 +71,8 @@ namespace Sentinel.Core
         {
             _rules.AddRange(rules);
             _metrics = metrics;
+            _telemetryChannel = new TelemetryQueue(TelemetryChannelCapacity, _metrics.RecordTelemetryDropped);
+            _priorityChannel = new TelemetryQueue(PriorityChannelCapacity, _metrics.RecordTelemetryDropped);
             _eventLogger = eventLogger;
             _responseEngine = responseEngine;
             _iocScanner = iocScanner;
@@ -110,15 +101,11 @@ namespace Sentinel.Core
             if (ShouldFastLane(context, ResponsePolicy.DefaultMinTier1Confidence))
             {
                 // DropOldest on the priority lane too; this is a scheduling hint, not authority.
-                _priorityChannel.Writer.TryWrite(context);
+                _priorityChannel.TryWrite(context);
                 return;
             }
 
-            // DropOldest: TryWrite always accepts; oldest is discarded under pressure.
-            // Approximate drop signal when channel is saturated (Count ~= capacity).
-            if (_telemetryChannel.Reader.Count >= TelemetryChannelCapacity - 1)
-                _metrics.RecordTelemetryDropped();
-            _telemetryChannel.Writer.TryWrite(context);
+            _telemetryChannel.TryWrite(context);
         }
 
         /// <summary>
@@ -238,13 +225,13 @@ namespace Sentinel.Core
                     // Fully drain the high-priority lane before touching the normal lane.
                     while (priorityReader.TryRead(out var priorityContext))
                     {
-                        await ProcessContextAsync(priorityContext, ct);
+                        await ProcessQueuedAsync(priorityContext, ct);
                     }
 
                     // Then take at most one normal-lane item, so we re-check priority promptly.
                     if (normalReader.TryRead(out var normalContext))
                     {
-                        await ProcessContextAsync(normalContext, ct);
+                        await ProcessQueuedAsync(normalContext, ct);
                         continue; // Re-check priority before the next normal item.
                     }
 
@@ -283,6 +270,28 @@ namespace Sentinel.Core
         /// the context. <paramref name="ct"/> is threaded into the reputation offload so it unwinds
         /// cleanly on shutdown.
         /// </summary>
+        public TelemetryPipelineSnapshot GetTelemetryHealth()
+        {
+            var age = Math.Max(_telemetryChannel.OldestAgeMs, _priorityChannel.OldestAgeMs);
+            var ticks = Interlocked.Read(ref _lastProcessedUtcTicks);
+            int normal = _telemetryChannel.Reader.Count, priority = _priorityChannel.Reader.Count;
+            return new TelemetryPipelineSnapshot
+            {
+                State = _processingTask.IsFaulted || _processingTask.IsCanceled ? "Failed" :
+                    age > 5000 ? "Backlogged" : normal + priority > 0 ? "Processing" : "Idle",
+                NormalQueueDepth = normal, PriorityQueueDepth = priority,
+                OldestQueuedAgeMs = age,
+                LastProcessedUtc = ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc)
+            };
+        }
+
+        private async Task ProcessQueuedAsync(QueuedTelemetry item, CancellationToken ct)
+        {
+            _metrics.RecordQueueWait(item.AgeMs);
+            await ProcessContextAsync(item.Context, ct).ConfigureAwait(false);
+            Interlocked.Exchange(ref _lastProcessedUtcTicks, DateTime.UtcNow.Ticks);
+        }
+
         private async Task ProcessContextAsync(FusedTelemetryContext context, CancellationToken ct)
         {
             try
@@ -523,6 +532,7 @@ namespace Sentinel.Core
             if (detection.Metadata == null)
                 detection.Metadata = new Dictionary<string, string>();
             var scoreProfile = _scoringEngine.Score(detection);
+            detection.Metadata["EngineVersion"] = typeof(DetectionEngine).Assembly.GetName().Version?.ToString() ?? "unknown";
             detection.Metadata["ThreatScore"] = scoreProfile.Score.ToString();
             detection.Metadata["ThreatVerdict"] = scoreProfile.Verdict.ToString();
             detection.Metadata["ThreatCategory"] = scoreProfile.Category.ToString();

@@ -152,6 +152,18 @@ namespace Sentinel.Core.Monitors
                     continue;
                 }
 
+                // Capture provenance before a remediation can remove the observable
+                // store state. Subject/issuer are evidence, never authorization anchors.
+                await _eventLogger.LogEventAsync("certificate_provenance", new
+                {
+                    Phase = "BeforeRemediation", ObservedUtc = DateTimeOffset.UtcNow,
+                    Thumbprint = norm, cert.Subject, cert.Issuer,
+                    NotBeforeUtc = cert.NotBefore.ToUniversalTime(), NotAfterUtc = cert.NotAfter.ToUniversalTime(),
+                    PolicyAnchor = CertDistrustList.IsDistrusted(norm) ? "ExplicitThumbprintDistrust" : "LiveStoreTrustMarkerPolicy",
+                    Attribution = "Unknown: certificate metadata does not identify installer or actor",
+                    ChainImpact = "Potential trust anchor; affected leaf chains are not proven by this observation"
+                }, ct).ConfigureAwait(false);
+
                 // 1. Remove + block the root.
                 CertRemediator.RemediationResult rr;
                 if (CertDistrustList.IsDistrusted(norm))
@@ -167,6 +179,12 @@ namespace Sentinel.Core.Monitors
                     catch (Exception ex) { _logger.LogDebug(ex, "[RootStoreGuard] Quarantine sweep error for {Thumb}", norm); }
                 }
 
+                await _eventLogger.LogEventAsync("certificate_provenance", new
+                {
+                    Phase = "RemediationReported", ObservedUtc = DateTimeOffset.UtcNow, Thumbprint = norm,
+                    Removed = rr.Success, FilesQuarantined = quarantined,
+                    Attribution = "Sentinel remediator reported this result; no installer attribution inferred"
+                }, ct).ConfigureAwait(false);
                 await EmitAsync(cert, norm, removed: rr.Success, quarantined: quarantined,
                     note: rr.Message).ConfigureAwait(false);
             }
@@ -337,8 +355,10 @@ namespace Sentinel.Core.Monitors
             var reasoning = "A root certificate that the OS trusted-root program does not vouch for " +
                             "(no AuthRoot-CTL membership and no Microsoft root-program marker) was present " +
                             "in a trusted store. Such a root can anchor TLS interception (MITM) and vouch " +
-                            "for malicious signed code. Sentinel removed it, pinned it to Disallowed, and " +
-                            "quarantined files signed by a chain rooting to it.";
+                            "for malicious signed code, but this policy finding alone does not establish malicious use. " +
+                            (removed ? "The remediator reported removal/distrust; file-action results are included in the evidence. " :
+                                "No successful certificate removal was reported; review the recorded failure/decision. ") +
+                            "Installer/actor attribution is unknown.";
 
             await _detectionEngine.EmitAsync(new DetectionEvent
             {

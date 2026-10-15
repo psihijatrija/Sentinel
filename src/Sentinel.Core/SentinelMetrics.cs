@@ -21,6 +21,7 @@ namespace Sentinel.Core
         private long _responsesCount;
         private long _telemetryReceived;
         private long _telemetryDropped;
+        private readonly ConcurrentQueue<double> _queueWaits = new();
         private long _compositesEmitted;
         private long _weightedEmitted;
         private long _chainConfirmed;
@@ -50,6 +51,12 @@ namespace Sentinel.Core
         {
             _correlationLatencies.Enqueue(latencyMs);
             TrimQueue(_correlationLatencies);
+        }
+
+        public void RecordQueueWait(double milliseconds)
+        {
+            _queueWaits.Enqueue(milliseconds);
+            TrimQueue(_queueWaits);
         }
 
         public void RecordFalsePositive() => Interlocked.Increment(ref _falsePositivesCount);
@@ -98,6 +105,7 @@ namespace Sentinel.Core
             var det = GetDetectionLatencyPercentiles();
             var resp = GetResponseLatencyPercentiles();
             var corr = GetCorrelationLatencyPercentiles();
+            var queue = CalculatePercentiles(_queueWaits.ToList());
 
             return new OpsMetricsSnapshot
             {
@@ -118,6 +126,7 @@ namespace Sentinel.Core
                 ResponseLatencyMsP95 = resp.p95,
                 CorrelationLatencyMsP50 = corr.p50,
                 CorrelationLatencyMsP95 = corr.p95,
+                QueueWaitMsP95 = queue.p95,
             };
         }
 
@@ -169,6 +178,11 @@ namespace Sentinel.Core
         public double CorrelationLatencyMsP95 { get; set; }
         public int RegisteredMonitors { get; set; }
         public int RunningMonitors { get; set; }
+        public double QueueWaitMsP95 { get; set; }
+        public TelemetryPipelineSnapshot Pipeline { get; set; } = new();
+        public EtwHealthSnapshot Etw { get; set; } = new();
+        public bool AuditIntegrityDegraded { get; set; }
+        public Dictionary<string, SensorProgressSnapshot> SensorProgress { get; set; } = new();
         public int PluginCount { get; set; }
         public bool WeightedCorrelationEnabled { get; set; }
         public int WeightedThreshold { get; set; }

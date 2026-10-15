@@ -1,4 +1,41 @@
 # Changelog
+## [3.1.7] - 2026-10-15
+### Added
+- Windows/.NET Framework 4.8 diagnostic CLI for historical weighted-correlation replay,
+  replay comparisons, evidence-ledger/manifest verification, restore inspection and
+  privacy-preserving offline export preview/ZIP creation.
+- Sensor collection-progress reporting, native ETW provider/loss/session queries,
+  exact bounded-queue eviction accounting, queue-age/wait metrics, and visibility-gap
+  coordination with module/network/certificate inventories.
+- Read-only network-context and root-certificate observation histories across restarts.
+  Previously observed contexts never grant trust; certificate actor/installer attribution
+  remains explicitly unknown without supporting evidence.
+- Daily hash-chained companion audit records, trusted-prefix checkpoints and optional
+  checkpoint anchoring in evidence summaries. Integrity degradation is exposed.
+- Authenticated Cloudflare Worker `/report/evidence` handler with minimal, content-addressed
+  KV anchors, bounded request bodies, explicit storage failures, and eight regression tests.
+- Provisional subsystem ratings and a documented path toward stronger validation.
+
+### Fixed
+- Supervisor ticks no longer masquerade as successful sensor collection. Faulted background
+  monitors restart without prior disposal; optional monitors that complete cleanly remain
+  stopped instead of repeatedly restarting on custom/debloated Windows.
+- Weighted correlation explanations reflect actual score/category/terminal gates. A high
+  score alone or a plugin finding without independent terminal evidence cannot confer
+  destructive authority; weighted composites require at least two categories.
+- Unexplained module observations remain eligible for review instead of silently becoming
+  accepted baseline entries. Baseline replacement preserves the last valid file on failure.
+- Explicit quarantine restores refuse overwrites, journal Prepared/Applied/Verified states,
+  verify restored content and retain the encrypted vault for recovery review.
+
+### Release workflow
+- Keep the product, tests and diagnostics on `net48-windows`; no Linux CI/product target.
+- Require the Windows Framework test suite and Worker tests before installer publication.
+- Attach a directly copyable Worker JavaScript file, Windows Framework diagnostics ZIP
+  and SHA-256 checksums with the installer.
+- Support `release.ps1 -PrepareOnly` / `build.ps1 -StampOnly` for repository-controlled
+  version preparation when GitHub Actions performs the Windows installer build.
+
 ## [3.1.6] - 2026-10-15
 ### Changed
 - Removed `Rules.DefenseTamper.cs` stub (tombstone comment file left over from v3.1.5 decision to drop the anti-tamper rule). No functional change.

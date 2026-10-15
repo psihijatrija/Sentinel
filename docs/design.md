@@ -905,3 +905,22 @@ Honest remediations. Several 2.1.8 "fixes" were not in force until this version.
 - [ ] **Threat intel cert pinning** - CIRCL/MB HTTPS use default system trust (Worker path is HMAC-auth).
 - [ ] **KeyScrambler / FocusLock** - Intentionally not ported (AV heuristics / high operational cost).
 - [ ] **Further unit tests** - More coverage still welcome for NamedPipe/RpcLateral/CloudSync/EtwProvider/BrowserC2 (partial coverage exists in V16x-V18x suites).
+
+
+## Reliability and offline investigation additions
+
+The product and diagnostic CLI target Windows/.NET Framework 4.8. `SensorProgress`
+tracks successful collection cycles; `MonitorGroup` reports task liveness separately.
+ETW session health uses read-only ControlTrace queries and provider-enable results;
+`TelemetryQueue` counts actual DropOldest evictions and stamps enqueue time with a
+monotonic clock. Metrics expose queue depth, age and wait P95 through both IPC and disk.
+`VisibilityGapTracker` coordinates subsequent module and host-inventory reconciliation
+at their existing bounded cadences (five and two minutes respectively).
+
+`EvidenceLedger` writes a daily chained companion to the original audit. Optional
+incident-summary checkpoints can be anchored by the Worker in KV. `DetectionReplay`
+reuses weighted correlation with an injected historical clock and no response engine.
+`RestoreTransaction` journals explicit restores and retains the vault. The diagnostic
+CLI verifies chains/manifests, inspects interrupted restores and exports allowlisted,
+redacted investigation copies. See `tools/Sentinel.Diagnostics/README.md` for contracts
+and `docs/QUALITY_REVIEW.md` for limits, ratings and remaining validation.

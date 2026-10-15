@@ -67,6 +67,76 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Setup Node for Worker tests
+        if: steps.exists.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build solution and verify Windows tests before packaging
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          dotnet build Sentinel.sln -c Release -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
+          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --logger "trx;LogFileName=release-tests.trx" --results-directory TestResults
+          if ($LASTEXITCODE -ne 0) { throw "Windows regression tests failed; release blocked" }
+          [xml]$trx = Get-Content TestResults/release-tests.trx -Raw
+          if ([int]$trx.TestRun.ResultSummary.Counters.executed -lt 1) { throw "No Windows tests executed; release blocked" }
+
+      - name: Verify Worker authentication and evidence handling
+        if: steps.exists.outputs.skip == 'false'
+        working-directory: worker
+        run: npm test
+
+      - name: Smoke test the Windows Framework diagnostic executable
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          $diag = Resolve-Path tools/Sentinel.Diagnostics/bin/Release/net48-windows/Sentinel.Diagnostics.exe
+          $dir = Join-Path $env:RUNNER_TEMP "sentinel-diagnostics-$([guid]::NewGuid().ToString('N'))"
+          New-Item -ItemType Directory $dir | Out-Null
+          $events = @(
+            @{ RuleName='LSASS Credential Dump'; Confidence=0.95; ProcessId=9001; ProcessName='fixture.exe'; Timestamp='2020-01-01T00:00:00Z' },
+            @{ RuleName='C2 Beaconing Statistical'; Confidence=0.95; ProcessId=9001; ProcessName='fixture.exe'; Timestamp='2020-01-01T00:00:02Z' }
+          )
+          $events | ForEach-Object { $_ | ConvertTo-Json -Compress } | Set-Content "$dir/events.jsonl"
+          '{"Threshold":80,"MinDistinctCategories":2}' | Set-Content "$dir/config.json"
+          & $diag replay "$dir/events.jsonl" "$dir/config.json" | Set-Content "$dir/replay.json"
+          if ($LASTEXITCODE -ne 0) { throw "Diagnostic replay failed" }
+          $report = Get-Content "$dir/replay.json" -Raw | ConvertFrom-Json
+          if ($report.InputCount -ne 2 -or $report.Composites.Count -ne 1 -or $report.Composites[0].AuthorizedResponse -ne 'LogOnly') { throw "Unexpected replay outcome" }
+          & $diag preview-export "$dir/events.jsonl"
+          if ($LASTEXITCODE -ne 0) { throw "Export preview failed" }
+          & $diag export "$dir/events.jsonl" "$dir/investigation.zip"
+          if ($LASTEXITCODE -ne 0) { throw "Redacted export failed" }
+          Expand-Archive "$dir/investigation.zip" "$dir/pack"
+          & $diag verify-pack "$dir/pack"
+          if ($LASTEXITCODE -ne 0) { throw "Export verification failed" }
+
+      - name: Upload release test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+
+      - name: Summarize Windows test results
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path TestResults/release-tests.trx) {
+            [xml]$trx = Get-Content TestResults/release-tests.trx -Raw
+            $c = $trx.TestRun.ResultSummary.Counters
+            "Windows Framework tests: executed=$($c.executed), passed=$($c.passed), failed=$($c.failed), notExecuted=$($c.notExecuted)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+            foreach ($result in $trx.SelectNodes("//*[local-name()='UnitTestResult'][@outcome='Failed']")) {
+              "Failed: $($result.testName)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+              $message = $result.SelectSingleNode(".//*[local-name()='Message']")
+              if ($message) { $message.InnerText | Out-File $env:GITHUB_STEP_SUMMARY -Append }
+            }
+          }
+
       # build.ps1 requires the Inno Setup compiler (ISCC.exe). The Chocolatey package
       # installs it to C:\Program Files (x86)\Inno Setup 6\ - one of the paths build.ps1
       # already probes.
@@ -133,6 +203,22 @@ jobs:
           }
           Write-Host "Notes written to $out"
 
+      - name: Prepare Worker copy and checksums
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          Copy-Item worker/src/index.js "releases/$v/SentinelWorker-$v.js"
+          dotnet publish tools/Sentinel.Diagnostics/Sentinel.Diagnostics.csproj -c Release -f net48-windows -r win-x64 --self-contained false -o "releases/$v/diagnostics"
+          if ($LASTEXITCODE -ne 0) { throw "Diagnostic publication failed" }
+          Compress-Archive -Path "releases/$v/diagnostics/*" -DestinationPath "releases/$v/SentinelDiagnostics-$v.zip"
+          $files = @("releases/$v/SentinelSetup-$v.exe", "releases/$v/SentinelWorker-$v.js", "releases/$v/SentinelDiagnostics-$v.zip")
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path $file -Leaf)"
+          }
+          $lines | Set-Content "releases/$v/SHA256SUMS.txt" -Encoding ascii
+
       - name: Create GitHub release
         if: steps.exists.outputs.skip == 'false'
         shell: pwsh
@@ -140,7 +226,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = "${{ steps.ver.outputs.version }}"
-          gh release create "v$v" "${{ steps.artifact.outputs.path }}" `
+          gh release create "v$v" "${{ steps.artifact.outputs.path }}" "releases/$v/SentinelWorker-$v.js" "releases/$v/SentinelDiagnostics-$v.zip" "releases/$v/SHA256SUMS.txt" `
             --title "Sentinel $v" `
             --notes-file release-notes.md `
             --target ${{ github.sha }}

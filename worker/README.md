@@ -60,3 +60,30 @@ If `ProxySharedSecret` is null/short, agents **skip** reporting and VT proxy loo
 - `POST /lookup/vt` - VirusTotal hash lookup
 - `POST /lookup/mb` - MalwareBazaar hash lookup (**v2.7.3**). abuse.ch now requires an `Auth-Key` for all API access, so agents cannot query keyless; the Worker uses `MALWAREBAZAAR_KEY` and returns `{ success, verdict: "malicious" | "not_found" }` (fails closed to `not_found`, never `Safe`).
 - `GET /health` - unauthenticated health (no secrets)
+- `POST /report/evidence` - authenticated minimal evidence/checkpoint anchor; requires `EVIDENCE_STORE` KV
+
+## Evidence anchors
+
+Create a Cloudflare KV namespace using your authenticated Cloudflare tooling, then add
+its real namespace ID to the deployed Worker configuration:
+
+```toml
+[[kv_namespaces]]
+binding = "EVIDENCE_STORE"
+id = "<your-real-namespace-id>"
+```
+
+No production namespace is created or deployed by local tests. The existing HMAC,
+timestamp, nonce and rate-limit checks apply to `/report/evidence`. The endpoint accepts
+the Sentinel `EvidenceSummary` JSON shape, requires a valid `ManifestSha256` and
+`ReportId`, and validates optional `LedgerFile`/`LedgerSequence`/`LedgerHash` fields.
+It stores only a hashed report ID, manifest hash and optional ledger checkpoint under
+a content-addressed key for 90 days. Host/process names, raw evidence and indicators
+are not persisted by this endpoint. A successful response contains the storage receipt;
+missing or failed KV storage returns 503. This authenticates possession of the shared
+key, not independent truth of the reported incident or protection from a Cloudflare
+account administrator. Retain receipts/checkpoints independently when required.
+
+All report bodies are capped at 64 KiB, including requests without a trustworthy
+Content-Length. Run `npm test` for authentication, replay, validation, privacy and
+storage-failure regression tests; these tests do not call external intelligence APIs.

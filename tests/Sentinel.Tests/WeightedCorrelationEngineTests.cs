@@ -115,7 +115,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task PluginCorrelationRule_CanEmit()
+        public async Task PluginCorrelationRule_CannotAuthorizeWithoutIndependentTerminalEvidence()
         {
             var plugins = new PluginRegistry();
             plugins.Register(new TestCorrelationRule());
@@ -141,7 +141,30 @@ namespace Sentinel.Tests
 
             Assert.NotNull(emitted);
             Assert.Equal("Plugin Test Composite", emitted!.RuleName);
-            Assert.Equal("true", emitted.Metadata[ResponsePolicy.ChainConfirmedKey]);
+            Assert.Equal("false", emitted.Metadata[ResponsePolicy.ChainConfirmedKey]);
+            Assert.Equal(DetectionTier.Tier2Indicator, emitted.Tier);
+            Assert.Equal(ResponseAction.LogOnly, emitted.AuthorizedResponse);
+        }
+
+        [Fact]
+        public async Task PluginCorrelationRule_CanConfirmWithIndependentTerminalCategories()
+        {
+            var plugins = new PluginRegistry();
+            plugins.Register(new TestCorrelationRule());
+            DetectionEvent? emitted = null;
+            var engine = new WeightedCorrelationEngine(new WeightedCorrelationConfig { Threshold = 999 }, plugins);
+            engine.Initialize(ev => { emitted = ev; return Task.CompletedTask; });
+            await engine.RegisterSignalAsync(new DetectionEvent
+            {
+                RuleName = "LSASS Credential Dump", ProcessId = 77, Confidence = 0.95, Timestamp = DateTime.UtcNow
+            });
+            Assert.Equal(ResponseAction.LogOnly, emitted!.AuthorizedResponse);
+            await engine.RegisterSignalAsync(new DetectionEvent
+            {
+                RuleName = "C2 Beaconing", ProcessId = 77, Confidence = 0.95, Timestamp = DateTime.UtcNow
+            });
+            Assert.Equal("true", emitted!.Metadata[ResponsePolicy.ChainConfirmedKey]);
+            Assert.Equal(DetectionTier.Tier1Behavioral, emitted.Tier);
         }
 
         [Fact]

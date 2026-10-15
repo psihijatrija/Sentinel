@@ -18,33 +18,34 @@ namespace Sentinel.Core
     ///
     /// Every few seconds:
     ///   1. If !IsActive -> RestartAsync + Tier1 AntiTamper detection
-    ///   2. If IsActive but event counter stalled for too long while we previously
-    ///      saw activity -> treat as hung consumer and restart
+    ///   2. Query native session/loss state and consumer liveness. Idle event streams
+    ///      alone do not justify restart; unavailable providers degrade coverage.
     /// </summary>
-    public sealed class EtwSessionGuard : BackgroundService
+    public sealed class EtwSessionGuard : BackgroundService, ISensorProgressSource
     {
         private readonly UnifiedEtwSession _etwSession;
         private readonly DetectionEngine _detectionEngine;
         private readonly ILogger<EtwSessionGuard> _logger;
 
         private const int CheckIntervalMs = 3000;
-        private const int StallThresholdSeconds = 90;
+        public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(15));
+        private readonly VisibilityGapTracker? _gaps;
+        private long _lastLosses;
+        private bool _coverageDegraded;
         private const int AlertCooldownSeconds = 60;
 
-        private long _lastEventsProcessed;
-        private DateTimeOffset _lastProgressUtc = DateTimeOffset.UtcNow;
         private DateTimeOffset _lastAlertUtc = DateTimeOffset.MinValue;
-        private bool _sawActivity;
         private int _restartAttempts;
 
         public EtwSessionGuard(
             UnifiedEtwSession etwSession,
             DetectionEngine detectionEngine,
-            ILogger<EtwSessionGuard> logger)
+            ILogger<EtwSessionGuard> logger, VisibilityGapTracker? gaps = null)
         {
             _etwSession = etwSession;
             _detectionEngine = detectionEngine;
             _logger = logger;
+            _gaps = gaps;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -54,8 +55,6 @@ namespace Sentinel.Core
             // Allow startup time for session creation
             try { await Task.Delay(5000, stoppingToken); } catch { return; }
 
-            _lastEventsProcessed = _etwSession.EventsProcessed;
-            _lastProgressUtc = DateTimeOffset.UtcNow;
 
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -67,6 +66,7 @@ namespace Sentinel.Core
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
+                    Progress.Failed(ex.Message);
                     _logger.LogDebug(ex, "[EtwSessionGuard] Error in check loop");
                 }
             }
@@ -74,26 +74,49 @@ namespace Sentinel.Core
 
         private async Task CheckAndHealAsync(CancellationToken ct)
         {
-            long events = _etwSession.EventsProcessed;
-            if (events > _lastEventsProcessed)
+            var health = _etwSession.QueryHealth();
+            long events = health.EventsProcessed;
+            long losses = health.NativeEventsLost + health.NativeBuffersLost + health.DispatchDrops;
+            bool lossIncreased = losses > _lastLosses;
+            _lastLosses = losses;
+            bool inactive = !_etwSession.IsActive;
+            bool stalled = health.QuerySucceeded && !health.ConsumerAlive;
+            bool providersAvailable = health.ProviderStatus.Count == 10 &&
+                System.Linq.Enumerable.All(health.ProviderStatus.Values, code => code == 0);
+            if (!inactive && !stalled)
             {
-                _lastEventsProcessed = events;
-                _lastProgressUtc = DateTimeOffset.UtcNow;
-                _sawActivity = true;
-                _restartAttempts = 0;
+                if (!health.QuerySucceeded || !providersAvailable || lossIncreased)
+                {
+                    string degraded = !health.QuerySucceeded ? "ETW session query unavailable" :
+                        !providersAvailable ? "One or more ETW providers are unavailable" : "ETW events/buffers were lost";
+                    Progress.Failed(degraded);
+                    if (!_coverageDegraded || lossIncreased)
+                    {
+                        _gaps?.Report("ETW", degraded);
+                        await _detectionEngine.EmitAsync(new DetectionEvent
+                        {
+                            RuleName = "Telemetry: ETW Visibility Degraded", Evidence = degraded,
+                            Reasoning = "Missing visibility is not proof of attack or of a clean system.",
+                            Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
+                            Confidence = 0.5, SignalType = SignalType.Generic
+                        });
+                    }
+                    _coverageDegraded = true;
+                }
+                else
+                {
+                    // A successful native query and live consumer can be healthy while idle.
+                    Progress.Succeeded();
+                    if (_coverageDegraded) _gaps?.Report("ETW", "Collection coverage recovered; reconcile current state");
+                    _coverageDegraded = false;
+                }
+                return;
             }
 
-            bool inactive = !_etwSession.IsActive;
-            bool stalled = _sawActivity &&
-                           _etwSession.IsActive &&
-                           (DateTimeOffset.UtcNow - _lastProgressUtc).TotalSeconds >= StallThresholdSeconds;
-
-            if (!inactive && !stalled)
-                return;
-
-            string reason = inactive
-                ? "Unified ETW session is inactive (stopped, failed to start, or externally terminated)"
-                : $"Unified ETW session stalled - no events for {StallThresholdSeconds}s after prior activity (EventsProcessed={events})";
+            string reason = inactive ? "Unified ETW session is inactive" : "ETW processing thread is not alive";
+            Progress.Failed(reason);
+            if (!_coverageDegraded) _gaps?.Report("ETW", reason);
+            _coverageDegraded = true;
 
             _logger.LogCritical("[EtwSessionGuard] {Reason} - attempting restart", reason);
 
@@ -102,8 +125,6 @@ namespace Sentinel.Core
 
             if (restarted)
             {
-                _lastEventsProcessed = _etwSession.EventsProcessed;
-                _lastProgressUtc = DateTimeOffset.UtcNow;
                 _logger.LogWarning("[EtwSessionGuard] ETW session recreated successfully (attempt {N})", _restartAttempts);
             }
             else
@@ -119,25 +140,21 @@ namespace Sentinel.Core
 
             await _detectionEngine.EmitAsync(new DetectionEvent
             {
-                RuleName = "Anti-Tamper: ETW Session Disabled",
+                RuleName = "Telemetry: ETW Session Unavailable",
                 Evidence = reason + (restarted
                     ? ". Session was automatically recreated."
                     : ". Automatic recreation failed - detection may be degraded to WMI/polling fallback."),
-                Reasoning =
-                    "Sentinel's real-time detection depends on the unified ETW session (Kernel-Process, File, " +
-                    "Registry, DNS, Threat-Intelligence, PowerShell, etc.). Stopping this session (logman, " +
-                    "ControlTrace, or EDR-killer tools) blinds behavioral monitoring while the service process " +
-                    "still appears healthy - a technique used by modern ransomware crews before encryption. " +
-                    "This is high-confidence telemetry tampering.",
-                Confidence = 0.99,
-                Tier = DetectionTier.Tier1Behavioral,
+                Reasoning = "The session or consumer is unavailable. Software failure, missing optional components, " +
+                    "permissions and tampering are possible causes; this observation does not identify a cause or actor.",
+                Confidence = 0.5,
+                Tier = DetectionTier.Tier2Indicator,
                 AuthorizedResponse = ResponseAction.LogOnly, // always fires
                 ProcessName = "SYSTEM",
                 ProcessId = 0,
                 SignalType = SignalType.AntiTamper,
                 Metadata = new Dictionary<string, string>
                 {
-                    ["TamperType"] = inactive ? "EtwSessionInactive" : "EtwSessionStalled",
+                    ["VisibilityFailureType"] = inactive ? "EtwSessionInactive" : "EtwSessionStalled",
                     ["RestartSucceeded"] = restarted.ToString(),
                     ["RestartAttempts"] = _restartAttempts.ToString(),
                     ["EventsProcessed"] = events.ToString()

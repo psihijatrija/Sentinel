@@ -82,6 +82,18 @@ namespace Sentinel.Core
             }
         }
 
+        /// <summary>A supervisor can prove task liveness, never sensor progress.</summary>
+        public void SupervisorHeartbeat(string name)
+        {
+            if (_monitors.TryGetValue(name, out var status))
+                status.LastHeartbeat = DateTimeOffset.UtcNow;
+        }
+
+        public void ReportProgress(string name, SensorProgressSnapshot progress)
+        {
+            if (_monitors.TryGetValue(name, out var status)) status.Progress = progress;
+        }
+
         /// <summary>
         /// Marks a monitor as started successfully.
         /// </summary>
@@ -135,7 +147,7 @@ namespace Sentinel.Core
         {
             var now = DateTimeOffset.UtcNow;
             return _monitors.Values
-                .Where(m => m.State == MonitorState.Failed ||
+                .Where(m => m.State == MonitorState.Failed || m.Progress.State == "Failed" || m.Progress.State == "Stale" ||
                            (m.State == MonitorState.Running && now - m.LastHeartbeat > HeartbeatTimeout) ||
                            m.State == MonitorState.Starting && now - m.RegisteredAt > TimeSpan.FromSeconds(30))
                 .ToList();
@@ -349,6 +361,7 @@ namespace Sentinel.Core
         public DateTimeOffset? StartedAt { get; set; }
         public DateTimeOffset LastHeartbeat { get; set; }
         public long HeartbeatCount { get; set; }
+        public SensorProgressSnapshot Progress { get; set; } = new();
         public int FailureCount { get; set; }
         public DateTimeOffset? LastFailure { get; set; }
         public string? LastError { get; set; }
