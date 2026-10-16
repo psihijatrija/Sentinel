@@ -12,6 +12,8 @@ namespace Sentinel.Core
     {
         private volatile IReadOnlyDictionary<int, (int parentId, string name, string imagePath)> _cache = new Dictionary<int, (int, string, string)>();
         private readonly System.Threading.Timer _refreshTimer;
+        private readonly object _cacheGate = new();
+        private readonly Dictionary<int, DateTime> _processStarts = new();
 
         // HARDENING: Track PIDs injected by RecordProcessStart (ETW/WMI/fast-poll sourced).
         // These are NEVER overwritten by the periodic refresh - they contain authoritative
@@ -32,6 +34,11 @@ namespace Sentinel.Core
         }
 
         private void RefreshCache()
+        {
+            lock (_cacheGate) RefreshCacheLocked();
+        }
+
+        private void RefreshCacheLocked()
         {
             try
             {
@@ -62,6 +69,7 @@ namespace Sentinel.Core
                 }
 
                 // 2. Always preserve remaining authoritative entries (ETW/WMI/fast-poll sourced)
+                var generationChanged = new HashSet<int>();
                 var newCache = new Dictionary<int, (int parentId, string name, string imagePath)>();
                 foreach (var kvp in _authoritativeEntries)
                 {
@@ -72,6 +80,27 @@ namespace Sentinel.Core
                 foreach (var proc in processes)
                 {
                     var pid = proc.Id;
+                    // A live PID can belong to a replacement generation even without an
+                    // observed exit. Never preserve its old ancestry or response identity.
+                    try
+                    {
+                        var start = proc.StartTime.ToUniversalTime();
+                        if (!_processStarts.TryGetValue(pid, out var oldStart) || oldStart != start)
+                        {
+                            generationChanged.Add(pid);
+                            newCache.Remove(pid);
+                            _authoritativeEntries.TryRemove(pid, out _);
+                            _deadPidRetention.TryRemove(pid, out _);
+                        }
+                        _processStarts[pid] = start;
+                        _deadPidRetention.TryRemove(pid, out _);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Retain observational ancestry, but withdraw identity authority.
+                        _processStarts.Remove(pid);
+                        Debug.WriteLine("Process ancestry identity unavailable: " + ex.GetType().Name);
+                    }
 
                     if (newCache.ContainsKey(pid))
                     {
@@ -80,7 +109,9 @@ namespace Sentinel.Core
                         continue;
                     }
 
-                    if (currentCache.TryGetValue(pid, out var existing))
+                    if (currentCache.TryGetValue(pid, out var existing) &&
+                        _processStarts.TryGetValue(pid, out _) &&
+                        !generationChanged.Contains(pid))
                     {
                         newCache[pid] = existing;
                         proc.Dispose();
@@ -129,6 +160,8 @@ namespace Sentinel.Core
                     }
                 }
 
+                foreach (var pid in _processStarts.Keys.Where(pid => !newCache.ContainsKey(pid)).ToArray())
+                    _processStarts.Remove(pid);
                 _cache = newCache;
             }
             catch
@@ -139,14 +172,38 @@ namespace Sentinel.Core
 
         public void RecordProcessStart(int pid, int parentPid, string processName, string imagePath)
         {
-            // Record as authoritative - this data came from ETW/WMI/fast-poll at creation time
-            // and will NOT be overwritten by the periodic refresh.
-            _authoritativeEntries[pid] = (parentPid, processName, imagePath ?? "", DateTimeOffset.UtcNow);
+            lock (_cacheGate)
+            {
+                _processStarts.Remove(pid);
+                try
+                {
+                    using var process = Process.GetProcessById(pid);
+                    var start = process.StartTime.ToUniversalTime();
+                    var liveImage = SecurityValidation.GetProcessImagePath(pid);
+                    if (!string.IsNullOrEmpty(imagePath) && string.Equals(liveImage, imagePath, StringComparison.OrdinalIgnoreCase))
+                        _processStarts[pid] = start;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Process-start identity unavailable; observational ancestry only: " + ex.GetType().Name);
+                }
+                _authoritativeEntries[pid] = (parentPid, processName, imagePath ?? "", DateTimeOffset.UtcNow);
+                _deadPidRetention.TryRemove(pid, out _);
+                var dict = new Dictionary<int, (int, string, string)>((Dictionary<int, (int, string, string)>)_cache);
+                dict[pid] = (parentPid, processName, imagePath ?? "");
+                _cache = dict;
+            }
+        }
 
-            // Also inject into the live cache immediately for instant availability
-            var dict = new Dictionary<int, (int, string, string)>((Dictionary<int, (int, string, string)>)_cache);
-            dict[pid] = (parentPid, processName, imagePath ?? "");
-            _cache = dict;
+        public (int parentId, string name, string imagePath, DateTime? startUtc) GetProcessIdentity(int pid)
+        {
+            lock (_cacheGate)
+            {
+                if (_cache.TryGetValue(pid, out var info))
+                    return (info.parentId, info.name, info.imagePath,
+                        _processStarts.TryGetValue(pid, out var start) ? start : (DateTime?)null);
+                return (0, "unknown", "", null);
+            }
         }
 
         public (int parentId, string name) GetParent(int pid)

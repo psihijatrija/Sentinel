@@ -265,7 +265,13 @@ namespace Sentinel.Core
 
                         try
                         {
-                            HardeningModule.SafeKillProcessTree(node.ProcessId);
+                            if (!node.ProcessStartUtc.HasValue || string.IsNullOrWhiteSpace(node.ImagePath) ||
+                                !VerifiedProcessTermination.TryTerminate(node.ProcessId, detection.Timestamp,
+                                    out var terminationReason, node.ImagePath, node.ProcessStartUtc))
+                            {
+                                _logger.LogWarning("[ChainTracer] Target exit not confirmed for PID {Pid}; no kill recorded", node.ProcessId);
+                                continue;
+                            }
                             result.KilledProcesses.Add(new KilledProcessInfo
                             {
                                 ProcessId = node.ProcessId,
@@ -358,25 +364,32 @@ namespace Sentinel.Core
             var visited = new HashSet<int>();
             int currentPid = pid;
             string currentName = processName;
+            DateTime? childStartUtc = null;
 
             for (int depth = 0; depth < 20; depth++)
             {
                 if (currentPid <= 4 || visited.Contains(currentPid)) break;
                 visited.Add(currentPid);
 
-                var procInfo = _ancestryCache.GetProcessInfo(currentPid);
+                var procInfo = _ancestryCache.GetProcessIdentity(currentPid);
+                // A parent born after its child is a reused PID, not ancestry authority.
+                if (!procInfo.startUtc.HasValue ||
+                    (childStartUtc.HasValue && procInfo.startUtc.Value > childStartUtc.Value)) break;
+                childStartUtc = procInfo.startUtc;
                 string? imagePath = !string.IsNullOrEmpty(procInfo.imagePath) ? procInfo.imagePath : null;
                 if (string.IsNullOrEmpty(currentName)) currentName = procInfo.name;
 
                 chain.Add(new ProcessNode
                 {
                     ProcessId = currentPid,
+                    ProcessStartUtc = procInfo.startUtc,
                     ProcessName = currentName,
                     ImagePath = imagePath,
                     IsSystemBinary = IsSystemBinary(imagePath, currentName)
                 });
 
-                var (parentPid, parentName) = _ancestryCache.GetParent(currentPid);
+                var parentPid = procInfo.parentId;
+                var parentName = _ancestryCache.GetProcessIdentity(parentPid).name;
                 if (parentPid <= 0) break;
                 currentPid = parentPid;
                 currentName = parentName;
@@ -609,6 +622,7 @@ namespace Sentinel.Core
         public string ProcessName { get; set; } = "";
         public string? ImagePath { get; set; }
         public bool IsSystemBinary { get; set; }
+        public DateTime? ProcessStartUtc { get; set; }
     }
 
     public sealed class KilledProcessInfo

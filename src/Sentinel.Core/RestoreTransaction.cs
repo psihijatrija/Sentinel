@@ -16,8 +16,10 @@ namespace Sentinel.Core
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            destination = Path.GetFullPath(destination);
+            // Validate raw device/alternate-stream syntax before Framework path normalization,
+            // which otherwise throws NotSupportedException before the restore policy can refuse it.
             RequireLocalPath(destination);
+            destination = Path.GetFullPath(destination);
             if (File.Exists(destination) || Directory.Exists(destination))
                 throw new IOException("Restore destination already exists; refusing to overwrite it.");
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);

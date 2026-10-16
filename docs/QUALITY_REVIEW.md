@@ -195,3 +195,186 @@ by the linked GitHub Actions run; that cannot substitute for deployment/attack d
 
 Unchanged scores identify work this pass did not establish. A claim that all segments
 are 10/10 would still be unsupported, including for code paths with real fixes.
+
+## Resumed implementation — 2026-10-16 (unreleased)
+
+This resumes the interrupted follow-up; it does not close the full improvement request
+or change the ratings above. No release or Windows execution is claimed.
+
+- Process reputation uses two workers and a 256-item pending queue instead of one
+  fire-and-forget task per process event. Oldest pending items are evicted under overload;
+  `ReputationDropped` records these separately from telemetry losses and is displayed in
+  Ops. Rule evaluation continues independently. Shutdown cancels and waits for workers.
+- Reputation detections retain the process telemetry timestamp. Queue/network delays
+  no longer turn old observations into apparently fresh evidence for a reused PID.
+- Reputation self-exclusion now uses `SelfPathGuard` only; arbitrary `Sentinel.*` files
+  in the install directory no longer gain the broader prefix exemption.
+- Chain-tracer termination and the central plain-kill fallback open one least-privilege
+  Windows process handle for creation-time, critical-process and image checks,
+  termination and exit verification. Chain nodes also require the traced image to match.
+  A failed/unverified termination no longer enters `KilledProcesses`. This verifies only
+  the selected process, not a complete process tree. Cached ancestor identity still lacks
+  captured creation-time evidence; inline remediations, quarantine, certificate-adder and
+  isolation helpers require further conversion and Windows evaluation.
+- Plain-kill fallback outcomes become Confirmed only after same-handle exit verification.
+  Chain/mixed effects retain Attempted semantics; completion of tracing alone is not a
+  verified successful response. Protected process names/paths compare without case sensitivity.
+- Recovery takes explicit installer/version/hash inputs, validates digest and Authenticode
+  before disruption, copies and hashes an archive including `.old` files, journals phases,
+  handles installer failure/cancellation and checks installed version and service state.
+  It never deletes the only recovery copy or silently restores/executes old code.
+  It requires a signed installer and an independently trusted digest. Existing unsigned
+  release artifacts cannot use this path; signing infrastructure is still outstanding.
+  Service state/version checks are not a functional endpoint health test. Interrupted
+  upgrade/rollback compatibility remains a required Windows exercise.
+
+The full improvement backlog remains the “Still required” column above, particularly
+full telemetry/rule replay, remaining sensor instrumentation, durable reversible host
+mutations, deployment-bound evidence validation, original ML evaluation provenance and
+real benign/adversarial/performance measurements. None can be replaced by assigning 10/10.
+
+Validation for the resumed changes:
+
+- .NET SDK 10.0.402 cross-build of all seven projects, Release, warnings as errors:
+  zero warnings and zero errors. Shipping targets remain unchanged.
+- Six queue/deduplication regression cases executed in an external Linux .NET 10
+  host linked to production code and committed tests: six passed, zero skipped.
+  Includes 1,000 concurrent submissions with two occupied workers, exact eviction
+  counts, continued processing after a failed item, and cancellation on shutdown.
+- PowerShell 7.6 parser accepted the recovery script; this is syntax validation only.
+- Full Windows Framework tests, native termination, installer execution, service restart
+  and signing/release validation are unrun in this Linux environment.
+- Changes remain unreleased. No new version, push, installer or revised rating is claimed.
+
+A further concurrency finding in the resumed pass: detection deduplication factories
+could grant multiple callers apparent ownership. Slot claims now use atomic
+compare-and-exchange operations, pruning conditionally removes the observed value,
+and the pruning counter uses Interlocked. This matters more with concurrent reputation
+workers; the fix applies to all detection submissions.
+
+### Continued response and sensor work (2026-10-16, unreleased)
+
+- Ancestry refresh and event insertions now serialize snapshot updates, avoiding lost
+  sibling entries. Cache observations retain process creation times, invalidate old
+  ancestry when a PID generation changes, and withdraw identity when it cannot be read.
+  Chain tracing refuses missing generations and parents born after their children;
+  native termination checks the exact creation time captured with that chain node.
+- Certificate-adder, injector and ISO fallback kills in AdvancedResponseEngine now use
+  the verified termination path too. Injector failures do not enter reinfection tracking.
+  File quarantine and certificate removal remain separate mutations with their own limits;
+  this does not establish identity-bound file operations across the whole product.
+- ISO containment requires event time, a local path matched to the live mounted-image
+  origin and confirmed process exit before dismount. Failed dismount prevents source
+  deletion. Cancellation is checked before subsequent mutation. Source-file replacement
+  races still need a file-handle-bound transaction; no complete rollback guarantee is made.
+- VM containment no longer uses an unverified display name with Stop-VM. Same-handle
+  process policy restricts termination to dedicated worker images; shared management
+  services such as vmms are refused. VM files remain preserved. The image restriction
+  narrows existing behavioral authority; it never authorizes a response on its own.
+- Docker responses resolve names to full container IDs, validate full image hashes,
+  stop on command failure, and avoid force-removing shared images. Command execution
+  drains both pipes concurrently, bounds each output to 1 MiB and enforces a 15-second
+  deadline. Partial results explicitly remain unconfirmed. Native/container integration
+  is still unrun here; exit-status success is not an independent host-integrity proof.
+- DNS polling implements the existing sensor-progress interface. A completed empty
+  collection is Healthy; unavailable or failed event-log reads are Failed. The supervisor
+  samples the source so stalled collection becomes Stale. This does not prove that the
+  optional DNS log records every query or that its localized payload parsing is complete.
+
+Portable validation now exercises 27 queue, deduplication, termination-policy and
+isolation-identifier cases against production sources. They passed with zero skipped.
+Two new ancestry regressions are included in the Windows test project (concurrent starts
+and replacement generations), and the existing preservation test now uses the real
+current-process image instead of inventing a conflicting image identity. Those Windows
+cases and native DNS/process/isolation behavior remain unexecuted on this Linux host.
+
+Final continued-pass cross-build: all seven projects compiled in Release with warnings
+as errors, zero warnings and zero errors. One parallel MSBuild attempt lost worker
+processes; the serial build with node reuse/shared compilation disabled completed.
+This is cross-compilation evidence, not execution of the Windows Framework suite.
+
+### Recorded-input replay and reversible firewall isolation (unreleased)
+
+The diagnostics tool now supports typed telemetry-to-rule replay with eight production
+rules, shared live context features, atomic historical-time deduplication, tier-law
+annotations and behavioral/weighted correlation. Comparisons bind to the same normalized
+telemetry fingerprint and identify the compiled module. Outputs remain LogOnly. This
+extends the former detection-only replay without claiming complete pipeline coverage:
+no live identity, reputation, scoring/allowlists, plugins/graph, dynamic/sliding-window
+rules, self-PID filter or response execution is included. An explicit capture is required;
+continuous telemetry recording is not silently enabled.
+
+Rule-category lookup no longer instantiates arbitrary rules while scanning metadata.
+A reviewed type list and explicit attribute alias preserve existing category names;
+a Windows registration test checks all declared categories/aliases. This also removes
+constructor side effects from offline classification.
+
+New central firewall isolation is a write-ahead transaction with unique rule names,
+prior-absence checks, intended state, authorization reference, partial-failure records,
+and read-back verification. The response engine reports Confirmed only for verified
+firewall rules; the DNS/ARP cache side effects remain outside the recovery scope.
+Diagnostics provides read-only inspection and explicit elevated rollback. Rollback
+validates paths/schema/intended definitions, refuses changed/duplicate rules, preserves
+foreign rules, verifies removal and can resume explicitly after interruption. No startup
+replay or automatic removal was introduced. Native Windows COM behavior and concurrent
+administrator races remain validation/implementation limits; rule-field snapshots are
+not a complete firewall policy backup. Existing protected ProgramData ACLs are required.
+
+Repeated verified targets reuse their existing rules/journal after current read-back,
+including across service restart. Retained transaction history is capped at 4096 rather
+than growing without bound; completed history needs explicit archival/service restart
+at the limit. Cache invalidation now sits behind an injected Windows boundary and only
+runs after verified isolation, so rejected targets do not flush host caches and fake-store
+response tests have no native cache side effects.
+
+Validation for this continuation:
+
+- Final Release cross-build: all seven projects, zero warnings/errors, shipping targets
+  unchanged. Includes diagnostics commands, native adapters, service DI and new tests.
+- External source-linked .NET 10 host: 44 passed, zero skipped (17 firewall transaction
+  cases plus the 27 earlier queue/deduplication/process/identifier cases). Recovery cases
+  exercise partial application, interrupted rollback, conflicts, edited journals,
+  protected recovery-root validation, target reuse across restart and foreign-rule preservation.
+- External .NET 10 host loading the compiled Core assembly: 11 passed, zero skipped
+  (nine recorded-telemetry replay cases and two fake-firewall response integration cases).
+  The response cases have no native firewall or DNS/ARP side effects.
+- Full Windows Framework suite, registration/ancestry Windows cases, actual Firewall COM
+  field normalization, elevated diagnostics rollback, production ACLs and native cache
+  invalidation remain unexecuted. No publication, release or numerical rating increase
+  is claimed. The implementation remains an unreleased local change set.
+
+### Reported 3.1.8 release-test failures
+
+The owner supplied the summary for Release run 38774407671 (commit b27f801):
+2782 executed, 2775 passed, seven failed, none unexecuted. The public job page
+identifies the failing Windows build/test gate; Node action deprecation messages
+are warnings, not these test failures.
+
+Six failures used nonexistent process IDs to reach kill-budget, kill-outcome,
+pre-action-audit or Docker/VM-delegation assertions. The production generation guard
+correctly refused those actions earlier. Tests now inject explicit process and
+isolation fixtures rather than relying on unsuccessful native kills. Production DI
+binds native process operations and real isolation containment; there is no runtime
+configuration/IPC switch to bypass identity checks. Budget tests additionally verify
+exactly three/two fixture terminations, and the audit fixture checks PRE_ACTION from
+inside the termination callback. A new test verifies default production handling of
+an unknown PID remains LogOnly, without a destructive pre-action audit.
+
+The seventh failure was real Windows Framework path-validation ordering: GetFullPath
+could throw NotSupportedException for an alternate data stream before the restore
+policy rejected it. Raw local/device/stream validation now precedes normalization,
+retaining the InvalidDataException refusal contract and preventing writes.
+
+Validation: final seven-project Release cross-build passed with zero warnings/errors.
+Twenty-six selected cases passed in the external .NET 10 host loading compiled Core,
+including all seven reported cases, neighboring ISO/Tier2/audit/restore safety checks
+and affected replay/firewall response cases. None were skipped. This does not establish
+a successful Windows Framework rerun: the original Actions run remains failed until
+updated code is published and the Windows gate executes again. Changes remain local
+and unreleased, alongside the ongoing improvement work.
+
+### Unreleased certificate safety follow-up
+
+Central certificate response now preflights live contexts across its four target stores, refuses stamped or unknown trust evidence, rechecks before removal, and verifies absence before reporting removal. Certificate property reads distinguish documented absence from native/API failure. Dedicated distrust refuses incomplete store scans and rechecks live stamps before removing a context. Nine pure policy cases cover present/absent/unknown combinations.
+
+This is not a certificate recovery transaction. Native Windows store behavior, concurrent store changes, private-PKI compatibility, and partial removal/blocking recovery remain unvalidated; CurrentUser refers to the executing service account. No automatic trust restoration is added.

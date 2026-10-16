@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace Sentinel.Core
@@ -16,7 +17,14 @@ namespace Sentinel.Core
     /// the host AV cannot inspect it until execution begins. This engine provides
     /// immediate containment once malicious behavior is confirmed inside these environments.
     /// </summary>
-    public sealed class IsolationResponseEngine
+    public interface IIsolationContainment
+    {
+        Task<bool> HandleIsoThreatAsync(int processId, string isoPath, DateTime? evidenceUtc = null, CancellationToken ct = default);
+        Task HandleDockerThreatAsync(string containerId, CancellationToken ct = default);
+        Task HandleVmThreatAsync(int vmHostProcessId, string vmName, DateTime? evidenceUtc = null, CancellationToken ct = default);
+    }
+
+    public sealed class IsolationResponseEngine : IIsolationContainment
     {
         private readonly ILogger<IsolationResponseEngine> _logger;
         private readonly JsonlEventLogger _eventLogger;
@@ -35,28 +43,32 @@ namespace Sentinel.Core
         /// </summary>
         /// <param name="processId">PID of the malicious process running from the ISO mount.</param>
         /// <param name="isoPath">Full path to the .iso file on disk.</param>
-        public async Task HandleIsoThreatAsync(int processId, string isoPath)
+        public async Task<bool> HandleIsoThreatAsync(int processId, string isoPath, DateTime? evidenceUtc = null, CancellationToken ct = default)
         {
             _logger.LogInformation("[IsolationResponse] Handling ISO threat - PID {ProcessId}, IsoPath {IsoPath}",
                 processId, isoPath);
 
             var stopwatch = Stopwatch.StartNew();
 
-            // 1. Kill the process running from the ISO drive
-            try
+            ct.ThrowIfCancellationRequested();
+            if (!evidenceUtc.HasValue || !Path.IsPathRooted(isoPath) || isoPath.StartsWith(@"\\", StringComparison.Ordinal))
             {
-                using var process = Process.GetProcessById(processId);
-                var processName = process.ProcessName;
-                process.KillTree();
-                await process.WaitForExitAsync();
-
-                _logger.LogWarning("[IsolationResponse] Killed ISO-hosted process {ProcessName} (PID {ProcessId})",
-                    processName, processId);
+                _logger.LogWarning("[IsolationResponse] ISO mutation refused: missing evidence or invalid local path");
+                return false;
             }
-            catch (Exception ex)
+            var origin = IsoOriginResolver.ResolveBackingImageForProcess(processId);
+            if (origin == null || !string.Equals(Path.GetFullPath(origin), Path.GetFullPath(isoPath), StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogDebug(ex, "[IsolationResponse] Failed to kill process PID {ProcessId}", processId);
+                _logger.LogWarning("[IsolationResponse] ISO mutation refused: backing image could not be matched");
+                return false;
             }
+            await _eventLogger.LogEventAsync("response_intent", new { Action = "IsoContainment", ProcessId = processId, Image = origin });
+            if (!VerifiedProcessTermination.TryTerminate(processId, evidenceUtc.Value, out var terminationReason))
+            {
+                _logger.LogWarning("[IsolationResponse] ISO mutation refused: {Reason}", terminationReason);
+                return false;
+            }
+            bool dismounted = false, deleted = false;
 
             // 2. Dismount the ISO via PowerShell Dismount-DiskImage
             // SECURITY v1.4.4: Use -EncodedCommand to prevent command injection via crafted ISO filenames.
@@ -78,31 +90,24 @@ namespace Sentinel.Core
                     CreateNoWindow = true
                 };
 
-                dismount.Start();
-                var stderr = await dismount.StandardError.ReadToEndAsync();
-                await dismount.WaitForExitAsync();
-
-                if (dismount.ExitCode == 0)
-                {
-                    _logger.LogWarning("[IsolationResponse] Dismounted ISO {IsoPath}", isoPath);
-                }
-                else
-                {
-                    _logger.LogDebug("[IsolationResponse] Dismount-DiskImage failed for {IsoPath}: {Error}",
-                        isoPath, stderr);
-                }
+                await RunCheckedCommandAsync(dismount, ct).ConfigureAwait(false);
+                dismounted = true;
+                _logger.LogWarning("[IsolationResponse] Dismounted ISO {IsoPath}", isoPath);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "[IsolationResponse] Exception during ISO dismount for {IsoPath}", isoPath);
             }
 
-            // 3. Delete the .iso source file
+            // 3. Delete only after the backing image was matched and dismount completed.
+            ct.ThrowIfCancellationRequested();
             try
             {
-                if (File.Exists(isoPath))
+                if (dismounted && File.Exists(isoPath))
                 {
                     File.Delete(isoPath);
+                    deleted = !File.Exists(isoPath);
                     _logger.LogWarning("[IsolationResponse] Deleted ISO file {IsoPath}", isoPath);
                 }
             }
@@ -117,11 +122,13 @@ namespace Sentinel.Core
             {
                 ProcessId = processId,
                 ProcessName = "ISO-hosted",
-                ActionTaken = "IsoKillDismountDelete",
-                Reason = $"ISO threat neutralized: {isoPath}",
+                ActionTaken = dismounted && deleted ? "IsoKillDismountDelete" : "IsoContainmentUnconfirmed",
+                Outcome = dismounted && deleted ? ResponseExecutionOutcome.Confirmed : ResponseExecutionOutcome.Attempted,
+                Reason = $"ISO response: process exit verified; dismounted={dismounted}; deleted={deleted}; path={isoPath}",
                 Timestamp = DateTime.UtcNow,
                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
             });
+            return dismounted && deleted;
         }
 
         /// <summary>
@@ -129,83 +136,46 @@ namespace Sentinel.Core
         /// Stops the container, removes it, and removes the associated image.
         /// </summary>
         /// <param name="containerId">Docker container ID or name.</param>
-        public async Task HandleDockerThreatAsync(string containerId)
+        public async Task HandleDockerThreatAsync(string containerId, CancellationToken ct = default)
         {
-            // HARDENING v1.3.0: Sanitize containerId to prevent command injection.
-            // Docker container IDs are hex strings (64 chars) or names matching [a-zA-Z0-9_.-]+
-            if (string.IsNullOrWhiteSpace(containerId) || !IsValidDockerIdentifier(containerId))
+            if (!IsolationIdentifiers.IsContainerReference(containerId))
             {
-                _logger.LogWarning("[IsolationResponse] Rejected invalid containerId: '{ContainerId}'", containerId);
+                _logger.LogWarning("[IsolationResponse] Invalid container reference refused");
                 return;
             }
-
-            _logger.LogInformation("[IsolationResponse] Handling Docker threat - ContainerId {ContainerId}", containerId);
-
             var stopwatch = Stopwatch.StartNew();
-            string? imageId = null;
-
-            // Determine the image before stopping (inspect while running)
+            string? resolvedId = null, imageId = null;
+            bool stopped = false, removed = false, imageRemoved = false;
+            string? error = null;
             try
             {
-                var inspectOutput = await RunDockerCommandAsync("inspect", $"--format={{{{.Image}}}} {containerId}");
-                if (!string.IsNullOrWhiteSpace(inspectOutput))
-                {
-                    imageId = inspectOutput.Trim();
-                }
+                // Resolve a potentially reusable name to an immutable full container ID before mutation.
+                resolvedId = (await RunDockerCommandAsync("inspect", "--format={{.Id}} " + containerId, ct)).Trim();
+                if (!IsolationIdentifiers.IsContainerId(resolvedId)) throw new InvalidDataException("Invalid Docker container identity");
+                imageId = (await RunDockerCommandAsync("inspect", "--format={{.Image}} " + resolvedId, ct)).Trim();
+                if (!IsolationIdentifiers.IsImageId(imageId)) throw new InvalidDataException("Invalid Docker image identity");
+                await _eventLogger.LogEventAsync("response_intent", new { Action = "DockerContainment", ContainerId = resolvedId, ImageId = imageId });
+                await RunDockerCommandAsync("stop", resolvedId, ct);
+                stopped = true;
+                await RunDockerCommandAsync("rm", resolvedId, ct);
+                removed = true;
+                // Never force removal of a shared image: Docker must refuse an image still in use.
+                await RunDockerCommandAsync("rmi", imageId, ct);
+                imageRemoved = true;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "[IsolationResponse] Failed to inspect container {ContainerId}", containerId);
+                error = ex.GetType().Name;
+                _logger.LogWarning(ex, "[IsolationResponse] Docker containment incomplete for {Container}", resolvedId ?? containerId);
             }
-
-            // 1. Stop the container
-            try
-            {
-                await RunDockerCommandAsync("stop", containerId);
-                _logger.LogWarning("[IsolationResponse] Stopped Docker container {ContainerId}", containerId);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[IsolationResponse] Failed to stop container {ContainerId}", containerId);
-            }
-
-            // 2. Remove the container
-            try
-            {
-                await RunDockerCommandAsync("rm", $"--force {containerId}");
-                _logger.LogWarning("[IsolationResponse] Removed Docker container {ContainerId}", containerId);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[IsolationResponse] Failed to remove container {ContainerId}", containerId);
-            }
-
-            // 3. Remove the image
-            // SECURITY v1.4.4: Validate imageId from docker inspect output before use.
-            // imageId comes from external process output, not our own validation - a malicious
-            // container could craft its image reference to include shell metacharacters.
-            if (!string.IsNullOrWhiteSpace(imageId) && IsValidDockerIdentifier(imageId!))
-            {
-                try
-                {
-                    await RunDockerCommandAsync("rmi", $"--force {imageId}");
-                    _logger.LogWarning("[IsolationResponse] Removed Docker image {ImageId}", imageId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "[IsolationResponse] Failed to remove image {ImageId}", imageId);
-                }
-            }
-
             stopwatch.Stop();
-
             await _eventLogger.LogEventAsync("response", new ResponseEvent
             {
-                ProcessId = 0,
-                ProcessName = $"docker:{containerId}",
-                ActionTaken = "DockerStopRemove",
-                Reason = $"Docker threat neutralized: container={containerId}, image={imageId ?? "unknown"}",
-                Timestamp = DateTime.UtcNow,
+                ProcessId = 0, ProcessName = "docker:" + (resolvedId ?? containerId),
+                ActionTaken = removed && imageRemoved ? "DockerStopRemove" : "DockerContainmentUnconfirmed",
+                Outcome = removed && imageRemoved ? ResponseExecutionOutcome.Confirmed : ResponseExecutionOutcome.Attempted,
+                Reason = $"Docker stopped={stopped}; removed={removed}; imageRemoved={imageRemoved}; error={error ?? "none"}",
                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
             });
         }
@@ -216,7 +186,7 @@ namespace Sentinel.Core
         /// </summary>
         /// <param name="vmHostProcessId">PID of the VM host process (vmware-vmx.exe, VBoxHeadless.exe, etc.).</param>
         /// <param name="vmName">Display name of the virtual machine for logging.</param>
-        public async Task HandleVmThreatAsync(int vmHostProcessId, string vmName)
+        public async Task HandleVmThreatAsync(int vmHostProcessId, string vmName, DateTime? evidenceUtc = null, CancellationToken ct = default)
         {
             // HARDENING v1.3.0: Sanitize vmName
             if (!string.IsNullOrEmpty(vmName) && !IsValidVmName(vmName))
@@ -229,39 +199,16 @@ namespace Sentinel.Core
                 vmHostProcessId, vmName);
 
             var stopwatch = Stopwatch.StartNew();
-            string actionTaken = "VmKill";
-            string processName = "unknown";
-
-            try
-            {
-                using var process = Process.GetProcessById(vmHostProcessId);
-                processName = process.ProcessName;
-
-                var lowerName = processName.ToLowerInvariant();
-
-                if (lowerName.Contains("vmwp") || lowerName.Contains("vmms"))
-                {
-                    // Hyper-V: attempt graceful stop via WMI (Msvm_ComputerSystem)
-                    actionTaken = await TryStopHyperVVmAsync(vmName) ? "HyperV_WmiStop" : "HyperV_ProcessKill";
-                }
-
-                // Kill the VM host process regardless of hypervisor type
-                // For VirtualBox (VBoxHeadless.exe, VirtualBoxVM.exe) and VMware (vmware-vmx.exe)
-                // this is the primary kill mechanism. For Hyper-V it's the fallback.
-                if (actionTaken != "HyperV_WmiStop")
-                {
-                    process.KillTree();
-                    await process.WaitForExitAsync();
-                }
-
-                _logger.LogWarning("[IsolationResponse] Terminated VM {VmName} - process {ProcessName} (PID {VmHostProcessId}), action={ActionTaken}",
-                    vmName, processName, vmHostProcessId, actionTaken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[IsolationResponse] Failed to terminate VM process PID {VmHostProcessId} ({VmName})",
-                    vmHostProcessId, vmName);
-            }
+            ct.ThrowIfCancellationRequested();
+            if (evidenceUtc.HasValue)
+                await _eventLogger.LogEventAsync("response_intent", new { Action = "VmHostTermination", ProcessId = vmHostProcessId });
+            bool exited = evidenceUtc.HasValue && VerifiedProcessTermination.TryTerminate(
+                vmHostProcessId, evidenceUtc.Value, out _, requiredImagePolicy: IsolationIdentifiers.IsDedicatedVmHostImage);
+            string actionTaken = exited ? "VmKill" : "VmKillFailed";
+            string processName = "VM-host";
+            // A display name is not authority to stop another VM via Stop-VM.
+            // Only the handle-verified host process is targeted; VM files are preserved.
+            _logger.LogInformation("[IsolationResponse] VM host exit verified={Verified} for PID {Pid}", exited, vmHostProcessId);
 
             stopwatch.Stop();
 
@@ -270,70 +217,11 @@ namespace Sentinel.Core
                 ProcessId = vmHostProcessId,
                 ProcessName = processName,
                 ActionTaken = actionTaken,
-                Reason = $"VM threat neutralized: {vmName} (files preserved)",
+                Outcome = exited ? ResponseExecutionOutcome.Confirmed : ResponseExecutionOutcome.Failed,
+                Reason = $"VM host exit verified={exited}: {vmName} (files preserved)",
                 Timestamp = DateTime.UtcNow,
                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
             });
-        }
-
-        /// <summary>
-        /// Attempts to stop a Hyper-V VM gracefully via WMI (Msvm_ComputerSystem).
-        /// Returns true if the WMI call succeeded.
-        /// </summary>
-        private async Task<bool> TryStopHyperVVmAsync(string vmName)
-        {
-            try
-            {
-                // SECURITY v1.4.4: Use -EncodedCommand to prevent command injection via crafted VM names.
-                // Previously interpolated vmName directly into a PowerShell -Command string.
-                // While IsValidVmName() validates characters, -EncodedCommand eliminates the attack
-                // surface entirely - no parsing of the command string by PowerShell's evaluator.
-                var script = $"Stop-VM -Name '{vmName.Replace("'", "''")}' -TurnOff -Force -ErrorAction Stop";
-                var encodedScript = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
-                var args = $"-NoProfile -NonInteractive -EncodedCommand {encodedScript}";
-                using var ps = new Process();
-                ps.StartInfo = new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    Arguments = args,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                ps.Start();
-                var stderr = await ps.StandardError.ReadToEndAsync();
-                await ps.WaitForExitAsync();
-
-                if (ps.ExitCode == 0)
-                {
-                    _logger.LogInformation("[IsolationResponse] Hyper-V VM {VmName} stopped via WMI/Stop-VM", vmName);
-                    return true;
-                }
-
-                _logger.LogDebug("[IsolationResponse] Stop-VM failed for {VmName}: {Error}", vmName, stderr);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[IsolationResponse] Exception invoking Stop-VM for {VmName}", vmName);
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Validates a Docker container ID or name. IDs are 64-char hex; names are [a-zA-Z0-9][a-zA-Z0-9_.-]*
-        /// </summary>
-        private static bool IsValidDockerIdentifier(string id)
-        {
-            if (id.Length > 128) return false;
-            foreach (var c in id)
-            {
-                if (!char.IsLetterOrDigit(c) && c != '_' && c != '.' && c != '-' && c != ':')
-                    return false;
-            }
-            return true;
         }
 
         /// <summary>
@@ -353,7 +241,7 @@ namespace Sentinel.Core
         /// <summary>
         /// Executes a docker command directly via docker.exe (no cmd.exe shell-out).
         /// </summary>
-        private async Task<string> RunDockerCommandAsync(string command, string arguments)
+        private async Task<string> RunDockerCommandAsync(string command, string arguments, CancellationToken ct)
         {
             using var process = new Process();
             process.StartInfo = new ProcessStartInfo
@@ -366,18 +254,46 @@ namespace Sentinel.Core
                 CreateNoWindow = true
             };
 
+            return await RunCheckedCommandAsync(process, ct).ConfigureAwait(false);
+        }
+
+        private static async Task<string> RunCheckedCommandAsync(Process process, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
             process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
+            var output = ReadBoundedAsync(process.StandardOutput);
+            var error = ReadBoundedAsync(process.StandardError);
+            var completion = Task.WhenAll(process.WaitForExitAsync(), output, error);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var deadline = Task.Delay(TimeSpan.FromSeconds(15), timeout.Token);
+            if (await Task.WhenAny(completion, deadline).ConfigureAwait(false) != completion)
             {
-                _logger.LogDebug("[IsolationResponse] docker {Command} failed (exit {ExitCode}): {Error}",
-                    command, process.ExitCode, error);
+                try { if (!process.HasExited) process.Kill(); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Response command cleanup failed: " + ex.Message); }
+                process.StandardOutput.Close();
+                process.StandardError.Close();
+                // Observe any pipe-read error after cancellation without blocking indefinitely.
+                _ = completion.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                ct.ThrowIfCancellationRequested();
+                throw new TimeoutException("Response command exceeded its 15 second deadline");
             }
+            timeout.Cancel();
+            await completion.ConfigureAwait(false);
+            if (process.ExitCode != 0) throw new InvalidOperationException("Response command failed with exit " + process.ExitCode);
+            return await output.ConfigureAwait(false);
+        }
 
-            return output;
+        private static async Task<string> ReadBoundedAsync(StreamReader reader)
+        {
+            var text = new System.Text.StringBuilder();
+            var buffer = new char[4096];
+            int count;
+            while ((count = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+            {
+                if (text.Length + count > 1024 * 1024) throw new InvalidDataException("Response command output exceeded 1 MiB");
+                text.Append(buffer, 0, count);
+            }
+            return text.ToString();
         }
     }
 }

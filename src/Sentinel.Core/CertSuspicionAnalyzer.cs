@@ -39,25 +39,31 @@ namespace Sentinel.Core
             IntPtr pCertContext, uint dwPropId, byte[]? pvData, ref uint pcbData);
 
         /// <summary>
-        /// True when the certificate context has the given store property set (non-empty).
-        /// Reads off the live context handle; returns false on any failure (fail-safe: a
-        /// read failure must never make a cert look MORE trusted than it is... but note this
-        /// method reports presence of a TRUST stamp, so a false here only means "could not
-        /// confirm the stamp", which the caller treats conservatively - see remarks).
+        /// Reads a store property as present, absent, or unknown. Only the documented
+        /// property-not-found error establishes absence; other errors refuse removal.
         /// </summary>
-        private static bool HasProp(IntPtr ctx, uint propId)
+        private static bool? ReadProp(IntPtr ctx, uint propId)
         {
-            if (ctx == IntPtr.Zero) return false;
+            if (ctx == IntPtr.Zero) return null;
             try
             {
                 uint cb = 0;
-                return CertGetCertificateContextProperty(ctx, propId, null, ref cb) && cb > 0;
+                if (CertGetCertificateContextProperty(ctx, propId, null, ref cb))
+                    return cb > 0 ? true : (bool?)null;
+                // CRYPT_E_NOT_FOUND is the documented absence result. All other errors
+                // mean unknown, which must never authorize destructive remediation.
+                return Marshal.GetLastWin32Error() == unchecked((int)0x80092004) ? false : (bool?)null;
             }
-            catch
+            catch (Exception ex) when (ex is DllNotFoundException || ex is EntryPointNotFoundException || ex is System.Security.Cryptography.CryptographicException)
             {
-                return false;
+                return null;
             }
         }
+
+        private static bool HasProp(IntPtr ctx, uint propId) => ReadProp(ctx, propId) == true;
+
+        internal static bool CanRemoveWithStampEvidence(bool? ctl, bool? program)
+            => ctl == false && program == false;
 
         /// <summary>
         /// True when the certificate carries the AuthRoot CTL membership stamp (public CA in
@@ -78,13 +84,14 @@ namespace Sentinel.Core
         ///
         /// This is deliberately conservative: if either crypt32 read succeeds and reports a
         /// stamp, the cert is trusted and left alone. A cert is only ever flagged when BOTH
-        /// reads come back empty, which on a healthy machine is true solely for orphaned /
-        /// planted / de-vouched roots.
+        /// reads establish absence. Unknown evidence refuses remediation. Absence alone
+        /// does not distinguish private enterprise roots from malicious roots.
         /// </summary>
         public static bool IsSuspicious(X509Certificate2 cert)
         {
             if (cert == null) return false;
-            return !HasCtlStamp(cert) && !HasMsProgramStamp(cert);
+            return CanRemoveWithStampEvidence(ReadProp(cert.Handle, CERT_AUTH_ROOT_SHA256_HASH_PROP_ID),
+                ReadProp(cert.Handle, MS_ROOT_PROGRAM_POLICY_PROP_ID));
         }
 
         /// <summary>
@@ -93,10 +100,11 @@ namespace Sentinel.Core
         public static string DescribeVerdict(X509Certificate2 cert)
         {
             if (cert == null) return "null certificate";
-            bool ctl = HasCtlStamp(cert);
-            bool ms = HasMsProgramStamp(cert);
-            if (ctl || ms)
+            bool? ctl = ReadProp(cert.Handle, CERT_AUTH_ROOT_SHA256_HASH_PROP_ID);
+            bool? ms = ReadProp(cert.Handle, MS_ROOT_PROGRAM_POLICY_PROP_ID);
+            if (ctl == true || ms == true)
                 return $"trusted anchor (AuthRoot-CTL={ctl}, MS-program={ms})";
+            if (!ctl.HasValue || !ms.HasValue) return "OS trust-stamp evidence unavailable; removal refused";
             return "no AuthRoot-CTL membership and no Microsoft root-program marker " +
                    "(not vouched for by the OS trusted-root program)";
         }

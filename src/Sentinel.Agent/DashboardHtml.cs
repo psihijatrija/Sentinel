@@ -859,6 +859,7 @@ function loadOps() {{
                 ['Detections Total', ops.DetectionsTotal || ops.detectionsTotal || 0],
                 ['Responses Total', ops.ResponsesTotal || ops.responsesTotal || 0],
                 ['Drop Rate', dropRate + '%'],
+                ['Reputation jobs dropped', ops.ReputationDropped || ops.reputationDropped || 0],
                 ['Queue wait P95', (ops.QueueWaitMsP95 || ops.queueWaitMsP95 || 0).toFixed(1) + 'ms'],
                 ['Pipeline', (ops.Pipeline || ops.pipeline || {{}}).State || (ops.pipeline || {{}}).state || 'Unknown'],
                 ['Oldest queued', ((ops.Pipeline || ops.pipeline || {{}}).OldestQueuedAgeMs || 0).toFixed(1) + 'ms'],

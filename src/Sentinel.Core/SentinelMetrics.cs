@@ -21,6 +21,7 @@ namespace Sentinel.Core
         private long _responsesCount;
         private long _telemetryReceived;
         private long _telemetryDropped;
+        private long _reputationDropped;
         private readonly ConcurrentQueue<double> _queueWaits = new();
         private long _compositesEmitted;
         private long _weightedEmitted;
@@ -62,6 +63,8 @@ namespace Sentinel.Core
         public void RecordFalsePositive() => Interlocked.Increment(ref _falsePositivesCount);
 
         public void RecordTelemetryReceived() => Interlocked.Increment(ref _telemetryReceived);
+
+        public void RecordReputationDropped() => Interlocked.Increment(ref _reputationDropped);
 
         public void RecordTelemetryDropped() => Interlocked.Increment(ref _telemetryDropped);
 
@@ -115,6 +118,7 @@ namespace Sentinel.Core
                 FalsePositivesTotal = Interlocked.Read(ref _falsePositivesCount),
                 TelemetryReceived = Interlocked.Read(ref _telemetryReceived),
                 TelemetryDropped = Interlocked.Read(ref _telemetryDropped),
+                ReputationDropped = Interlocked.Read(ref _reputationDropped),
                 CompositesEmitted = Interlocked.Read(ref _compositesEmitted),
                 WeightedCompositesEmitted = Interlocked.Read(ref _weightedEmitted),
                 ChainConfirmed = Interlocked.Read(ref _chainConfirmed),
@@ -165,6 +169,7 @@ namespace Sentinel.Core
         public long FalsePositivesTotal { get; set; }
         public long TelemetryReceived { get; set; }
         public long TelemetryDropped { get; set; }
+        public long ReputationDropped { get; set; }
         public long CompositesEmitted { get; set; }
         public long WeightedCompositesEmitted { get; set; }
         public long ChainConfirmed { get; set; }

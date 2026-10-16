@@ -45,13 +45,15 @@ namespace Sentinel.Core
     public sealed class RuleCategoryAttribute : Attribute
     {
         public DetectionCategory Category { get; }
-        public RuleCategoryAttribute(DetectionCategory category) => Category = category;
+        public string? RuleName { get; }
+        public RuleCategoryAttribute(DetectionCategory category, string? ruleName = null)
+        { Category = category; RuleName = ruleName; }
     }
 
     /// <summary>
     /// Static registry that maps rule names to their declared DetectionCategory.
-    /// Built once at startup by scanning all IDetectionRule implementations for
-    /// [RuleCategory] attributes. Provides O(1) lookup by rule name, eliminating
+    /// Built once from reviewed rule types and their [RuleCategory] metadata, without
+    /// running rule constructors. Provides O(1) lookup by rule name, eliminating
     /// the string-Contains pattern matching that was previously required.
     /// </summary>
     public static class RuleCategoryRegistry
@@ -62,47 +64,21 @@ namespace Sentinel.Core
         {
             _registry = new Dictionary<string, DetectionCategory>(StringComparer.OrdinalIgnoreCase);
 
-            // Scan all types in the Core assembly that implement IDetectionRule
-            var coreAssembly = typeof(IDetectionRule).Assembly;
-            foreach (var type in coreAssembly.GetTypes())
+            // Category lookup must never execute rule constructors (including during offline replay).
+            // This reviewed list also avoids loading unrelated monitor/UI types for categorization.
+            Type[] types = { typeof(LsassAccessRule), typeof(RansomwareDetectionRule), typeof(ReverseShellRule),
+                typeof(ThreatIntelInjectionRule), typeof(PrivilegeEscalationRule), typeof(AttackToolsRule),
+                typeof(CampaignIocRule), typeof(UnsignedBinaryRule), typeof(IdsCommandLineRule),
+                typeof(CampaignDetectionRule), typeof(VerdictGateRule), typeof(ClickFixDetectionRule),
+                typeof(NpmSupplyChainRule), typeof(DllSideloadingDetectionRule), typeof(ChromeRemoteDebuggingRule),
+                typeof(DangerousBrowserFlagRule), typeof(FullPathParentChildRule), typeof(NetworkFacingParentShellRule),
+                typeof(RawSocketRedirectRule) };
+            foreach (var type in types)
             {
-                if (!typeof(IDetectionRule).IsAssignableFrom(type) || type.IsInterface || type.IsAbstract)
-                    continue;
-
-                var attr = type.GetCustomAttribute<RuleCategoryAttribute>();
-                if (attr == null) continue;
-
-                // Instantiate temporarily to get the Name property, or use naming convention
-                // Convention: rule name = class name (which is how all rules are written)
-                // We use the class name as a fallback key and also try to get the Name property
-                try
-                {
-                    // Try to read the Name from a static or instance property via reflection
-                    var nameProp = type.GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
-                    if (nameProp != null && nameProp.PropertyType == typeof(string))
-                    {
-                        // Create a minimal instance to read the Name value
-                        // Most rules have parameterless constructors or we use the class name
-                        try
-                        {
-                            var instance = Activator.CreateInstance(type, nonPublic: true);
-                            if (instance != null)
-                            {
-                                var name = (string?)nameProp.GetValue(instance);
-                                if (!string.IsNullOrEmpty(name))
-                                    _registry[name!] = attr.Category;
-                            }
-                        }
-                        catch
-                        {
-                            // Constructor requires parameters - fall through to class name
-                        }
-                    }
-
-                    // Always register the class name as well (handles rules with DI constructors)
-                    _registry[type.Name] = attr.Category;
-                }
-                catch { }
+                var attribute = type.GetCustomAttribute<RuleCategoryAttribute>()
+                    ?? throw new InvalidOperationException("Missing rule category for " + type.Name);
+                _registry[type.Name] = attribute.Category;
+                if (!string.IsNullOrEmpty(attribute.RuleName)) _registry[attribute.RuleName!] = attribute.Category;
             }
         }
 

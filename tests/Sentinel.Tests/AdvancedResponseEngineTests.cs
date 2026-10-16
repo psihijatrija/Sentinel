@@ -72,7 +72,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task HandleAsync_Tier1CertificateDetection_TriggersAction()
+        public async Task HandleAsync_Tier1CertificateDetection_InvalidThumbprintDoesNotClaimRemoval()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "sentinel_are_test2_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(tempDir);
@@ -88,7 +88,7 @@ namespace Sentinel.Tests
                 var logPath = Path.Combine(tempDir, "events.jsonl");
                 var logger = new JsonlEventLogger(logPath);
                 var quarantine = new QuarantineManager(tempDir);
-                var engine = new AdvancedResponseEngine(config, metrics, logger, quarantine);
+                var engine = new AdvancedResponseEngine(config, metrics, logger, quarantine, processOperations: new ResponseProcessFixture());
 
                 // Emitted event with Tier1 and RemoveCert response (note: President's law rule hit)
                 var detection = new DetectionEvent
@@ -116,13 +116,13 @@ namespace Sentinel.Tests
 
                 foreach (var line in logLines)
                 {
-                    if (line.Contains("\"ActionTaken\":\"REMOVE_CERT\""))
+                    if (line.Contains("\"ActionTaken\":\"REMOVE_CERT_FAILED\""))
                     {
                         foundRemoveCertAction = true;
                     }
                 }
 
-                Assert.True(foundRemoveCertAction, "Active response REMOVE_CERT action was not taken on Tier1 Behavioral detection.");
+                Assert.True(foundRemoveCertAction, "An invalid thumbprint must report failed removal rather than success.");
             }
             finally
             {
@@ -282,7 +282,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task HandleAsync_NetworkIsolation_Tier1_LogsNetworkIsolateAction()
+        public async Task HandleAsync_NetworkIsolation_PrivateTargetDoesNotClaimIsolation()
         {
             var detection = new DetectionEvent
             {
@@ -301,8 +301,37 @@ namespace Sentinel.Tests
             await _engine.HandleAsync(detection);
 
             var log = ReadLog();
-            Assert.Contains("\"ActionTaken\":\"NETWORK_ISOLATE\"", log);
+            Assert.Contains("\"ActionTaken\":\"NETWORK_ISOLATE_FAILED\"", log);
+            Assert.DoesNotContain("\"ActionTaken\":\"NETWORK_ISOLATE\"", log);
             Assert.Contains("192.168.1.100", log);
+        }
+
+        [Fact]
+        public async Task HandleAsync_NetworkIsolationConfirmsOnlyVerifiedRulesWithoutNativeSideEffects()
+        {
+            var store = new MemoryFirewallStore();
+            var recovery = new FirewallIsolationTransaction(store, Path.Combine(_tempDir, "firewall"));
+            var engine = new AdvancedResponseEngine(_config, _metrics, _logger, _quarantine, firewallIsolation: recovery);
+            ResponseEvent? response = null;
+            await engine.HandleAsync(new DetectionEvent
+            {
+                RuleName = "C2 Beaconing Detected", Confidence = 0.95, Tier = DetectionTier.Tier1Behavioral,
+                AuthorizedResponse = ResponseAction.NetworkIsolate, ProcessName = "fixture.exe", ProcessId = 0,
+                Metadata = new Dictionary<string, string> { { "TargetIP", "203.0.113.10" } }
+            }, observed => response = observed);
+            Assert.NotNull(response);
+            Assert.Equal("NETWORK_ISOLATE", response!.ActionTaken);
+            Assert.Equal(ResponseExecutionOutcome.Confirmed, response.Outcome);
+            Assert.Equal(2, store.Rules.Count);
+            Assert.Contains("RecoveryTransaction=", response.Reason);
+        }
+
+        private sealed class MemoryFirewallStore : IFirewallIsolationStore
+        {
+            public List<FirewallIsolationRule> Rules { get; } = new();
+            public IReadOnlyList<FirewallIsolationRule> Find(string name) => Rules.FindAll(rule => rule.Name == name);
+            public void Add(FirewallIsolationRule rule) => Rules.Add(rule);
+            public void Remove(string name) => Rules.RemoveAll(rule => rule.Name == name);
         }
 
         [Fact]
@@ -359,7 +388,7 @@ namespace Sentinel.Tests
         [Fact]
         public async Task HandleAsync_Tier1_KillAuthorized_LogsKillAction()
         {
-            // Use a PID that doesn't exist so kill attempt is safe
+            // Exercise a verified fixture process without querying or terminating a host process.
             var detection = new DetectionEvent
             {
                 RuleName = "LsassAccessRule",
@@ -370,7 +399,10 @@ namespace Sentinel.Tests
                 ProcessId = 99999 // PID very unlikely to exist
             };
 
-            await _engine.HandleAsync(detection);
+            var processes = new ResponseProcessFixture();
+            var engine = new AdvancedResponseEngine(_config, _metrics, _logger, _quarantine, processOperations: processes);
+            await engine.HandleAsync(detection);
+            Assert.Equal(1, processes.TerminationCalls);
 
             var log = ReadLog();
             Assert.Contains("\"ActionTaken\":\"KILL\"", log);
@@ -457,9 +489,13 @@ namespace Sentinel.Tests
             var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
             var metrics = new SentinelMetrics();
             var logger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
-            var engine = new AdvancedResponseEngine(config, metrics, logger, new QuarantineManager(_tempDir));
+            var processes = new ResponseProcessFixture
+            {
+                BeforeTerminate = () => Assert.Contains("\"AuditType\":\"PRE_ACTION\"", ReadAuditTrail())
+            };
+            var engine = new AdvancedResponseEngine(config, metrics, logger, new QuarantineManager(_tempDir), processOperations: processes);
 
-            // Tier1, kill-authorized, non-existent PID so the actual kill is a safe no-op.
+            // Tier1 fixture process; assert audit ordering inside the fake termination operation.
             var detection = new DetectionEvent
             {
                 RuleName = "LsassAccessRule",
@@ -471,6 +507,7 @@ namespace Sentinel.Tests
             };
 
             await engine.HandleAsync(detection);
+            Assert.Equal(1, processes.TerminationCalls);
             await logger.DisposeAsync();
 
             var audit = ReadAuditTrail();
@@ -478,6 +515,31 @@ namespace Sentinel.Tests
                 "A destructive Tier1 response must write a PRE_ACTION audit entry before acting.");
             Assert.Contains("\"AuditType\":\"PRE_ACTION\"", audit);
             Assert.Contains("LsassAccessRule", audit);
+        }
+
+        [Fact]
+        public async Task HandleAsync_UnknownGenerationRefusesKillBeforePreActionAudit()
+        {
+            var config = new SentinelConfig { ObserveUntilChain = false };
+            var logger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
+            try
+            {
+                // Default production boundary: no fake identity and no process exists at this PID.
+                var engine = new AdvancedResponseEngine(config, new SentinelMetrics(), logger, new QuarantineManager(_tempDir));
+                ResponseEvent? response = null;
+                await engine.HandleAsync(new DetectionEvent
+                {
+                    RuleName = "LsassAccessRule", Confidence = 0.95, Tier = DetectionTier.Tier1Behavioral,
+                    AuthorizedResponse = ResponseAction.KillProcess, ProcessId = int.MaxValue,
+                    ProcessName = "missing-process-fixture"
+                }, observed => response = observed);
+                Assert.NotNull(response);
+                Assert.Equal("LOG", response!.ActionTaken);
+                Assert.Equal(ResponseExecutionOutcome.Observed, response.Outcome);
+                Assert.Contains("generation", response.Reason);
+                Assert.DoesNotContain("\"AuditType\":\"PRE_ACTION\"", ReadAuditTrail());
+            }
+            finally { await logger.DisposeAsync(); }
         }
 
         [Fact]

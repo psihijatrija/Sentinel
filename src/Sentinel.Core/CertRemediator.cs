@@ -83,6 +83,12 @@ namespace Sentinel.Core
                 return result;
             }
 
+            if (!IsSuspiciousInStore(norm))
+            {
+                result.Message = "Trust-stamp evidence is protected, unavailable, or absent; distrust refused";
+                return result;
+            }
+
             // Capture the cert bytes before removing, so we can pin the exact cert to Disallowed.
             var captured = CaptureCertificates(norm);
 
@@ -167,47 +173,31 @@ namespace Sentinel.Core
         /// </summary>
         private bool IsSuspiciousInStore(string thumbprint)
         {
+            bool present = false;
             foreach (var (name, location) in TrustStores)
             {
                 try
                 {
                     using var store = new X509Store(name, location);
-                    store.Open(OpenFlags.ReadOnly);
+                    store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
                     var matches = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
-                    foreach (var cert in matches)
+                    try
                     {
-                        try
+                        foreach (var cert in matches)
                         {
-                            // Found a live context: its stamps are authoritative. If ANY store
-                            // copy is vouched-for, do not remove (fail safe toward keeping trust).
-                            if (!CertSuspicionAnalyzer.IsSuspicious(cert))
-                                return false;
+                            present = true;
+                            if (!CertSuspicionAnalyzer.IsSuspicious(cert)) return false;
                         }
-                        finally { cert.Dispose(); }
                     }
+                    finally { foreach (var cert in matches) cert.Dispose(); }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "[CertRemediator] Safety-floor store read failed for {Store}/{Loc}", name, location);
+                    _logger.LogWarning(ex, "[CertRemediator] Incomplete safety-floor evidence for {Store}/{Loc}; refusing", name, location);
+                    return false;
                 }
             }
-
-            // Not vouched-for in any store copy. Confirm it is actually present somewhere trusted;
-            // if absent entirely, treat as not-suspicious (nothing to remove) rather than acting.
-            foreach (var (name, location) in TrustStores)
-            {
-                try
-                {
-                    using var store = new X509Store(name, location);
-                    store.Open(OpenFlags.ReadOnly);
-                    var matches = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
-                    bool present = matches.Count > 0;
-                    foreach (var c in matches) c.Dispose();
-                    if (present) return true;
-                }
-                catch { }
-            }
-            return false;
+            return present;
         }
 
         /// <summary>
@@ -259,6 +249,10 @@ namespace Sentinel.Core
                     {
                         try
                         {
+                            // Recheck the live context immediately before mutation; the
+                            // earlier scan is not authority for a subsequently opened store.
+                            if (!CertSuspicionAnalyzer.IsSuspicious(cert))
+                                throw new InvalidOperationException("Trust-stamp evidence forbids certificate removal");
                             store.Remove(cert);
                             removed++;
                         }

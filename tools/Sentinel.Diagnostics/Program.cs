@@ -15,7 +15,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 try
 {
     if (args.Length < 2) throw new ArgumentException(
-        "Usage: verify-ledger FILE [TRUSTED_CHECKPOINT_JSON] | verify-pack DIRECTORY | replay EVENTS_JSONL [CONFIG_JSON] | replay-behavioral EVENTS_JSONL [CONFIG_JSON] | compare-replays OLD_JSON NEW_JSON | inspect-restore JOURNAL | preview-export EVENTS_JSONL | export EVENTS_JSONL OUTPUT_ZIP | export-private EVENTS_JSONL OUTPUT_ZIP | benchmark-replay EVENTS_JSONL [ITERATIONS]");
+        "Usage: verify-ledger FILE [TRUSTED_CHECKPOINT_JSON] | verify-pack DIRECTORY | replay-telemetry TELEMETRY_JSONL [CONFIG_JSON] | compare-telemetry OLD_JSON NEW_JSON | replay EVENTS_JSONL [CONFIG_JSON] | replay-behavioral EVENTS_JSONL [CONFIG_JSON] | compare-replays OLD_JSON NEW_JSON | inspect-firewall JOURNAL | rollback-firewall JOURNAL | inspect-restore JOURNAL | preview-export EVENTS_JSONL | export EVENTS_JSONL OUTPUT_ZIP | export-private EVENTS_JSONL OUTPUT_ZIP | benchmark-replay EVENTS_JSONL [ITERATIONS]");
     object result;
     switch (args[0])
     {
@@ -28,6 +28,16 @@ try
             break;
         case "verify-pack" when args.Length == 2:
             result = new EvidencePackVerifier().Verify(args[1], cancellation.Token);
+            break;
+        case "replay-telemetry" when args.Length is 2 or 3:
+            var telemetryConfig = args.Length == 3 ? JsonSerializer.Deserialize<WeightedCorrelationConfig>(ReadShared(args[2]), options)
+                ?? throw new InvalidDataException("Null replay configuration") : new WeightedCorrelationConfig();
+            result = await new TelemetryReplay().RunAsync(ReadTelemetry(args[1]), telemetryConfig, cancellation.Token);
+            break;
+        case "compare-telemetry" when args.Length == 3:
+            result = TelemetryReplayComparison.Compare(
+                JsonSerializer.Deserialize<TelemetryReplayReport>(ReadShared(args[1]), options) ?? throw new InvalidDataException("Missing previous telemetry replay"),
+                JsonSerializer.Deserialize<TelemetryReplayReport>(ReadShared(args[2]), options) ?? throw new InvalidDataException("Missing current telemetry replay"));
             break;
         case "replay" when args.Length is 2 or 3:
         case "replay-behavioral" when args.Length is 2 or 3:
@@ -66,6 +76,36 @@ try
             result = ReplayComparison.Compare(
                 JsonSerializer.Deserialize<DetectionReplayReport>(ReadShared(args[1]), options) ?? throw new InvalidDataException("Missing previous replay"),
                 JsonSerializer.Deserialize<DetectionReplayReport>(ReadShared(args[2]), options) ?? throw new InvalidDataException("Missing current replay"));
+            break;
+        case "inspect-firewall" when args.Length == 2:
+        case "rollback-firewall" when args.Length == 2:
+            var recoveryDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "Sentinel", "Recovery", "FirewallIsolation");
+            var firewallRecovery = new FirewallIsolationTransaction(new WindowsFirewallIsolationStore(), recoveryDirectory);
+            if (args[0] == "inspect-firewall") result = firewallRecovery.Inspect(args[1]);
+            else
+            {
+                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                if (!new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+                    throw new UnauthorizedAccessException("Firewall rollback requires an elevated administrator terminal.");
+                var inspected = firewallRecovery.Inspect(args[1]);
+                // Separate per-invocation audit avoids sharing the running service's audit writer.
+                var operatorAuditDirectory = Path.Combine(recoveryDirectory, "operator-" + Guid.NewGuid().ToString("N"));
+                var audit = new JsonlEventLogger(Path.Combine(operatorAuditDirectory, "events.jsonl"));
+                try
+                {
+                    await audit.LogAuditBeforeActionAsync(inspected.Id, "ExplicitFirewallRollback", "ExplicitFirewallRollback",
+                        ResponseAction.NetworkIsolate, 1, "Sentinel.Diagnostics", System.Diagnostics.Process.GetCurrentProcess().Id,
+                        "Administrator explicitly requested removal of unchanged transaction-owned isolation rules");
+                    if (audit.AuditIntegrityDegraded || audit.GetAuditCheckpoint() == null)
+                        throw new IOException("Firewall rollback refused because the pre-action audit could not be recorded.");
+                    var rolledBack = firewallRecovery.Rollback(args[1], cancellation.Token);
+                    await audit.LogAuditActionOutcomeAsync(inspected.Id, ResponseAction.NetworkIsolate,
+                        rolledBack.State == "RolledBack", rolledBack.Error);
+                    result = rolledBack;
+                }
+                finally { await audit.DisposeAsync(); }
+            }
             break;
         case "inspect-restore" when args.Length == 2:
             result = new RestoreTransaction().Inspect(args[1]);
@@ -131,5 +171,24 @@ List<DetectionEvent> ReadDetections(string path)
         if (result.Count > 100000) throw new InvalidDataException("Maximum 100000 detections per offline run.");
     }
     if (result.Count == 0) throw new InvalidDataException("No detection records found.");
+    return result;
+}
+
+List<TelemetryReplayRecord> ReadTelemetry(string path)
+{
+    var result = new List<TelemetryReplayRecord>();
+    using var stream = OpenShared(path);
+    if (stream.Length > 64L * 1024 * 1024) throw new InvalidDataException("Maximum 64 MiB of input per offline run.");
+    using var reader = new StreamReader(stream);
+    string? line;
+    while ((line = reader.ReadLine()) != null)
+    {
+        cancellation.Token.ThrowIfCancellationRequested();
+        if (line.Length > 4 * 1024 * 1024) throw new InvalidDataException("Oversized telemetry record.");
+        if (string.IsNullOrWhiteSpace(line)) continue;
+        result.Add(JsonSerializer.Deserialize<TelemetryReplayRecord>(line, options) ?? throw new InvalidDataException("Null telemetry envelope."));
+        if (result.Count > 100000) throw new InvalidDataException("Maximum 100000 telemetry records per offline run.");
+    }
+    if (result.Count == 0) throw new InvalidDataException("No telemetry records found.");
     return result;
 }

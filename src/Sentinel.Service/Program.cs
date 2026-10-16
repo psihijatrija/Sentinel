@@ -364,6 +364,13 @@ namespace Sentinel.Service
 
                     // Engines
                     services.AddSingleton<TelemetryFusionEngine>();
+                    services.AddSingleton<INetworkCacheInvalidator, WindowsNetworkCacheInvalidator>();
+                    services.AddSingleton<IFirewallIsolationStore, WindowsFirewallIsolationStore>();
+                    services.AddSingleton(sp => new FirewallIsolationTransaction(
+                        sp.GetRequiredService<IFirewallIsolationStore>(),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                            "Sentinel", "Recovery", "FirewallIsolation")));
+                    services.AddSingleton<IResponseProcessOperations, WindowsResponseProcessOperations>();
                     services.AddSingleton<AdvancedResponseEngine>();
                     services.AddSingleton<BehavioralCorrelationEngine>();
                     // v2.0: plugin surface + explainable weighted correlation
@@ -494,6 +501,7 @@ namespace Sentinel.Service
                     services.AddSingleton<ReinfectionCorrelator>();
                     services.AddSingleton<PseudoSandbox>();
                     services.AddSingleton<IsolationResponseEngine>();
+                    services.AddSingleton<IIsolationContainment>(sp => sp.GetRequiredService<IsolationResponseEngine>());
 
                     //  Group 1: Critical (Self-Protection) 
                     // Starts immediately, restarts indefinitely. These monitors protect

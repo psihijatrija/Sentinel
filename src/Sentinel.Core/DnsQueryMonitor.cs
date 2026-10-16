@@ -22,7 +22,7 @@ namespace Sentinel.Core
     /// - Rapid query volume to single domains (beaconing/tunneling)
     /// - High-entropy domain names (DGA - domain generation algorithms)
     /// </summary>
-    public sealed class DnsQueryMonitor : IMonitor, IDisposable
+    public sealed class DnsQueryMonitor : IMonitor, IDisposable, ISensorProgressSource
     {
         public string Name => "DnsQueryMonitor";
 
@@ -34,6 +34,8 @@ namespace Sentinel.Core
         private readonly TimeSpan _pollInterval;
         private CancellationTokenSource? _cts;
         private Task? _monitorTask;
+        private readonly SensorProgress _progress;
+        public SensorProgress Progress => _progress;
 
         private readonly ConcurrentDictionary<string, DomainStats> _domainStats = new(StringComparer.OrdinalIgnoreCase);
         // GorstaksProtection v2.4.0: optional ThreatFox domain IOC feed integration
@@ -88,6 +90,7 @@ namespace Sentinel.Core
             _contextBus = contextBus;
             _threatFoxFeed = threatFoxFeed;
             _pollInterval = TimeSpan.FromSeconds(config.DnsPollIntervalSeconds > 0 ? config.DnsPollIntervalSeconds : 15);
+            _progress = new SensorProgress(TimeSpan.FromSeconds(_pollInterval.TotalSeconds * 3 + 10));
         }
 
         public Task StartAsync(CancellationToken ct)
@@ -141,15 +144,18 @@ namespace Sentinel.Core
                                 }
                             }
                         }
+                        _progress.Succeeded();
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogDebug(ex, "[{Monitor}] DNS event log read failed, using cache-based detection only", Name);
+                        _progress.Failed(ex.GetType().Name);
+                        _logger.LogDebug(ex, "[{Monitor}] DNS event log read failed; DNS event-log coverage unavailable", Name);
                     }
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
+                    _progress.Failed(ex.GetType().Name);
                     _logger.LogDebug(ex, "[{Monitor}] Poll error", Name);
                 }
             }

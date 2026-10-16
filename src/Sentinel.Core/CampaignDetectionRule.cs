@@ -12,7 +12,7 @@ namespace Sentinel.Core
     /// Uses exact filename matching (v3.8.0 fix) to prevent false positives
     /// from legitimate software whose names end with campaign indicators.
     /// </summary>
-    [RuleCategory(DetectionCategory.CampaignIoC)]
+    [RuleCategory(DetectionCategory.CampaignIoC, "Campaign IOC Detection")]
     public sealed class CampaignDetectionRule : IDetectionRule
     {
         public string Name => "Campaign IOC Detection";

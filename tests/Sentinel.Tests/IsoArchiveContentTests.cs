@@ -178,14 +178,14 @@ namespace Sentinel.Tests
         }
 
         private (AdvancedResponseEngine engine, JsonlEventLogger logger, string logPath) BuildEngine(
-            bool observeUntilChain, IsolationResponseEngine? iso = null)
+            bool observeUntilChain, IIsolationContainment? iso = null)
         {
             var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = observeUntilChain };
             var metrics = new SentinelMetrics();
             var logPath = Path.Combine(_tempDir, "events_" + Guid.NewGuid().ToString("N")[..6] + ".jsonl");
             var logger = new JsonlEventLogger(logPath);
             var quarantine = new QuarantineManager(_tempDir);
-            var engine = new AdvancedResponseEngine(config, metrics, logger, quarantine, null, null, iso);
+            var engine = new AdvancedResponseEngine(config, metrics, logger, quarantine, null, null, iso, processOperations: new ResponseProcessFixture());
             return (engine, logger, logPath);
         }
 
@@ -240,7 +240,7 @@ namespace Sentinel.Tests
             var log = File.ReadAllText(logPath);
             // Branch was taken (kill), but no volume mutation happened (ISO origin unresolved).
             Assert.Contains("\"ActionTaken\":\"KILL\"", log);
-            Assert.Contains("ISO origin unresolved", log);
+            Assert.Contains("ISO mutation unavailable", log);
             Assert.DoesNotContain("ISO_KILL_DISMOUNT_DELETE", log);
         }
 
@@ -248,9 +248,7 @@ namespace Sentinel.Tests
         public async Task DockerContainment_Tier2_WithActiveResponse_IsLogOnly()
         {
             // Tier2 container observation carrying a ContainerId must never contain (log-only).
-            var iso = new IsolationResponseEngine(
-                NullLogger<IsolationResponseEngine>.Instance,
-                new JsonlEventLogger(Path.Combine(_tempDir, "iso1.jsonl")));
+            var iso = new IsolationContainmentFixture();
             var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
 
             var detection = new DetectionEvent
@@ -280,13 +278,8 @@ namespace Sentinel.Tests
         [Fact]
         public async Task DockerContainment_Tier1_ChainAuthorized_TakesKillAndAttemptsContainment()
         {
-            // ObserveUntilChain off + Tier1 kill-grade + ContainerId + wired IsolationResponseEngine:
-            // the process kill fires (safe no-op PID) and Docker containment is attempted (docker.exe
-            // absent -> harmless failure inside the engine's try/catch). The response is logged KILL
-            // with a Docker-containment reason.
-            var iso = new IsolationResponseEngine(
-                NullLogger<IsolationResponseEngine>.Instance,
-                new JsonlEventLogger(Path.Combine(_tempDir, "iso3.jsonl")));
+            // Verify authorized routing through process/isolation fixtures; never invoke Docker or a host kill.
+            var iso = new IsolationContainmentFixture();
             var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
 
             var detection = new DetectionEvent
@@ -306,14 +299,13 @@ namespace Sentinel.Tests
             var log = File.ReadAllText(logPath);
             Assert.Contains("\"ActionTaken\":\"KILL\"", log);
             Assert.Contains("Docker containment", log);
+            Assert.Equal(1, iso.Calls);
         }
 
         [Fact]
         public async Task VmContainment_Tier1_ChainAuthorized_TakesKillAndAttemptsContainment()
         {
-            var iso = new IsolationResponseEngine(
-                NullLogger<IsolationResponseEngine>.Instance,
-                new JsonlEventLogger(Path.Combine(_tempDir, "iso4.jsonl")));
+            var iso = new IsolationContainmentFixture();
             var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
 
             var detection = new DetectionEvent
@@ -337,21 +329,18 @@ namespace Sentinel.Tests
             var log = File.ReadAllText(logPath);
             Assert.Contains("\"ActionTaken\":\"KILL\"", log);
             Assert.Contains("VM containment", log);
+            Assert.Equal(1, iso.Calls);
         }
 
         [Fact]
         public async Task DismountVolume_Tier1_WithExplicitIsoPath_InvokesIsolationEngine()
         {
-            // When a backing ISO path is supplied via metadata and an IsolationResponseEngine is
-            // wired, the containment branch delegates to it (ISO_KILL_DISMOUNT_DELETE). We use a
-            // non-existent PID + a temp .iso path: kill is a safe no-op, dismount fails silently,
-            // delete removes our temp file - all inside IsolationResponseEngine's try/catch.
+            // An explicit image path is delegated to the isolation fixture after authorization.
+            // The fixture does not terminate processes, dismount images or delete files.
             var isoPath = Path.Combine(_tempDir, "decoy.iso");
             File.WriteAllBytes(isoPath, new byte[] { 0x00, 0x01, 0x02, 0x03 });
 
-            var iso = new IsolationResponseEngine(
-                NullLogger<IsolationResponseEngine>.Instance,
-                new JsonlEventLogger(Path.Combine(_tempDir, "iso_events.jsonl")));
+            var iso = new IsolationContainmentFixture();
 
             var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
             var detection = new DetectionEvent
@@ -370,6 +359,8 @@ namespace Sentinel.Tests
 
             var log = File.ReadAllText(logPath);
             Assert.Contains("ISO_KILL_DISMOUNT_DELETE", log);
+            Assert.Equal(1, iso.Calls);
+            Assert.True(File.Exists(isoPath)); // Delegation fixture must not delete a host file.
         }
     }
 }

@@ -51,10 +51,11 @@ namespace Sentinel.Tests
                 MaxKillsPerMinute = 3
             };
             var quarantine = new QuarantineManager(Path.Combine(_tempDir, "q"));
-            var engine = new AdvancedResponseEngine(config, _metrics, _eventLogger, quarantine);
+            var processes = new ResponseProcessFixture();
+            var engine = new AdvancedResponseEngine(config, _metrics, _eventLogger, quarantine, processOperations: processes);
 
             // Emit more kill-authorized detections than the budget allows.
-            // Use a non-existent PID so SafeKillProcessTree is a no-op / fails soft.
+            // Fixture PIDs use an injected process boundary; no live termination occurs.
             // KillAuthorized is derived from AuthorizedResponse >= KillProcess.
             for (int i = 0; i < 5; i++)
             {
@@ -69,6 +70,8 @@ namespace Sentinel.Tests
                     SignalType = SignalType.SuspiciousProcess
                 });
             }
+
+            Assert.Equal(3, processes.TerminationCalls);
 
             // Read response log with share-read (logger may still hold the handle)
             var logPath = Path.Combine(_tempDir, "events.jsonl");

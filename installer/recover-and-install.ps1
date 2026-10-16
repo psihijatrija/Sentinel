@@ -1,103 +1,114 @@
 <#
-    recover-and-install.ps1
-
-    One-shot recovery + install for Sentinel 3.0.0.
-
-    WHY THIS EXISTS:
-    A previous SentinelSetup run was cancelled at the file-copy step. That left the
-    install folder half-updated: the old binaries were renamed to *.old (the installer's
-    normal anti-lock step) but the new 3.0.0 files were never written, so version.txt
-    still reads an older version. This is NOT a tampered install script - setup.iss is
-    byte-identical to the 2.9.7 release (verified by hash). The only cause was the Setup
-    process not having write permission to Program Files at the copy step.
-
-    This script runs every step in the correct order with the privileges it needs.
-
-    HOW TO RUN (must be elevated):
-      Right-click Start -> "Terminal (Admin)" or "PowerShell (Admin)", then:
-        powershell -ExecutionPolicy Bypass -File "e:\Gorstak\Sentinel\installer\recover-and-install.ps1"
+.SYNOPSIS
+Recover an interrupted Sentinel installation without discarding old binaries.
+.DESCRIPTION
+Requires an explicitly selected installer, its expected version and SHA-256 from
+an independently trusted release record. A matching digest checks byte identity;
+it does not establish publisher identity or replace Authenticode verification.
+Existing install files are archived before services are stopped. Never deletes
+.old files or automatically runs a backup: rollback needs explicit operator review.
 #>
-
-$ErrorActionPreference = "Continue"
-
-function Assert-Admin {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $p  = New-Object Security.Principal.WindowsPrincipal($id)
-    if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host "ERROR: This script must be run as Administrator." -ForegroundColor Red
-        Write-Host "Open an elevated PowerShell (Run as administrator) and run it again." -ForegroundColor Yellow
-        exit 1
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Installer,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string]$ExpectedVersion,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[a-fA-F0-9]{64}$')]
+    [string]$ExpectedSha256,
+    [string]$InstallDir = "$env:ProgramFiles\Sentinel",
+    [string]$BackupRoot = "$env:ProgramData\Sentinel\Recovery"
+)
+$ErrorActionPreference = 'Stop'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Run this recovery script from an elevated PowerShell terminal.'
+}
+# Validate all prerequisites before disrupting the running installation.
+$Installer = (Resolve-Path -LiteralPath $Installer).ProviderPath
+if ([IO.Path]::GetExtension($Installer) -ne '.exe') { throw 'Installer must be an executable.' }
+$actualHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash
+if ($actualHash -ne $ExpectedSha256) { throw 'Installer SHA-256 does not match the trusted release record.' }
+$signature = Get-AuthenticodeSignature -LiteralPath $Installer
+if ($signature.Status -ne 'Valid') {
+    throw "Installer publisher signature is not valid ($($signature.Status)). Use a verified signed installer."
+}
+if (-not (Test-Path -LiteralPath $InstallDir -PathType Container)) {
+    throw 'Specify the existing Sentinel install directory with -InstallDir.'
+}
+$InstallDir = (Resolve-Path -LiteralPath $InstallDir).ProviderPath
+$links = @(Get-Item -LiteralPath $InstallDir; Get-ChildItem -LiteralPath $InstallDir -Recurse -Force) |
+    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }
+if ($links) { throw 'Installation contains reparse points; inspect them before recovery.' }
+$BackupRoot = [IO.Path]::GetFullPath($BackupRoot)
+$installPrefix = $InstallDir.TrimEnd('\') + '\'
+if ($BackupRoot.Equals($InstallDir, [StringComparison]::OrdinalIgnoreCase) -or
+    $BackupRoot.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Recovery archive must be outside the installation directory.'
+}
+$backup = Join-Path $BackupRoot ([Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $backup -Force | Out-Null
+# Copy, never move/delete: preserve both the interrupted install and *.old recovery material.
+Copy-Item -LiteralPath $InstallDir -Destination (Join-Path $backup 'installation') -Recurse -Force
+foreach ($file in @(Get-ChildItem -LiteralPath $InstallDir -File -Recurse -Force)) {
+    $relative = $file.FullName.Substring($InstallDir.TrimEnd('\').Length + 1)
+    $copy = Join-Path (Join-Path $backup 'installation') $relative
+    if (-not (Test-Path -LiteralPath $copy -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash) {
+        throw "Recovery archive did not verify for $relative. Services have not been stopped."
     }
 }
-
-Assert-Admin
-
-$InstallDir = "C:\Program Files (x86)\Sentinel"
-if (-not (Test-Path $InstallDir)) { $InstallDir = "C:\Program Files\Sentinel" }
-$Installer  = "e:\Gorstak\Sentinel\installer\SentinelSetup-3.0.0.exe"
-
-Write-Host "=== Sentinel 3.0.0 recovery install ===" -ForegroundColor Cyan
-Write-Host "Install dir: $InstallDir"
-Write-Host ""
-
-# 1. Stop the watchdog FIRST (it respawns the service), then the service.
-Write-Host "[1/5] Stopping SentinelGuard (watchdog) then Sentinel..." -ForegroundColor Yellow
-Stop-Service SentinelGuard -Force -ErrorAction SilentlyContinue
-Stop-Service Sentinel      -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-
-# 2. Kill any surviving processes that hold the DLLs mapped.
-Write-Host "[2/5] Killing any leftover Sentinel processes..." -ForegroundColor Yellow
-Get-Process Sentinel.Agent, Sentinel.Service -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
-$still = Get-Process Sentinel.Agent, Sentinel.Service -ErrorAction SilentlyContinue
-if ($still) {
-    Write-Host "  WARNING: processes still running:" -ForegroundColor Red
-    $still | Select-Object ProcessName, Id | Format-Table -AutoSize
-} else {
-    Write-Host "  No Sentinel processes running." -ForegroundColor Green
+$before = @('SentinelGuard', 'Sentinel') | ForEach-Object {
+    $service = Get-Service -Name $_ -ErrorAction SilentlyContinue
+    if ($service) { [PSCustomObject]@{ Name = $service.Name; Status = [string]$service.Status } }
 }
-
-# 3. Clean up the half-finished *.old files from the cancelled run.
-Write-Host "[3/5] Cleaning leftover *.old files from the aborted install..." -ForegroundColor Yellow
-if (Test-Path $InstallDir) {
-    $old = Get-ChildItem $InstallDir -Filter "*.old" -ErrorAction SilentlyContinue
-    if ($old) {
-        $old | Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Host "  Removed $($old.Count) *.old file(s)." -ForegroundColor Green
-    } else {
-        Write-Host "  No *.old files to clean." -ForegroundColor Green
+$statePath = Join-Path $backup 'recovery.json'
+$state = [ordered]@{
+    SchemaVersion = 1; State = 'Prepared'; InstallDir = $InstallDir
+    ExpectedVersion = $ExpectedVersion; InstallerSha256 = $actualHash
+    PreviousServices = @($before); Error = $null
+}
+$state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+try {
+    foreach ($name in @('SentinelGuard', 'Sentinel')) {
+        $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+        if ($service) {
+            Stop-Service -Name $name -Force
+            $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        }
     }
-}
-
-# 4. Confirm the installer exists.
-Write-Host "[4/5] Verifying installer is present..." -ForegroundColor Yellow
-if (-not (Test-Path $Installer)) {
-    Write-Host "  ERROR: Installer not found at $Installer" -ForegroundColor Red
-    Write-Host "  Build it first: e:\Gorstak\Sentinel\installer\build.ps1" -ForegroundColor Yellow
-    exit 1
-}
-Write-Host "  Found: $Installer" -ForegroundColor Green
-
-# 5. Run the installer. Because this script is already elevated, the child inherits
-#    admin, so the file-copy step has the rights it was missing before.
-Write-Host "[5/5] Launching installer (elevated)..." -ForegroundColor Yellow
-$proc = Start-Process -FilePath $Installer -PassThru -Wait
-Write-Host "  Installer exited with code $($proc.ExitCode)." -ForegroundColor Cyan
-
-Write-Host ""
-Write-Host "=== Post-install verification ===" -ForegroundColor Cyan
-$vf = Join-Path $InstallDir "version.txt"
-if (Test-Path $vf) {
-    $ver = (Get-Content $vf -Raw).Trim()
-    if ($ver -eq "3.0.0") {
-        Write-Host "Installed version: $ver  (SUCCESS)" -ForegroundColor Green
-    } else {
-        Write-Host "Installed version: $ver  (expected 3.0.0 - install may not have completed)" -ForegroundColor Red
+    # Refuse an ambiguous process rather than killing arbitrary same-named processes.
+    $remaining = @(Get-Process -Name Sentinel.Agent, Sentinel.Service -ErrorAction SilentlyContinue)
+    if ($remaining) { throw 'Sentinel processes remain active. Close them explicitly before retrying recovery.' }
+    # Recheck bytes immediately before launch; do not trust an earlier check after a long backup.
+    if ((Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash -ne $ExpectedSha256) {
+        throw 'Installer changed during recovery preparation.'
     }
-} else {
-    Write-Host "version.txt not found - install did not complete." -ForegroundColor Red
+    $state.State = 'Installing'
+    $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+    $process = Start-Process -FilePath $Installer -PassThru -Wait
+    if ($process.ExitCode -ne 0) { throw "Installer failed or was cancelled (exit $($process.ExitCode))." }
+    $versionFile = Join-Path $InstallDir 'version.txt'
+    if (-not (Test-Path -LiteralPath $versionFile) -or
+        (Get-Content -LiteralPath $versionFile -Raw).Trim() -ne $ExpectedVersion) {
+        throw 'Installed version does not match the selected release.'
+    }
+    foreach ($name in @('Sentinel', 'SentinelGuard')) {
+        $service = Get-Service -Name $name
+        if ($service.Status -ne 'Running') { Start-Service -Name $name }
+        $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+    }
+    $state.State = 'Verified'
+    Write-Host "Installation version and service state verified. Recovery archive: $backup"
+} catch {
+    $state.State = 'Failed'
+    $state.Error = $_.Exception.Message
+    Write-Warning "Recovery failed. Original files retained at $backup. No automatic rollback was attempted."
+    throw
+} finally {
+    $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
 }
-Get-Service Sentinel, SentinelGuard -ErrorAction SilentlyContinue |
-    Select-Object Name, Status | Format-Table -AutoSize
-Write-Host "Done." -ForegroundColor Cyan

@@ -106,42 +106,11 @@ namespace Sentinel.Core
 
         private FusedTelemetryContext BuildContext(int pid, TelemetryEvent triggeringEvent)
         {
-            var context = new FusedTelemetryContext
-            {
-                TriggeringEvent = triggeringEvent,
-                ProcessId = pid,
-                ProcessName = triggeringEvent.ProcessName
-            };
-
             if (_processChains.TryGetValue(pid, out var chain))
             {
-                lock (chain)
-                {
-                    int count = 0;
-                    bool hasNet = false;
-                    bool hasFile = false;
-                    bool hasApi = false;
-                    var cutoff = DateTime.UtcNow - TimeSpan.FromSeconds(60);
-
-                    foreach (var e in chain)
-                    {
-                        if (e.Timestamp >= cutoff)
-                        {
-                            count++;
-                            if (e is NetworkTelemetry) hasNet = true;
-                            else if (e is FileActivityTelemetry fat && fat.OperationType == "WRITE") hasFile = true;
-                            else if (e is ThreatIntelTelemetry) hasApi = true;
-                        }
-                    }
-
-                    context.EventCount60s = count;
-                    context.HasNetworkActivity = hasNet;
-                    context.HasFileWrites = hasFile;
-                    context.HasSuspiciousAPIs = hasApi;
-                }
+                lock (chain) return TelemetryContextBuilder.Build(triggeringEvent, chain, DateTime.UtcNow);
             }
-
-            return context;
+            return TelemetryContextBuilder.Build(triggeringEvent, Array.Empty<TelemetryEvent>(), DateTime.UtcNow);
         }
 
         // Evicts the chain whose most-recent event is oldest. Used as an insert-time safety

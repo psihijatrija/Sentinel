@@ -1,4 +1,15 @@
 # Changelog
+## [3.1.9] - 2026-10-16
+
+- Verify process creation time, image identity, critical-process protection and exit using one process handle before reporting a successful kill. Retain generation identity in ancestry and chain tracing.
+- Bound reputation work, expose dropped work, preserve evidence timestamps and make detection deduplication atomic under contention.
+- Journal firewall isolation before mutation, verify rule readback and provide explicit inspection/rollback diagnostics that refuse changed rules. Restrict Docker and VM containment to validated identities and dedicated workers.
+- Add deterministic recorded-telemetry replay through selected production rules with input fingerprints and semantic comparison. Replay remains LogOnly and does not reproduce the full live pipeline.
+- Refuse certificate removal when OS trust-stamp evidence is protected or unavailable; check live store contexts and verify central removal before reporting success.
+- Fix the seven reported 3.1.8 Windows test failures: use injected process/containment fixtures without weakening production identity checks, verify pre-action audit ordering and reject alternate-stream restore paths before platform parsing.
+- Report DNS collection progress, register rule categories without constructing rules and require verified installer inputs with preserved recovery evidence.
+- Expand regression coverage and document remaining Windows-native validation, certificate recovery and private-PKI limitations. Linux cross-build and selected portable tests do not establish complete Windows host behavior.
+
 ## [3.1.8] - 2026-10-15
 
 - Preserve bounded incident history and pending response evaluations across service restarts without restoring stale PID/action authority. Retain corrupt state and expose persistence degradation.

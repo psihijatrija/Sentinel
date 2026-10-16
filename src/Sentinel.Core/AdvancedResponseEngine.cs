@@ -24,7 +24,10 @@ namespace Sentinel.Core
         private ChainTracer? _chainTracer;
         private ReinfectionCorrelator? _reinfectionCorrelator;
         private VpnShieldEngine? _vpnShieldEngine;
-        private readonly IsolationResponseEngine? _isolationResponse;
+        private readonly IIsolationContainment? _isolationResponse;
+        private readonly FirewallIsolationTransaction? _firewallIsolation;
+        private readonly INetworkCacheInvalidator? _networkCache;
+        private readonly IResponseProcessOperations? _processOperations;
 
         // v1.6.0: Rolling kill budget to prevent response weaponization (FP kill storms)
         private readonly ConcurrentQueue<long> _killTimestampsMs = new();
@@ -47,7 +50,10 @@ namespace Sentinel.Core
             QuarantineManager quarantineManager,
             AllowlistService? allowlist = null,
             SentinelEventLogWriter? windowsEventLog = null,
-            IsolationResponseEngine? isolationResponse = null)
+            IIsolationContainment? isolationResponse = null,
+            FirewallIsolationTransaction? firewallIsolation = null,
+            INetworkCacheInvalidator? networkCache = null,
+            IResponseProcessOperations? processOperations = null)
         {
             _config = config;
             _metrics = metrics;
@@ -56,7 +62,14 @@ namespace Sentinel.Core
             _allowlist = allowlist;
             _windowsEventLog = windowsEventLog;
             _isolationResponse = isolationResponse;
+            _firewallIsolation = firewallIsolation;
+            _networkCache = networkCache;
+            _processOperations = processOperations;
         }
+
+        private bool TryTerminateProcess(int pid, DateTime evidenceUtc, out string reason)
+            => _processOperations != null ? _processOperations.TryTerminate(pid, evidenceUtc, out reason)
+                : VerifiedProcessTermination.TryTerminate(pid, evidenceUtc, out reason);
 
         private void TryWriteWindowsEventLog(DetectionEvent detection, string actionTaken, string reason)
         {
@@ -669,7 +682,8 @@ namespace Sentinel.Core
                 bool generationMatches = false;
                 try
                 {
-                    if (identityPid > 4)
+                    if (_processOperations != null) generationMatches = _processOperations.EvidenceMatches(identityPid, detection.Timestamp);
+                    else if (identityPid > 4)
                     {
                         using var process = Process.GetProcessById(identityPid);
                         generationMatches = ProcessIdentitySafety.EvidenceCanReferToGeneration(
@@ -731,9 +745,11 @@ namespace Sentinel.Core
                 // Non-MITM cert detections are logged but not actioned.
                 bool isMitmCert = ResponsePolicy.IsMitmDefenseAction(detection, _config);
 
+                bool certificateRemoved = false;
                 if (!string.IsNullOrEmpty(certThumb) && certThumb != "Unknown" && isMitmCert)
                 {
-                    RemoveCertificateFromStore(certThumb);
+                    certificateRemoved = RemoveCertificateFromStore(certThumb);
+                    reason += ". Certificate removal verified=" + certificateRemoved;
                 }
                 else if (!isMitmCert)
                 {
@@ -754,7 +770,10 @@ namespace Sentinel.Core
                 if (int.TryParse(adderPidStr, out int adderPid) && adderPid > 4 && isMitmCert)
                 {
                     if (TryConsumeKillBudget())
-                        HardeningModule.SafeKillProcessTree(adderPid);
+                    {
+                        bool exited = TryTerminateProcess(adderPid, detection.Timestamp, out var terminationReason);
+                        reason += ". Adder exit verified=" + exited + ": " + terminationReason;
+                    }
                     else
                         reason += " [kill rate-limited]";
                 }
@@ -766,7 +785,7 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = isMitmCert ? "REMOVE_CERT_AND_KILL_ADDER" : "LOG",
+                    ActionTaken = certificateRemoved ? "REMOVE_CERT_AND_KILL_ADDER" : "REMOVE_CERT_FAILED",
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. CertThumbprint={certThumb}. AdderPID={adderPidStr}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
@@ -779,9 +798,11 @@ namespace Sentinel.Core
                 // Only remove certs that are MITM-related (planted for interception).
                 bool isMitmCert = ResponsePolicy.IsMitmDefenseAction(detection, _config);
 
+                bool certificateRemoved = false;
                 if (!string.IsNullOrEmpty(certThumb) && certThumb != "Unknown" && isMitmCert)
                 {
-                    RemoveCertificateFromStore(certThumb);
+                    certificateRemoved = RemoveCertificateFromStore(certThumb);
+                    reason += ". Certificate removal verified=" + certificateRemoved;
                 }
 
                 stopwatch.Stop();
@@ -791,7 +812,7 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = isMitmCert ? "REMOVE_CERT" : "LOG",
+                    ActionTaken = isMitmCert ? (certificateRemoved ? "REMOVE_CERT" : "REMOVE_CERT_FAILED") : "LOG",
                     Reason = isMitmCert
                         ? $"Triggered by rule: {detection.RuleName}. {reason}. CertThumbprint={certThumb}"
                         : $"Triggered by rule: {detection.RuleName}. Cert removal skipped - not MITM-related. CertThumbprint={certThumb}",
@@ -858,10 +879,8 @@ namespace Sentinel.Core
                 catch { }
 
                 // Terminate injecting process tree
-                if (detection.ProcessId > 4)
-                {
-                    HardeningModule.SafeKillProcessTree(detection.ProcessId);
-                }
+                bool injectorExited = TryTerminateProcess(detection.ProcessId, detection.Timestamp, out var injectorExitReason);
+                reason += ". Injector exit verified=" + injectorExited + ": " + injectorExitReason;
 
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
@@ -870,13 +889,13 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = injectorQuarantined ? "QUARANTINE_AND_KILL" : "KILL_ONLY (signed injector preserved)",
+                    ActionTaken = !injectorExited ? "QUARANTINE_KILL_UNCONFIRMED" : injectorQuarantined ? "QUARANTINE_AND_KILL" : "KILL_ONLY (signed injector preserved)",
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Quarantined={quarantinedInfo}. InjectorQuarantined={injectorQuarantined}. TargetPID={targetPid}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
                 await RecordResponseAsync(responseLog, observeResponse);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
-                NotifyReinfectionCorrelator(detection);
+                if (injectorExited) NotifyReinfectionCorrelator(detection);
             }
             else if (shouldRaiseVpnShield)
             {
@@ -923,6 +942,8 @@ namespace Sentinel.Core
                 }
 
                 // Network-level threat: block suspicious IPs extracted from evidence metadata
+                FirewallIsolationRecord? isolation = null;
+                string isolationState = "TargetRefused";
                 var targetIp = detection.Metadata!.GetValueOrDefault("TargetIP", "");
                 if (!string.IsNullOrEmpty(targetIp))
                 {
@@ -939,15 +960,31 @@ namespace Sentinel.Core
                     }
                     else
                     {
-                        IsolateNetworkTarget(targetIp, detection.RuleName);
-                        // v1.8.1: restore ARP entry purge (lost in LOLBin-free rewrite).
-                        // Was `arp -d` shell-out (v5.9.0); now DeleteIpNetEntry P/Invoke only.
-                        FlushArpEntry(targetIp);
+                        try
+                        {
+                            if (_firewallIsolation != null)
+                            {
+                                isolation = _firewallIsolation.Apply(targetIp,
+                                    detection.Timestamp.ToString("O") + ":" + detection.ProcessId + ":" + detection.RuleName);
+                                isolationState = isolation.State;
+                            }
+                            else isolationState = "RecoveryStoreUnavailable";
+                        }
+                        catch (Exception ex)
+                        {
+                            isolationState = "Failed";
+                            await _eventLogger.LogEventAsync("firewall_isolation_failed", new { Error = ex.GetType().Name });
+                        }
                     }
                 }
 
-                // Also flush DNS cache to clear poisoned entries
-                FlushDnsCache();
+                // Cache invalidations are best-effort side effects, not recoverable firewall state.
+                if (isolation?.State == "Verified")
+                {
+                    try { _networkCache?.FlushArp(targetIp); _networkCache?.FlushDns(); }
+                    catch (Exception ex)
+                    { await _eventLogger.LogEventAsync("network_cache_invalidation_failed", new { Error = ex.GetType().Name }); }
+                }
 
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
@@ -956,8 +993,10 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = "NETWORK_ISOLATE",
-                    Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Target={targetIp}",
+                    ActionTaken = isolation?.State == "Verified" ? "NETWORK_ISOLATE" : "NETWORK_ISOLATE_FAILED",
+                    // DNS/ARP flushes are cache invalidations, outside this reversible rule transaction.
+                    Outcome = isolation?.State == "Verified" ? ResponseExecutionOutcome.Confirmed : ResponseExecutionOutcome.Failed,
+                    Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Target={targetIp}; Firewall={isolationState}; RecoveryTransaction={isolation?.Id ?? "none"}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
                 await RecordResponseAsync(responseLog, observeResponse);
@@ -1061,7 +1100,7 @@ namespace Sentinel.Core
                          int.TryParse(vp, out var vmPid) && vmPid > 4)
                 {
                     var vmName = detection.Metadata.TryGetValue("VmName", out var vn) ? vn : "";
-                    try { await _isolationResponse.HandleVmThreatAsync(vmPid, vmName); } catch { }
+                    try { await _isolationResponse.HandleVmThreatAsync(vmPid, vmName, detection.Timestamp); } catch { }
                     isolationContainmentNote = $". VM containment (vmHostPid={vmPid})";
                 }
 
@@ -1085,10 +1124,13 @@ namespace Sentinel.Core
                 // Collect forensic evidence before killing
                 try { if (_incidentResponse != null) _ = _incidentResponse.CollectEvidenceAsync(detection); } catch { }
 
+                bool targetExitVerified = false;
+                bool anyExitVerified = false;
                 var reasonText = $"Triggered by rule: {detection.RuleName}. {reason}{isolationContainmentNote}";
                 if (_chainTracer != null)
                 {
                     var traceResult = await _chainTracer.TraceAndRespondAsync(detection);
+                    anyExitVerified = traceResult != null && traceResult.KilledProcesses.Count > 0;
                     if (traceResult != null && traceResult.Success)
                     {
                         if (traceResult.AttackRoot != null)
@@ -1104,7 +1146,9 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    HardeningModule.SafeKillProcessTree(detection.ProcessId);
+                    targetExitVerified = TryTerminateProcess(detection.ProcessId, detection.Timestamp, out var terminationReason);
+                    anyExitVerified = targetExitVerified;
+                    reasonText += ". " + terminationReason;
                 }
 
                 stopwatch.Stop();
@@ -1114,13 +1158,15 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = "KILL",
+                    ActionTaken = _chainTracer != null ? "KILL_ATTEMPTED" : targetExitVerified ? "KILL" : "KILL_FAILED",
+                    Outcome = targetExitVerified && !shouldContainDocker && !shouldContainVm
+                        ? ResponseExecutionOutcome.Confirmed : ResponseExecutionOutcome.Attempted,
                     Reason = reasonText,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
                 await RecordResponseAsync(responseLog, observeResponse);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
-                NotifyReinfectionCorrelator(detection);
+                if (anyExitVerified) NotifyReinfectionCorrelator(detection);
             }
             else if (shouldDismountVolume)
             {
@@ -1185,20 +1231,17 @@ namespace Sentinel.Core
             string actionTaken;
             if (_isolationResponse != null && !string.IsNullOrEmpty(isoPath) && detection.ProcessId > 4)
             {
-                await _isolationResponse.HandleIsoThreatAsync(detection.ProcessId, isoPath!);
-                actionTaken = "ISO_KILL_DISMOUNT_DELETE";
-                reason += $". ISO containment: killed PID {detection.ProcessId}, dismounted+deleted '{isoPath}'";
+                bool contained = await _isolationResponse.HandleIsoThreatAsync(detection.ProcessId, isoPath!, detection.Timestamp);
+                actionTaken = contained ? "ISO_KILL_DISMOUNT_DELETE" : "ISO_CONTAINMENT_UNCONFIRMED";
+                reason += ". ISO containment verified=" + contained;
             }
             else
             {
                 // Could not confirm an ISO origin - do NOT dismount/delete anything. Fall back to
                 // a plain process-tree kill so the confirmed terminal is still contained.
-                if (detection.ProcessId > 4)
-                    HardeningModule.SafeKillProcessTree(detection.ProcessId);
-                actionTaken = "KILL";
-                reason += string.IsNullOrEmpty(isoPath)
-                    ? ". ISO origin unresolved - killed process tree only (no volume mutation)"
-                    : ". IsolationResponseEngine unavailable - killed process tree only";
+                bool exited = TryTerminateProcess(detection.ProcessId, detection.Timestamp, out var terminationReason);
+                actionTaken = exited ? "KILL" : "KILL_FAILED";
+                reason += ". ISO mutation unavailable; process exit verified=" + exited + ": " + terminationReason;
             }
 
             stopwatch.Stop();
@@ -1218,7 +1261,8 @@ namespace Sentinel.Core
 
         private async Task RecordResponseAsync(ResponseEvent response, Action<ResponseEvent>? observer)
         {
-            response.Outcome = response.ActionTaken.StartsWith("LOG", StringComparison.OrdinalIgnoreCase)
+            if (response.Outcome != ResponseExecutionOutcome.Confirmed)
+                response.Outcome = response.ActionTaken.StartsWith("LOG", StringComparison.OrdinalIgnoreCase)
                 ? ResponseExecutionOutcome.Observed
                 : response.ActionTaken.IndexOf("FAILED", StringComparison.OrdinalIgnoreCase) >= 0
                     ? ResponseExecutionOutcome.Failed : ResponseExecutionOutcome.Attempted;

@@ -54,6 +54,21 @@ namespace Sentinel.Tests
             Assert.False(CertSuspicionAnalyzer.HasMsProgramStamp(null!));
         }
 
+        [Theory]
+        [InlineData(false, false, true)]
+        [InlineData(true, false, false)]
+        [InlineData(false, true, false)]
+        [InlineData(true, true, false)]
+        [InlineData(null, false, false)]
+        [InlineData(false, null, false)]
+        [InlineData(null, null, false)]
+        [InlineData(null, true, false)]
+        [InlineData(true, null, false)]
+        public void Analyzer_UnknownOrProtectedEvidenceNeverAuthorizesRemoval(bool? ctl, bool? program, bool allowed)
+        {
+            Assert.Equal(allowed, CertSuspicionAnalyzer.CanRemoveWithStampEvidence(ctl, program));
+        }
+
         // ---- SAFETY FLOOR: live OS trust anchors are never flagged ----
 
         [Fact]

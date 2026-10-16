@@ -72,7 +72,8 @@ namespace Sentinel.Tests
                 MaxNetworkIsolatesPerMinute = 100
             };
             var quarantine = new QuarantineManager(Path.Combine(_tempDir, "q2"));
-            var engine = new AdvancedResponseEngine(config, _metrics, _eventLogger, quarantine);
+            var processes = new ResponseProcessFixture();
+            var engine = new AdvancedResponseEngine(config, _metrics, _eventLogger, quarantine, processOperations: processes);
 
             for (int i = 0; i < 5; i++)
             {
@@ -86,6 +87,8 @@ namespace Sentinel.Tests
                     AuthorizedResponse = ResponseAction.KillProcess
                 });
             }
+
+            Assert.Equal(2, processes.TerminationCalls);
 
             var logPath = Path.Combine(_tempDir, "events.jsonl");
             string text;
