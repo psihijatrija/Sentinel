@@ -1,4 +1,33 @@
 # Changelog
+## [3.2.1] - 2026-10-16
+### Fixed
+- **`FileVerdictScanner` self-scanning loop (primary RAM cause).**
+  `FileVerdictScanner` watched every fixed drive recursively with no exclusion for
+  Sentinel's own directories. Files written by the service — `events.jsonl`,
+  `audit-*.jsonl`, `scan_index.dat`, ADS verdict tags, and the install-dir binaries —
+  were picked up by the drive-root `FileSystemWatcher` and queued for scanning, creating
+  a feedback loop. Added `IsSentinelOwnPath()` which excludes `%ProgramData%\Sentinel\`
+  and the install directory (resolved from `AppContext.BaseDirectory` at startup, not a
+  hardcoded string). The exclusion is applied in `OnFileCreated`, `OnFileRenamed`,
+  `ScanNewFileAsync`, and `TraverseDirectoryAsync`.
+
+- **Unbounded `Task.Run` task proliferation in `FileVerdictScanner`.**
+  Each scannable file creation spawned an untracked `Task.Run` with no concurrency cap.
+  During busy installs or archive extractions, hundreds or thousands of tasks piled up —
+  each holding async state and sitting in 500 ms–2 s retry-delay loops. Added
+  `_scanTaskThrottle` (`SemaphoreSlim(32, 32)`): a slot must be acquired before the task
+  is created; if all 32 slots are busy the event is dropped (the background walk catches
+  it on its next pass). The semaphore is disposed alongside `_apiThrottle`.
+
+- **`FileScanIndex._entries` dictionary growing without bound.**
+  The `ConcurrentDictionary` used by `FileScanIndex` had no eviction policy and grew
+  monotonically as the background drive walk catalogued every executable on every fixed
+  volume. On a well-stocked system this accumulated hundreds of thousands of entries
+  (full path strings + metadata), contributing hundreds of MB to the service's working
+  set. Added `MaxEntries = 150 000` cap with `EvictBatch()`: when the cap is hit,
+  ~10 % of entries (15 000) are shed. Evicted paths are simply re-scanned on the next
+  walk — fail-open, no security regression.
+
 ## [3.2.0] - 2026-10-16
 ### Added
 - **`IncidentJournal` — durable write-ahead journal for incident state transitions.**

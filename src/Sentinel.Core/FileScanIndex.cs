@@ -47,6 +47,14 @@ namespace Sentinel.Core
         // or on dispose. Keeps the walk from triggering repeated full-file rewrites.
         private const long FlushThreshold = 200;
 
+        // Hard cap on in-memory entries. A full drive walk on a large system can accumulate
+        // hundreds of thousands of path strings, consuming hundreds of MB of RAM. When the cap
+        // is reached we evict the oldest ~10% of entries (LRU approximation via snapshot sort).
+        // The evicted entries will simply be re-scanned on the next walk, which is fine: this
+        // index is advisory only and never drives a security decision.
+        private const int MaxEntries = 150_000;
+        private const int EvictCount = 15_000; // ~10% eviction batch
+
         public FileScanIndex(string? secureDir = null)
         {
             string dir;
@@ -128,12 +136,46 @@ namespace Sentinel.Core
                 var value = (fi.Length, fi.LastWriteTimeUtc.Ticks);
                 _entries[key] = value;
 
+                // Enforce the in-memory cap so the dictionary cannot grow without bound on
+                // large systems. ConcurrentDictionary has no built-in eviction; we shed a
+                // batch of entries when the hard cap is reached. The evicted entries will
+                // simply be re-scanned on the next drive walk (fail-open: only a perf cost,
+                // never a security regression).
+                if (_entries.Count >= MaxEntries)
+                    EvictBatch();
+
                 if (Interlocked.Increment(ref _dirtyCount) >= FlushThreshold)
                     TryFlush(force: false);
             }
             catch
             {
                 // best-effort - skipping the mark just means we re-hash next time
+            }
+        }
+
+        /// <summary>
+        /// Evict a batch of entries from the in-memory dictionary to enforce the size cap.
+        /// Takes a snapshot of current keys and removes the first <see cref="EvictCount"/>
+        /// of them (snapshot order is arbitrary but consistent within a call, giving a
+        /// reasonable approximation of "oldest inserted" for our workload).
+        /// This is called rarely (only when MaxEntries is hit) and is intentionally not
+        /// lock-free: the brief pause is acceptable vs. the alternative of unbounded growth.
+        /// </summary>
+        private void EvictBatch()
+        {
+            try
+            {
+                int removed = 0;
+                foreach (var key in _entries.Keys)
+                {
+                    if (removed >= EvictCount) break;
+                    if (_entries.TryRemove(key, out _))
+                        removed++;
+                }
+            }
+            catch
+            {
+                // Best-effort; if eviction fails the cap will be hit again on the next mark.
             }
         }
 

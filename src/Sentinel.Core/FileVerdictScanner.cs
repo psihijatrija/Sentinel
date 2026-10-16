@@ -68,6 +68,22 @@ namespace Sentinel.Core
         // Throttle: max concurrent API lookups to avoid hammering CIRCL/MalwareBazaar
         private readonly SemaphoreSlim _apiThrottle = new(4, 4);
 
+        // Cap on concurrent real-time scan tasks (OnFileCreated / OnFileRenamed).
+        // Each task holds async state + retry delays; without a cap a burst install can
+        // queue thousands of tasks and spike RAM. 32 concurrent scans is well above any
+        // realistic burst while keeping memory bounded.
+        private readonly SemaphoreSlim _scanTaskThrottle = new(32, 32);
+
+        // Sentinel's own data directory and install directory must never be scanned: our
+        // log files, verdict ADS writes, and scan index updates would re-enter the scanner
+        // in a feedback loop. Computed once at startup (not per-event) from the running
+        // process paths so the exclusion follows the actual install, not a hardcoded string.
+        private static readonly string SentinelDataDir =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                         "Sentinel").ToLowerInvariant();
+        private static readonly string SentinelInstallDir =
+            Path.GetFullPath(AppContext.BaseDirectory).TrimEnd('\\').ToLowerInvariant();
+
         public FileVerdictScanner(
             HashReputationService reputationService,
             FileVerdictAds verdictAds,
@@ -159,16 +175,48 @@ namespace Sentinel.Core
             }
         }
 
+        /// <summary>
+        /// Returns true when <paramref name="filePath"/> is inside Sentinel's own data
+        /// directory (ProgramData\Sentinel) or install directory. These paths must never
+        /// be scanned: our log writes, scan_index flushes, and ADS updates would re-enter
+        /// the scanner in a feedback loop and inflate RAM indefinitely.
+        /// </summary>
+        private static bool IsSentinelOwnPath(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return false;
+            var lower = filePath.ToLowerInvariant();
+            // Use StartsWith with a trailing separator so "SentinelOther" doesn't match.
+            return lower.StartsWith(SentinelDataDir + "\\", StringComparison.Ordinal)
+                || lower.StartsWith(SentinelInstallDir + "\\", StringComparison.Ordinal)
+                || string.Equals(lower, SentinelDataDir, StringComparison.Ordinal)
+                || string.Equals(lower, SentinelInstallDir, StringComparison.Ordinal);
+        }
+
         private void OnFileCreated(object sender, FileSystemEventArgs e)
         {
-            if (IsScannable(e.FullPath))
-                _ = Task.Run(async () => await ScanNewFileAsync(e.FullPath));
+            if (!IsScannable(e.FullPath) || IsSentinelOwnPath(e.FullPath)) return;
+
+            // Bounded task spawn: acquire a slot before creating the task so a burst of file
+            // creations cannot queue unlimited tasks. If all 32 slots are busy we drop the
+            // event - the background drive walk will catch it on the next pass.
+            if (!_scanTaskThrottle.Wait(0)) return;
+            _ = Task.Run(async () =>
+            {
+                try { await ScanNewFileAsync(e.FullPath); }
+                finally { _scanTaskThrottle.Release(); }
+            });
         }
 
         private void OnFileRenamed(object sender, RenamedEventArgs e)
         {
-            if (IsScannable(e.FullPath))
-                _ = Task.Run(async () => await ScanNewFileAsync(e.FullPath));
+            if (!IsScannable(e.FullPath) || IsSentinelOwnPath(e.FullPath)) return;
+
+            if (!_scanTaskThrottle.Wait(0)) return;
+            _ = Task.Run(async () =>
+            {
+                try { await ScanNewFileAsync(e.FullPath); }
+                finally { _scanTaskThrottle.Release(); }
+            });
         }
 
         /// <summary>
@@ -208,6 +256,7 @@ namespace Sentinel.Core
         private async Task ScanNewFileAsync(string filePath)
         {
             if (string.IsNullOrEmpty(filePath) || !IsScannable(filePath)) return;
+            if (IsSentinelOwnPath(filePath)) return;
 
             var pathLower = filePath.ToLowerInvariant();
             if (ExcludedPaths.Any(excluded => pathLower.Contains(excluded))) return;
@@ -520,6 +569,10 @@ namespace Sentinel.Core
                 var dirLower = currentDir.ToLowerInvariant();
                 if (ExcludedPaths.Any(excluded => dirLower.Contains(excluded))) continue;
 
+                // Never walk Sentinel's own data/install directories: our own log writes,
+                // scan_index flushes, and ADS tags would re-enter the scanner in a loop.
+                if (IsSentinelOwnPath(currentDir)) continue;
+
                 try
                 {
                     foreach (var file in Directory.EnumerateFiles(currentDir))
@@ -562,6 +615,7 @@ namespace Sentinel.Core
         public override void Dispose()
         {
             _apiThrottle.Dispose();
+            _scanTaskThrottle.Dispose();
             foreach (var watcher in _watchers)
             {
                 watcher.Created -= OnFileCreated;
