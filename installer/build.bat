@@ -51,6 +51,11 @@ echo Publishing Sentinel Agent (net48-windows, framework-dependent)...
 "%DOTNET%" publish "%~dp0..\src\Sentinel.Agent\Sentinel.Agent.csproj" -c Release -f net48-windows -o "%PUBLISH_DIR%\agent"
 if errorlevel 1 ( echo ERROR: Agent publish failed & exit /b 1 )
 
+::  4d. Publish AutoRotate 
+echo Publishing Sentinel AutoRotate (net48-windows, framework-dependent)...
+"%DOTNET%" publish "%~dp0..\tools\Sentinel.AutoRotate\Sentinel.AutoRotate.csproj" -c Release -f net48-windows -o "%PUBLISH_DIR%\autorotate"
+if errorlevel 1 ( echo ERROR: AutoRotate publish failed & exit /b 1 )
+
 ::  4a. Icon and version.txt 
 echo Deploying Sentinel.ico and version.txt...
 set "ICON_SRC=%~dp0assets\Sentinel.ico"

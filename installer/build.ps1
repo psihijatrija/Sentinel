@@ -4,6 +4,8 @@
 # Usage: .\build.ps1
 # Upgrade ACLs / stop / rename live in setup.iss (ResetInstallDirAcls + --prepare-upgrade).
 
+param([switch]$StampOnly)
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "==============================================" -ForegroundColor Cyan
@@ -18,7 +20,7 @@ Write-Host "Version: $Version" -ForegroundColor Green
 
 # 0.1 Stamp all .csproj files with the version
 $CsprojFiles = Get-ChildItem (Join-Path $PSScriptRoot "..") -Recurse -Filter "*.csproj" |
-    Where-Object { $_.FullName -notmatch '\\tools\\' }
+    Where-Object { $_.FullName -notmatch '[\\/]tools[\\/]' }
 foreach ($csproj in $CsprojFiles) {
     $content = Get-Content $csproj.FullName -Raw
     if ($content -match '<Version>') {
@@ -37,6 +39,11 @@ $issContent = $issContent -replace 'VersionInfoProductVersion=.*', "VersionInfoP
 $issContent = $issContent -replace 'VersionInfoOriginalFileName=.*', "VersionInfoOriginalFileName=SentinelSetup-$Version.exe"
 $issContent = $issContent -replace 'OutputBaseFilename=SentinelSetup-.*', "OutputBaseFilename=SentinelSetup-$Version"
 [System.IO.File]::WriteAllText($SetupScript, $issContent)
+
+if ($StampOnly) {
+    Write-Host "Version metadata stamped; installer build deferred to Windows." -ForegroundColor Yellow
+    return
+}
 
 # 1. Clean previous publish folder + leftover Setup EXEs from older versions
 $PublishDir = Join-Path $PSScriptRoot "..\publish"
