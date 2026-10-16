@@ -115,7 +115,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task PluginCorrelationRule_CanEmit()
+        public async Task PluginCorrelationRule_CannotAuthorizeWithoutIndependentTerminalEvidence()
         {
             var plugins = new PluginRegistry();
             plugins.Register(new TestCorrelationRule());
@@ -141,7 +141,30 @@ namespace Sentinel.Tests
 
             Assert.NotNull(emitted);
             Assert.Equal("Plugin Test Composite", emitted!.RuleName);
-            Assert.Equal("true", emitted.Metadata[ResponsePolicy.ChainConfirmedKey]);
+            Assert.Equal("false", emitted.Metadata[ResponsePolicy.ChainConfirmedKey]);
+            Assert.Equal(DetectionTier.Tier2Indicator, emitted.Tier);
+            Assert.Equal(ResponseAction.LogOnly, emitted.AuthorizedResponse);
+        }
+
+        [Fact]
+        public async Task PluginCorrelationRule_CanConfirmWithIndependentTerminalCategories()
+        {
+            var plugins = new PluginRegistry();
+            plugins.Register(new TestCorrelationRule());
+            DetectionEvent? emitted = null;
+            var engine = new WeightedCorrelationEngine(new WeightedCorrelationConfig { Threshold = 999 }, plugins);
+            engine.Initialize(ev => { emitted = ev; return Task.CompletedTask; });
+            await engine.RegisterSignalAsync(new DetectionEvent
+            {
+                RuleName = "LSASS Credential Dump", ProcessId = 77, Confidence = 0.95, Timestamp = DateTime.UtcNow
+            });
+            Assert.Equal(ResponseAction.LogOnly, emitted!.AuthorizedResponse);
+            await engine.RegisterSignalAsync(new DetectionEvent
+            {
+                RuleName = "C2 Beaconing", ProcessId = 77, Confidence = 0.95, Timestamp = DateTime.UtcNow
+            });
+            Assert.Equal("true", emitted!.Metadata[ResponsePolicy.ChainConfirmedKey]);
+            Assert.Equal(DetectionTier.Tier1Behavioral, emitted.Tier);
         }
 
         [Fact]
@@ -284,6 +307,103 @@ namespace Sentinel.Tests
             // silently drifts every release. Assert it matches the loaded assembly version.
             var asmVersion = typeof(ProductInfo).Assembly.GetName().Version?.ToString(3);
             Assert.Equal(asmVersion, ProductInfo.Version);
+        }
+    }
+
+    public class WeightedCorrelationMonoCategoryBoostTests
+    {
+        // Helper: build a Credential-category signal at given confidence
+        private static DetectionEvent CredSignal(int pid, double conf = 0.92) => new DetectionEvent
+        {
+            RuleName = "LSASS Credential Dump",
+            ProcessId = pid,
+            ProcessName = "evil.exe",
+            SignalType = SignalType.LsassAccess,
+            Confidence = conf,
+            Tier = DetectionTier.Tier1Behavioral,
+            Timestamp = DateTime.UtcNow
+        };
+
+        [Fact]
+        public void GetScoreCard_SingleCategoryFlood_SetsMonoCategoryBoostFlag()
+        {
+            // Three signals, all Credential — should set MonoCategoryBoostApplied
+            var engine = new WeightedCorrelationEngine(new WeightedCorrelationConfig
+            {
+                Enabled = true,
+                Threshold = 50,
+                MinDistinctCategories = 2
+            });
+            engine.Initialize(_ => Task.CompletedTask);
+
+            // Feed 3 signals synchronously via RegisterSignalAsync (they populate the buffer)
+            engine.RegisterSignalAsync(CredSignal(1001)).GetAwaiter().GetResult();
+            engine.RegisterSignalAsync(CredSignal(1001)).GetAwaiter().GetResult();
+            engine.RegisterSignalAsync(CredSignal(1001)).GetAwaiter().GetResult();
+
+            var card = engine.GetScoreCard(1001);
+            Assert.True(card.MonoCategoryBoostApplied,
+                "Expected MonoCategoryBoostApplied=true when single category fires >=3 times");
+        }
+
+        [Fact]
+        public async Task SingleCategoryFlood_DoesNotEmitComposite_WhenOnlyBoostedThresholdNotMet()
+        {
+            // Threshold=80; boost raises it to 96 (ceil(80*1.2)).
+            // Three Credential signals each scaled ~25 pts (50 weight * 0.5+0.5*0.92 = 46, best wins).
+            // Best-by-category only takes the highest, so total stays at ~46 — below both thresholds.
+            // This test verifies that with 1 category and a tight threshold a flood never emits.
+            DetectionEvent? composite = null;
+            var engine = new WeightedCorrelationEngine(new WeightedCorrelationConfig
+            {
+                Enabled = true,
+                Threshold = 80,
+                MinDistinctCategories = 2   // also enforces 2 categories — belt-and-suspenders
+            });
+            engine.Initialize(ev => { composite = ev; return Task.CompletedTask; });
+
+            // Send 5 identical credential signals — same category, same PID
+            for (int i = 0; i < 5; i++)
+                await engine.RegisterSignalAsync(CredSignal(2002, conf: 0.92));
+
+            Assert.Null(composite);  // MinDistinctCategories=2 also blocks it, but boost is the semantic gate
+        }
+
+        [Fact]
+        public async Task TwoCategorySignals_StillEmitComposite_BoostNotApplied()
+        {
+            // Ensure the boost does NOT block legitimate multi-category composites.
+            DetectionEvent? composite = null;
+            var engine = new WeightedCorrelationEngine(new WeightedCorrelationConfig
+            {
+                Enabled = true,
+                Threshold = 80,
+                MinDistinctCategories = 2
+            });
+            engine.Initialize(ev => { composite = ev; return Task.CompletedTask; });
+
+            await engine.RegisterSignalAsync(new DetectionEvent
+            {
+                RuleName = "LSASS Credential Dump",
+                ProcessId = 3003, ProcessName = "evil.exe",
+                SignalType = SignalType.LsassAccess, Confidence = 0.92,
+                Tier = DetectionTier.Tier1Behavioral, Timestamp = DateTime.UtcNow
+            });
+            await engine.RegisterSignalAsync(new DetectionEvent
+            {
+                RuleName = "C2 Beaconing Statistical",
+                ProcessId = 3003, ProcessName = "evil.exe",
+                SignalType = SignalType.NetworkC2, Confidence = 0.95,
+                Tier = DetectionTier.Tier1Behavioral, Timestamp = DateTime.UtcNow
+            });
+
+            var card = engine.GetScoreCard(3003);
+            // Two distinct categories — boost must NOT be applied
+            Assert.False(card.MonoCategoryBoostApplied,
+                "MonoCategoryBoostApplied must be false for multi-category signals");
+            // And composite should fire (Credential+C2 scores sum well above 80)
+            Assert.NotNull(composite);
+            Assert.Equal(DetectionTier.Tier1Behavioral, composite!.Tier);
         }
     }
 

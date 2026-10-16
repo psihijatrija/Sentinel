@@ -38,6 +38,8 @@ namespace Sentinel.Core
 
         private long _eventsProcessed;
         private long _eventsDropped;
+        private readonly ConcurrentDictionary<Guid, uint> _providerStatus = new();
+        public EtwHealthSnapshot LastHealthSnapshot { get; private set; } = new();
 
         /// <summary>True if the ETW session started successfully and is actively processing.</summary>
         public bool IsActive { get; private set; }
@@ -366,6 +368,7 @@ namespace Sentinel.Core
 
                 _logger.LogInformation("[UnifiedEtwSession] Session '{Name}' started (handle={Handle})", SessionName, _sessionHandle);
 
+                _providerStatus.Clear();
                 // Enable all providers
                 EnableProvider(Providers.KernelProcess);
                 EnableProvider(Providers.KernelFile);
@@ -391,7 +394,7 @@ namespace Sentinel.Core
                 _processingThread.Start();
 
                 IsActive = true;
-                _logger.LogInformation("[UnifiedEtwSession] Real-time processing started. 10 providers enabled.");
+                _logger.LogInformation("[UnifiedEtwSession] Real-time processing started; provider enable results are available in health metrics.");
             }
             catch (Exception ex)
             {
@@ -430,6 +433,7 @@ namespace Sentinel.Core
                     0, // timeout
                     enableParams);
 
+                _providerStatus[providerId] = result;
                 if (result != 0)
                 {
                     _logger.LogDebug("[UnifiedEtwSession] EnableTraceEx2 for {Provider} returned {Error}",
@@ -648,10 +652,48 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// Stops any orphaned session from a previous crash.
-        /// If Sentinel crashes without stopping the session, it persists in the kernel
-        /// and prevents a new session with the same name from being created.
+        /// Queries kernel session/loss state without stopping or changing the session.
         /// </summary>
+        public EtwHealthSnapshot QueryHealth()
+        {
+            var health = new EtwHealthSnapshot
+            {
+                SampledUtc = DateTimeOffset.UtcNow, SessionPresent = IsActive,
+                ConsumerAlive = _processingThread?.IsAlive == true,
+                EventsProcessed = EventsProcessed, DispatchDrops = EventsDropped
+            };
+            foreach (var provider in _providerStatus) health.ProviderStatus[provider.Key.ToString()] = provider.Value;
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                int nameBytes = (SessionName.Length + 1) * 2;
+                int size = ETP_STRUCT_SIZE + nameBytes + 2;
+                buffer = Marshal.AllocHGlobal(size);
+                NativeMemory.Clear(buffer, size);
+                Marshal.WriteInt32(buffer, WNODE_BufferSize_Offset, size);
+                Marshal.WriteInt32(buffer, ETP_LoggerNameOffset_Offset, ETP_STRUCT_SIZE);
+                Marshal.WriteInt32(buffer, ETP_LogFileNameOffset_Offset, ETP_STRUCT_SIZE + nameBytes);
+                uint result = ControlTraceW(0, SessionName, buffer, 0); // EVENT_TRACE_CONTROL_QUERY
+                health.QuerySucceeded = result == 0;
+                if (result == 0)
+                {
+                    health.SessionPresent = true;
+                    health.NativeEventsLost = unchecked((uint)Marshal.ReadInt32(buffer, ETP_EventsLost_Offset));
+                    health.NativeBuffersLost = (long)unchecked((uint)Marshal.ReadInt32(buffer, ETP_LogBuffersLost_Offset)) +
+                        unchecked((uint)Marshal.ReadInt32(buffer, ETP_RealTimeBuffersLost_Offset));
+                }
+                else health.Error = "ControlTrace query error " + result;
+            }
+            catch (Exception ex)
+            {
+                health.Error = ex.GetType().Name;
+                _logger.LogDebug(ex, "ETW health query unavailable");
+            }
+            finally { if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer); }
+            LastHealthSnapshot = health;
+            return health;
+        }
+
         private void StopOrphanedSession()
         {
             try

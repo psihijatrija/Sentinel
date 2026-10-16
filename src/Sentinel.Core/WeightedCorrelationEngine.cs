@@ -31,7 +31,8 @@ namespace Sentinel.Core
         private readonly EventGraph? _eventGraph;
         private readonly ILogger<WeightedCorrelationEngine>? _logger;
         private Func<DetectionEvent, Task>? _emitCallback;
-        private DateTime _lastPrune = DateTime.UtcNow;
+        private DateTime _lastPrune;
+        private readonly Func<DateTime> _utcNow;
 
         private static readonly TimeSpan CorrelationWindow = TimeSpan.FromSeconds(90);
         private static readonly TimeSpan EmitCooldown = TimeSpan.FromSeconds(60);
@@ -65,8 +66,11 @@ namespace Sentinel.Core
             WeightedCorrelationConfig? config = null,
             PluginRegistry? plugins = null,
             ILogger<WeightedCorrelationEngine>? logger = null,
-            EventGraph? eventGraph = null)
+            EventGraph? eventGraph = null,
+            Func<DateTime>? utcNow = null)
         {
+            _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _lastPrune = _utcNow();
             _config = config ?? new WeightedCorrelationConfig();
             _plugins = plugins;
             _logger = logger;
@@ -101,7 +105,7 @@ namespace Sentinel.Core
                 buffer.Add(signal);
                 if (buffer.Count > 80)
                     buffer.RemoveAt(0);
-                var cutoff = DateTime.UtcNow - CorrelationWindow;
+                var cutoff = _utcNow() - CorrelationWindow;
                 buffer.RemoveAll(s => s.Timestamp < cutoff);
             }
 
@@ -123,13 +127,26 @@ namespace Sentinel.Core
                         if (pluginHit != null)
                         {
                             pluginHit.Metadata ??= new Dictionary<string, string>();
-                            pluginHit.Metadata[ResponsePolicy.ChainConfirmedKey] = "true";
-                            pluginHit.Metadata[ResponsePolicy.TerminalOutcomeKey] = "Composite";
+                            bool authorized = card.DistinctCategories >= Math.Max(2, _config.MinDistinctCategories) &&
+                                card.HasTerminalContribution && pluginHit.Confidence >= Math.Max(ResponsePolicy.DefaultMinTier1Confidence, rule.MinConfidence) &&
+                                pluginHit.ProcessId == signal.ProcessId;
+                            pluginHit.Metadata[ResponsePolicy.ChainConfirmedKey] = authorized ? "true" : "false";
+                            if (authorized) pluginHit.Metadata[ResponsePolicy.TerminalOutcomeKey] = "Composite";
+                            else
+                            {
+                                pluginHit.Metadata.Remove(ResponsePolicy.TerminalOutcomeKey);
+                                pluginHit.Tier = DetectionTier.Tier2Indicator;
+                                pluginHit.AuthorizedResponse = ResponseAction.LogOnly;
+                                pluginHit.Metadata["CorrelationDecision"] = "PluginEvidenceInsufficient";
+                            }
                             pluginHit.Metadata["WeightedPluginRule"] = rule.Name;
                             AttackTechniqueMap.Enrich(pluginHit);
                             await _emitCallback(pluginHit).ConfigureAwait(false);
-                            _lastEmit[signal.ProcessId] = DateTime.UtcNow;
-                            return;
+                            if (authorized)
+                            {
+                                _lastEmit[signal.ProcessId] = _utcNow();
+                                return;
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -143,13 +160,13 @@ namespace Sentinel.Core
                 return;
 
             if (_lastEmit.TryGetValue(signal.ProcessId, out var last) &&
-                DateTime.UtcNow - last < EmitCooldown)
+                _utcNow() - last < EmitCooldown)
                 return;
 
             if (_emitCallback == null) return;
 
             var composite = BuildComposite(card, snapshot);
-            _lastEmit[signal.ProcessId] = DateTime.UtcNow;
+            _lastEmit[signal.ProcessId] = _utcNow();
             await _emitCallback(composite).ConfigureAwait(false);
         }
 
@@ -161,7 +178,7 @@ namespace Sentinel.Core
 
             List<DetectionEvent> snapshot;
             lock (buffer)
-                snapshot = new List<DetectionEvent>(buffer);
+                snapshot = buffer.Where(s => s.Timestamp >= _utcNow() - CorrelationWindow).ToList();
 
             var name = snapshot.FirstOrDefault()?.ProcessName ?? "";
             return BuildScoreCard(processId, name, snapshot);
@@ -169,21 +186,7 @@ namespace Sentinel.Core
 
         private bool ShouldEmit(CorrelationScoreCard card, List<DetectionEvent> signals)
         {
-            if (card.TotalScore < _config.Threshold)
-                return false;
-            if (card.CategoryContributions.Count < _config.MinDistinctCategories)
-                return false;
-
-            // Require a terminal-family leg OR very high score (defense in depth).
-            bool hasTerminal = signals.Any(s =>
-                ResponsePolicy.IsKillGradeTerminal(s) ||
-                ResponsePolicy.IsNukeComposite(s) ||
-                IsTerminalCategory(MapWeightCategory(s)));
-
-            if (!hasTerminal && card.TotalScore < _config.Threshold + 40)
-                return false;
-
-            return true;
+            return card.EligibleForComposite;
         }
 
         private CorrelationScoreCard BuildScoreCard(int pid, string processName, List<DetectionEvent> signals)
@@ -244,8 +247,28 @@ namespace Sentinel.Core
             card.DistinctCategories = card.CategoryContributions.Count(kv =>
                 !string.Equals(kv.Key, "GraphDiversity", StringComparison.OrdinalIgnoreCase));
             card.SignalCount = signals.Count;
-            card.MeetsThreshold = card.TotalScore >= _config.Threshold &&
-                                  card.DistinctCategories >= _config.MinDistinctCategories;
+
+            // Mono-category boost: if the same category dominates with >=3 contributions
+            // and no other category has contributed, raise the effective threshold by 20%.
+            // This reduces false-positive composites from a single noisy sensor firing
+            // repeatedly. Never lowers the threshold; only ever raises it.
+            int effectiveThreshold = _config.Threshold;
+            if (card.DistinctCategories == 1 && card.SignalCount >= 3)
+            {
+                effectiveThreshold = (int)Math.Ceiling(_config.Threshold * 1.2);
+                card.MonoCategoryBoostApplied = true;
+            }
+
+            card.MeetsThreshold = card.TotalScore >= effectiveThreshold &&
+                                  card.DistinctCategories >= Math.Max(2, _config.MinDistinctCategories);
+            card.HasTerminalContribution = signals.Any(s => s.Confidence >= ResponsePolicy.DefaultMinTier1Confidence &&
+                !ResponsePolicy.IsWeakObserveSeed(s) &&
+                (ResponsePolicy.IsKillGradeTerminal(s) || ResponsePolicy.IsNukeComposite(s) ||
+                 IsTerminalCategory(MapWeightCategory(s))));
+            card.EligibleForComposite = card.MeetsThreshold && card.HasTerminalContribution;
+            card.Decision = card.TotalScore < effectiveThreshold ? "BelowScoreThreshold" :
+                card.DistinctCategories < Math.Max(2, _config.MinDistinctCategories) ? "InsufficientCategories" :
+                !card.HasTerminalContribution ? "MissingTerminalEvidence" : "EligibleForComposite";
             card.Explanation = BuildExplanation(card);
             return card;
         }
@@ -256,9 +279,7 @@ namespace Sentinel.Core
             sb.Append("Weighted correlation: ");
             sb.Append(string.Join(" + ", card.CategoryContributions.Select(kv => $"{kv.Key}={kv.Value}")));
             sb.Append($" = {card.TotalScore}");
-            sb.Append(card.MeetsThreshold
-                ? $" >= threshold {card.Threshold} (emit)"
-                : $" < threshold {card.Threshold} (observe)");
+            sb.Append($"; threshold={card.Threshold}, categories={card.DistinctCategories}, decision={card.Decision}");
             return sb.ToString();
         }
 
@@ -272,6 +293,7 @@ namespace Sentinel.Core
                 card.CategoryContributions.Select(kv => $"{kv.Key}={kv.Value}"));
             signal.Metadata["ScoreCardExplanation"] = card.Explanation;
             signal.Metadata["ScoreCardMeetsThreshold"] = card.MeetsThreshold ? "true" : "false";
+            signal.Metadata["CorrelationDecision"] = card.Decision;
             AttackTechniqueMap.Enrich(signal);
         }
 
@@ -299,7 +321,7 @@ namespace Sentinel.Core
                     "Distinct behavioral categories on the same process within the correlation window " +
                     "constitute multi-signal proof under ObserveUntilChain. Breakdown: " +
                     string.Join(", ", card.ContributingRules),
-                Timestamp = DateTime.UtcNow,
+                Timestamp = _utcNow(),
                 Metadata = new Dictionary<string, string>
                 {
                     [ResponsePolicy.ChainConfirmedKey] = "true",
@@ -404,7 +426,7 @@ namespace Sentinel.Core
 
         private void PruneStale()
         {
-            var now = DateTime.UtcNow;
+            var now = _utcNow();
             if (now - _lastPrune < PruneInterval) return;
             _lastPrune = now;
 
@@ -435,12 +457,22 @@ namespace Sentinel.Core
         public int SignalCount { get; set; }
         public int WindowSeconds { get; set; }
         public bool MeetsThreshold { get; set; }
+        public bool HasTerminalContribution { get; set; }
+        public bool EligibleForComposite { get; set; }
+        public string Decision { get; set; } = "NoSignals";
         public string Explanation { get; set; } = "";
         public Dictionary<string, int> CategoryContributions { get; set; } =
             new(StringComparer.OrdinalIgnoreCase);
         public List<string> ContributingRules { get; set; } = new();
         /// <summary>v2.0 EventGraph diversity boost applied to TotalScore.</summary>
         public int GraphBoost { get; set; }
+        /// <summary>
+        /// v3.2.0: True when the mono-category boost was applied — a single category
+        /// fired ≥3 times with no other category contributing, raising the effective
+        /// threshold by 20% to reduce noisy single-sensor false-positive composites.
+        /// Never lowers the threshold; only applies to the composite gate, not kill authority.
+        /// </summary>
+        public bool MonoCategoryBoostApplied { get; set; }
     }
 
     /// <summary>Config for WeightedCorrelationEngine (bound under Sentinel:WeightedCorrelation).</summary>

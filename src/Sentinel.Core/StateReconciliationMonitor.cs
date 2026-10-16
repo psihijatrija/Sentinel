@@ -25,12 +25,16 @@ namespace Sentinel.Core
     /// worded as "unexplained module, review it" - it never claims to know who placed it or why, and
     /// it never auto-kills. Kill authority stays entirely in the behavioral engines.
     /// </summary>
-    public sealed class StateReconciliationMonitor : BackgroundService
+    public sealed class StateReconciliationMonitor : BackgroundService, ISensorProgressSource
     {
         private readonly DetectionEngine _detectionEngine;
         private readonly SignerTrustService _signerTrust;
         private readonly ModuleBaselineStore _store;
         private readonly ILogger<StateReconciliationMonitor> _logger;
+        private readonly VisibilityGapTracker? _gaps;
+        private long _reconciledGeneration;
+
+        public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(11));
 
         private ModuleBaselineSnapshot _baseline = new();
         private readonly Dictionary<string, DateTime> _lastEmit =
@@ -58,12 +62,13 @@ namespace Sentinel.Core
             DetectionEngine detectionEngine,
             SignerTrustService signerTrust,
             ModuleBaselineStore store,
-            ILogger<StateReconciliationMonitor> logger)
+            ILogger<StateReconciliationMonitor> logger, VisibilityGapTracker? gaps = null)
         {
             _detectionEngine = detectionEngine;
             _signerTrust = signerTrust;
             _store = store;
             _logger = logger;
+            _gaps = gaps;
         }
 
         protected override async Task ExecuteAsync(CancellationToken ct)
@@ -79,15 +84,44 @@ namespace Sentinel.Core
             {
                 try
                 {
+                    var visibilityGap = _gaps?.Snapshot();
                     await ReconcileOnceAsync(ct);
-                    _store.Save(_baseline);
-                    await Task.Delay(Cadence, ct);
+                    if (!_store.TrySave(_baseline)) throw new System.IO.IOException("Module baseline could not be persisted.");
+                    Progress.Succeeded();
+                    if (visibilityGap != null && visibilityGap.Generation != _reconciledGeneration)
+                    {
+                        await _detectionEngine.EmitAsync(new DetectionEvent
+                        {
+                            RuleName = "State Reconciliation: Snapshot After Visibility Gap",
+                            Evidence = $"Current module state re-sampled after {visibilityGap.Source} reported a gap at {visibilityGap.ObservedUtc:O}.",
+                            Reasoning = "A current snapshot cannot reconstruct missing events or establish attribution during the gap.",
+                            Confidence = 0.5, Tier = DetectionTier.Tier2Indicator,
+                            AuthorizedResponse = ResponseAction.LogOnly,
+                            Metadata = new Dictionary<string, string>
+                            { ["GapSource"] = visibilityGap.Source, ["GapReason"] = visibilityGap.Reason }
+                        });
+                        _reconciledGeneration = visibilityGap.Generation;
+                    }
+                    var gap = Progress.AcknowledgeRecovery();
+                    if (gap.HasValue)
+                        await _detectionEngine.EmitAsync(new DetectionEvent
+                        {
+                            RuleName = "State Reconciliation: Coverage Restored",
+                            Evidence = $"Collection resumed after a gap beginning {gap.Value:O}. Current module state was reconciled; activity during the gap is unknown.",
+                            Reasoning = "Recovered visibility cannot retrospectively prove event coverage.",
+                            Tier = DetectionTier.Tier2Indicator,
+                            AuthorizedResponse = ResponseAction.LogOnly,
+                            Confidence = 0.5
+                        });
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
+                    Progress.Failed(ex.Message);
                     _logger.LogDebug(ex, "[StateReconciliation] pass error");
                 }
+                try { await Task.Delay(Cadence, ct); }
+                catch (OperationCanceledException) { break; }
             }
         }
 
@@ -113,7 +147,7 @@ namespace Sentinel.Core
                     if (string.IsNullOrEmpty(mod.Path)) continue;
                     var identity = ModuleIdentity.Normalize(mod.Path);
                     if (identity.Length == 0) continue;
-                    if (known.Contains(identity)) continue; // already baselined for this process
+                    if (!_baseline.NeedsAttribution(procName, identity)) continue;
 
                     var (attributed, reason, signer) = TryAttribute(imagePath, mod.Path);
 
@@ -123,6 +157,7 @@ namespace Sentinel.Core
                         // ONLY from accepted (trusted) modules - a surviving-unexplained module's
                         // signer is NOT trusted just because it was seen.
                         known.Add(identity);
+                        _baseline.UnexplainedSince.Remove(identity);
                         if (!string.IsNullOrEmpty(signer))
                         {
                             var key = signer!.ToLowerInvariant();
@@ -134,8 +169,9 @@ namespace Sentinel.Core
 
                     // Unattributable. In learn mode we adopt the initial state without alerting
                     // (R2: first snapshot becomes the baseline, emit nothing).
-                    known.Add(identity);
-                    if (learnMode) continue;
+                    if (learnMode) { known.Add(identity); continue; }
+                    // An unexplained observation is not an accepted baseline. Keep it
+                    // eligible for review/re-emission on later cycles and after restart.
 
                     bool firstSight = !_baseline.UnexplainedSince.ContainsKey(identity);
                     if (firstSight)

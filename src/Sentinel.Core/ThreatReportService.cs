@@ -171,5 +171,8 @@ namespace Sentinel.Core
 
         /// <summary>Machine-bound HMAC of the manifest - origin proof, verifies on the source host.</summary>
         public string ManifestHmacSha256 { get; set; } = string.Empty;
+        public string LedgerFile { get; set; } = string.Empty;
+        public long LedgerSequence { get; set; }
+        public string LedgerHash { get; set; } = string.Empty;
     }
 }

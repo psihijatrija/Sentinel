@@ -282,6 +282,9 @@ namespace Sentinel.Core
         private readonly ScanEngine _scanEngine;
         private readonly CertRemediator? _certRemediator;
         private readonly ILogger<ServiceAgentIpcHost> _logger;
+        private readonly JsonlEventLogger? _eventLogger;
+        private readonly DetectionEngine? _detectionEngine;
+        private readonly UnifiedEtwSession? _etw;
         private byte[] _token = Array.Empty<byte>();
 
         // v2.0.4 CRIT-1: Server-side nonce tracking to prevent replay attacks within the 60s window.
@@ -300,7 +303,8 @@ namespace Sentinel.Core
             ScanEngine scanEngine,
             ILogger<ServiceAgentIpcHost> logger,
             MonitorRegistry? registry = null,
-            CertRemediator? certRemediator = null)
+            CertRemediator? certRemediator = null,
+            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null)
         {
             _metrics = metrics;
             _weighted = weighted;
@@ -308,6 +312,9 @@ namespace Sentinel.Core
             _scanEngine = scanEngine;
             _logger = logger;
             _registry = registry;
+            _eventLogger = eventLogger;
+            _detectionEngine = detectionEngine;
+            _etw = etw;
             _certRemediator = certRemediator;
         }
 
@@ -434,11 +441,16 @@ namespace Sentinel.Core
                         snap.WeightedCorrelationEnabled = _weighted.Enabled;
                         snap.WeightedThreshold = _weighted.Threshold;
                         snap.PluginCount = _plugins.TotalCount;
+                        snap.Pipeline = _detectionEngine?.GetTelemetryHealth() ?? new TelemetryPipelineSnapshot();
+            snap.Etw = _etw?.LastHealthSnapshot ?? new EtwHealthSnapshot();
+                        snap.AuditIntegrityDegraded = _eventLogger?.AuditIntegrityDegraded ?? true;
                         if (_registry != null)
                         {
                             var st = _registry.GetStats();
                             snap.RegisteredMonitors = st.TotalRegistered;
                             snap.RunningMonitors = st.Running;
+                            foreach (var monitor in _registry.GetAllStatuses())
+                                snap.SensorProgress[monitor.Name] = monitor.Progress;
                         }
                         response = JsonSerializer.Serialize(new { ok = true, ops = snap });
                         break;

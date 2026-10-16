@@ -21,6 +21,7 @@ namespace Sentinel.Core
         private long _responsesCount;
         private long _telemetryReceived;
         private long _telemetryDropped;
+        private readonly ConcurrentQueue<double> _queueWaits = new();
         private long _compositesEmitted;
         private long _weightedEmitted;
         private long _chainConfirmed;
@@ -50,6 +51,12 @@ namespace Sentinel.Core
         {
             _correlationLatencies.Enqueue(latencyMs);
             TrimQueue(_correlationLatencies);
+        }
+
+        public void RecordQueueWait(double milliseconds)
+        {
+            _queueWaits.Enqueue(milliseconds);
+            TrimQueue(_queueWaits);
         }
 
         public void RecordFalsePositive() => Interlocked.Increment(ref _falsePositivesCount);
@@ -98,6 +105,7 @@ namespace Sentinel.Core
             var det = GetDetectionLatencyPercentiles();
             var resp = GetResponseLatencyPercentiles();
             var corr = GetCorrelationLatencyPercentiles();
+            var queue = CalculatePercentiles(_queueWaits.ToList());
 
             return new OpsMetricsSnapshot
             {
@@ -118,6 +126,7 @@ namespace Sentinel.Core
                 ResponseLatencyMsP95 = resp.p95,
                 CorrelationLatencyMsP50 = corr.p50,
                 CorrelationLatencyMsP95 = corr.p95,
+                QueueWaitMsP95 = queue.p95,
             };
         }
 
@@ -146,6 +155,44 @@ namespace Sentinel.Core
         }
     }
 
+    /// <summary>
+    /// Per-sensor throughput and latency budget snapshot. Recorded by MonitorRegistry
+    /// via RecordTelemetry() and published in ops_metrics.json per sensor.
+    /// Sliding 60-second window; thread-safe lock-free accumulation.
+    /// </summary>
+    public sealed class SensorBudgetSnapshot
+    {
+        // Accumulated via interlocked; snapshot computed on read.
+        private long _eventsTotal;
+        private long _cyclesTotal;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<double> _latencies = new();
+
+        public void Record(int eventCount, double latencyMs)
+        {
+            Interlocked.Add(ref _eventsTotal, eventCount);
+            Interlocked.Increment(ref _cyclesTotal);
+            _latencies.Enqueue(latencyMs);
+            // Bound to last 500 samples (~8 min at 1/s per monitor)
+            while (_latencies.Count > 500) _latencies.TryDequeue(out _);
+        }
+
+        public long EventsTotal => Interlocked.Read(ref _eventsTotal);
+        public long CyclesTotal => Interlocked.Read(ref _cyclesTotal);
+
+        public double LatencyP50Ms => Percentile(0.50);
+        public double LatencyP95Ms => Percentile(0.95);
+        public double LatencyP99Ms => Percentile(0.99);
+
+        private double Percentile(double p)
+        {
+            var list = _latencies.ToArray();
+            if (list.Length == 0) return 0;
+            Array.Sort(list);
+            int idx = Math.Max(0, Math.Min(list.Length - 1, (int)Math.Ceiling(p * list.Length) - 1));
+            return Math.Round(list[idx], 2);
+        }
+    }
+
     /// <summary>Serializable ops snapshot written to ProgramData\Sentinel\ops_metrics.json.</summary>
     public sealed class OpsMetricsSnapshot
     {
@@ -169,6 +216,12 @@ namespace Sentinel.Core
         public double CorrelationLatencyMsP95 { get; set; }
         public int RegisteredMonitors { get; set; }
         public int RunningMonitors { get; set; }
+        public double QueueWaitMsP95 { get; set; }
+        public TelemetryPipelineSnapshot Pipeline { get; set; } = new();
+        public EtwHealthSnapshot Etw { get; set; } = new();
+        public bool AuditIntegrityDegraded { get; set; }
+        public Dictionary<string, SensorProgressSnapshot> SensorProgress { get; set; } = new();
+        public Dictionary<string, SensorBudgetSnapshot> SensorBudgets { get; set; } = new();
         public int PluginCount { get; set; }
         public bool WeightedCorrelationEnabled { get; set; }
         public int WeightedThreshold { get; set; }

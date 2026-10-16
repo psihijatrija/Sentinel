@@ -18,6 +18,9 @@ namespace Sentinel.Core
     {
         private readonly SentinelMetrics _metrics;
         private readonly MonitorRegistry? _monitorRegistry;
+        private readonly JsonlEventLogger? _eventLogger;
+        private readonly DetectionEngine? _detectionEngine;
+        private readonly UnifiedEtwSession? _etw;
         private readonly PluginRegistry _plugins;
         private readonly WeightedCorrelationConfig _weightedConfig;
         private readonly ILogger<OpsMetricsPublisher> _logger;
@@ -28,13 +31,17 @@ namespace Sentinel.Core
             PluginRegistry plugins,
             WeightedCorrelationConfig weightedConfig,
             ILogger<OpsMetricsPublisher> logger,
-            MonitorRegistry? monitorRegistry = null)
+            MonitorRegistry? monitorRegistry = null,
+            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null)
         {
             _metrics = metrics;
             _plugins = plugins;
             _weightedConfig = weightedConfig;
             _logger = logger;
             _monitorRegistry = monitorRegistry;
+            _eventLogger = eventLogger;
+            _detectionEngine = detectionEngine;
+            _etw = etw;
 
             var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
             _outputPath = Path.Combine(programData, "Sentinel", "ops_metrics.json");
@@ -76,6 +83,9 @@ namespace Sentinel.Core
             snap.WeightedCorrelationEnabled = _weightedConfig.Enabled;
             snap.WeightedThreshold = _weightedConfig.Threshold;
             snap.PluginCount = _plugins.TotalCount;
+            snap.Pipeline = _detectionEngine?.GetTelemetryHealth() ?? new TelemetryPipelineSnapshot();
+            snap.Etw = _etw?.LastHealthSnapshot ?? new EtwHealthSnapshot();
+            snap.AuditIntegrityDegraded = _eventLogger?.AuditIntegrityDegraded ?? true;
 
             if (_monitorRegistry != null)
             {
@@ -84,6 +94,11 @@ namespace Sentinel.Core
                     var stats = _monitorRegistry.GetStats();
                     snap.RegisteredMonitors = stats.TotalRegistered;
                     snap.RunningMonitors = stats.Running;
+                    foreach (var monitor in _monitorRegistry.GetAllStatuses())
+                    {
+                        snap.SensorProgress[monitor.Name] = monitor.Progress;
+                        snap.SensorBudgets[monitor.Name] = monitor.Budget;
+                    }
                 }
                 catch
                 {

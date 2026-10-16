@@ -78,26 +78,34 @@ namespace Sentinel.Core
             }
         }
 
-        /// <summary>Persists the baseline. Best-effort; never throws.</summary>
-        public void Save(ModuleBaselineSnapshot snapshot)
+        /// <summary>Best-effort compatibility entry point.</summary>
+        public void Save(ModuleBaselineSnapshot snapshot) => TrySave(snapshot);
+
+        /// <summary>Durably replace a baseline without deleting the last valid copy first.</summary>
+        public bool TrySave(ModuleBaselineSnapshot snapshot)
         {
-            if (snapshot == null) return;
+            if (snapshot == null) return false;
             try
             {
-                if (!Directory.Exists(_baselineDir))
-                    Directory.CreateDirectory(_baselineDir);
-                var json = JsonSerializer.Serialize(snapshot, JsonOpts);
-                // Write-then-move for atomicity so a crash mid-write cannot corrupt the baseline.
+                Directory.CreateDirectory(_baselineDir);
+                var bytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(snapshot, JsonOpts));
                 var tmp = _baselineFile + ".tmp";
-                File.WriteAllText(tmp, json);
-                if (File.Exists(_baselineFile)) File.Delete(_baselineFile);
-                File.Move(tmp, _baselineFile);
+                using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.Read | FileShare.Delete))
+                {
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(flushToDisk: true);
+                }
+                if (File.Exists(_baselineFile)) File.Replace(tmp, _baselineFile, null);
+                else File.Move(tmp, _baselineFile);
+                return true;
             }
-            catch
+            catch (Exception ex)
             {
-                // Degrade gracefully.
+                System.Diagnostics.Trace.TraceWarning("Module baseline persistence failed: {0}", ex.Message);
+                return false;
             }
         }
+
     }
 
     /// <summary>
@@ -119,6 +127,9 @@ namespace Sentinel.Core
         /// <summary>Normalized module identity -> "unexplained since" UTC (durable review ledger).</summary>
         public Dictionary<string, DateTime> UnexplainedSince { get; set; } =
             new(StringComparer.OrdinalIgnoreCase);
+
+        public bool NeedsAttribution(string processName, string identity) =>
+            !ModulesFor(processName).Contains(identity) || UnexplainedSince.ContainsKey(identity);
 
         public HashSet<string> ModulesFor(string processName)
         {

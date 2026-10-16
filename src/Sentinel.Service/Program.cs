@@ -343,6 +343,7 @@ namespace Sentinel.Service
                     services.AddSingleton<ProcessAncestryCache>();
                     services.AddSingleton<SecureCacheStore>();
                     services.AddSingleton<HashReputationService>();
+                    services.AddSingleton<RestoreTransaction>();
                     services.AddSingleton<QuarantineManager>();
                     services.AddSingleton<SafeProcessExemptionRegistry>();
                     services.AddSingleton<FileVerdictAds>();
@@ -393,6 +394,7 @@ namespace Sentinel.Service
                     // Unified ETW Session - single session subscribing to 9 system providers
                     // Provides event-driven telemetry at ~50ms latency for all monitors
                     services.AddSingleton<UnifiedEtwSession>();
+                    services.AddSingleton<VisibilityGapTracker>();
                     services.AddSingleton<EtwEventDispatcher>();
 
                     // Rules
@@ -777,6 +779,7 @@ namespace Sentinel.Service
                             ("CloudFilesHydrationMonitor",      s => s.GetRequiredService<CloudFilesHydrationMonitor>()),
                             ("ClfsExploitationMonitor",         s => s.GetRequiredService<ClfsExploitationMonitor>()),
                             ("StateReconciliationMonitor",      s => s.GetRequiredService<StateReconciliationMonitor>()),
+                            ("HostIntegrityInventoryMonitor",    s => s.GetRequiredService<HostIntegrityInventoryMonitor>()),
                             ("TrustedHostModuleIntegrityMonitor", s => s.GetRequiredService<TrustedHostModuleIntegrityMonitor>()),
                             ("AggressiveUnsignedDllSweepMonitor", s => s.GetRequiredService<AggressiveUnsignedDllSweepMonitor>()),
                             ("RootStoreGuard",                  s => s.GetRequiredService<RootStoreGuard>())
@@ -800,6 +803,9 @@ namespace Sentinel.Service
                     // diff of long-lived processes. Reboot-durable baseline store + monitor.
                     services.AddSingleton<ModuleBaselineStore>();
                     services.AddSingleton<StateReconciliationMonitor>();
+                    services.AddSingleton<IHostIntegrityInventory, HostIntegrityInventory>();
+                    services.AddSingleton<HostIntegrityHistory>();
+                    services.AddSingleton<HostIntegrityInventoryMonitor>();
                     // Registry-driven DLL-load-point integrity (audio APOs + print monitors/processors).
                     // Observe-only (Tier2/LogOnly). Does not duplicate PrintSpoolerMonitor (filesystem
                     // driver store) or WinsockLspIntegrityMonitor (Winsock catalog).

@@ -1,4 +1,142 @@
 # Changelog
+## [3.2.0] - 2026-10-16
+### Added
+- **`IncidentJournal` — durable write-ahead journal for incident state transitions.**
+  `BehavioralCorrelationEngine` and `WeightedCorrelationEngine` previously held all
+  in-progress chain state in memory; a service crash mid-confirmation silently lost
+  the chain with no record that a kill was pending. `IncidentJournal` writes each
+  state transition atomically to `%ProgramData%\Sentinel\Incidents\incident-<id>.json`
+  (temp-write + `File.Replace`, flushed to disk). States: `Seeding → Confirming →
+  Sealed(Executed|Abandoned|Interrupted)`. On service restart, `RecoverOpenJournals()`
+  finds any unsealed journal and emits a `Tier2/LogOnly` `"Incident: Interrupted Chain
+  Recovered"` detection per interrupted incident — the operator sees that the service
+  died mid-chain. Sealed journals are included in evidence packs. `JournalState` is a
+  distinct type from `IncidentManager.IncidentState` (Open/Active/Responded/Closed).
+  No new kill authority; recovery is observe-only.
+
+- **Per-sensor throughput and latency accounting (`SensorBudgetSnapshot`).**
+  `MonitorRegistry.RecordTelemetry(name, count, latencyMs)` accumulates a sliding 500-
+  sample window of event counts and cycle latencies per sensor. `MonitorStatus` gains a
+  `Budget` field (`EventsTotal`, `CyclesTotal`, `LatencyP50Ms`, `LatencyP95Ms`,
+  `LatencyP99Ms`). `OpsMetricsPublisher` includes all sensor budgets in `ops_metrics.json`
+  under `SensorBudgets`. This makes the QUALITY_REVIEW "performance and resource budgets"
+  dimension measurable: the dashboard now shows which sensor is contributing the most
+  telemetry volume and at what latency. No thresholds yet — measure first, gate later.
+
+- **Mono-category boost in `WeightedCorrelationEngine`.**
+  When a single weight category fires ≥3 times within the correlation window with no other
+  category contributing, the effective composite threshold is raised by 20% (ceiling) for
+  that PID. This reduces false-positive composites from a single noisy sensor flood. The
+  boost is additive only (never lowers the threshold), never affects kill authority directly
+  (only the composite formation gate), and is exposed as `CorrelationScoreCard.MonoCategoryBoostApplied`
+  so the Diagnostics CLI `replay` command shows whether it applied. Multi-category signals
+  are unaffected.
+
+### Tests
+- `WeightedCorrelationMonoCategoryBoostTests` (3 new tests): boost flag is set when a single
+  category fires ≥3 times; single-category flood does not emit a composite; two-category
+  signals still emit composites and boost is not applied.
+- All 2757 existing tests remain green. Build 0W/0E.
+
+## [3.1.8] - 2026-10-16
+### Added
+- **`SentinelAutoRotate` standalone tool** (`tools/Sentinel.AutoRotate/`). Keeps a local
+  Windows account password unknown to any human while maintaining passwordless autologon.
+  Fully decoupled from the EDR — no `ProjectReference` in either direction, no DI wiring.
+  - `--install` (admin): registers two SYSTEM scheduled tasks (`SentinelAutoRotateStartup`
+    on boot, `SentinelAutoRotate` every 10 minutes), enables autologon for the active
+    console session account, sets `ConsentPromptBehaviorAdmin=5`.
+  - `--rotate` (SYSTEM): determines the active account via `WTSQuerySessionInformation`,
+    generates a ≥20-char cryptographically random password (`RandomNumberGenerator`, never
+    `System.Random`), sets it via `NetUserSetInfo` level 1003 (never `net user`), stores it
+    as the LSA private secret `DefaultPassword` via `LsaStorePrivateData` (never the
+    cleartext registry value). Password is never logged.
+  - `--uninstall`: removes both scheduled tasks, disables autologon, clears the LSA secret.
+    Leaves the account on its last random password; user must reset via standard Windows tools.
+  - Honest security tradeoff documented in source: defends against social engineering,
+    phishing, and credential reuse; does NOT defend against a local admin who already has
+    access (the LSA secret is readable by any SYSTEM/admin process including an LSASS dump).
+
+### Fixed
+- **`installer/build.bat` missing AutoRotate publish step.** `setup.iss` line 35 requires
+  `publish\autorotate\SentinelAutoRotate.exe` but `build.bat` only published `service` and
+  `agent`, causing Inno Setup to fail with "Source file does not exist" on every `build.bat`
+  invocation. Added step 4d to publish `tools\Sentinel.AutoRotate\Sentinel.AutoRotate.csproj`
+  to `publish\autorotate\` before Inno Setup runs. `build.ps1` already had this step; the
+  `.bat` is now consistent.
+
+### Changed
+- `setup.iss` `[Tasks]` exposes opt-in "Enable SentinelAutoRotate" (unchecked by default,
+  with explicit warning about autologon implications). `[Run]` invokes `--install` only when
+  the task is selected. `CurUninstallStepChanged` calls `--uninstall` before file removal.
+
+## [3.1.9] - 2026-10-16
+### Changed
+- **Aggressive unsigned-module sweep expanded to all loadable-module extensions.**
+  `AggressiveUnsignedDllSweepMonitor` previously only swept `.dll`/`.winmd`. Now covers
+  all extensions in `ModuleIdentity.ModuleExtensions` (`.dll`, `.winmd`, `.ocx`, `.cpl`,
+  `.ax`, `.node`, `.drv`, `.acm`, `.tsp`, `.mui`, `.efi`) with hardened removal — hostile
+  modules locked by a live process are killed and ownership seized before deletion.
+- **`EnableAggressiveUnsignedDllSweep` defaults `true`.** Compiled-only; disk JSON and
+  `config.enc` cannot disarm it.
+- **`DllUnloadEngine` mapped-DLL remediation also uses hardened removal**, closing the
+  "re-quarantined the same mapped DLL forever" loop.
+
+### Added
+- New Tier2/LogOnly IDS command-line pattern rules for previously uncovered patterns.
+  All signals are `Tier2Indicator + LogOnly` unconditionally; `AdvancedResponseEngine`
+  enforces this regardless of `ActiveResponse` state.
+
+### Tests
+- `AggressiveUnsignedDllSweepMonitorTests`: extended extension set, hardened-removal path,
+  and locked-module invariant.
+- `ReliabilityImprovementsTests` (new): `SensorProgress` state machine, `VisibilityGapTracker`,
+  `TelemetryQueue` eviction, `RestoreTransaction` journal states.
+- `AuditLedgerIntegrationTests` (new): `EvidenceLedger` append/verify, trusted checkpoint
+  anchoring, truncation detection, 20 MB cap.
+- `worker/tests/evidence.test.mjs` (new): 8 regression tests for `POST /report/evidence` —
+  valid anchor storage, missing fields, oversized body (413), missing KV store (503), invalid
+  ledger checkpoint format.
+
+## [3.1.7] - 2026-10-15
+### Added
+- Windows/.NET Framework 4.8 diagnostic CLI for historical weighted-correlation replay,
+  replay comparisons, evidence-ledger/manifest verification, restore inspection and
+  privacy-preserving offline export preview/ZIP creation.
+- Sensor collection-progress reporting, native ETW provider/loss/session queries,
+  exact bounded-queue eviction accounting, queue-age/wait metrics, and visibility-gap
+  coordination with module/network/certificate inventories.
+- Read-only network-context and root-certificate observation histories across restarts.
+  Previously observed contexts never grant trust; certificate actor/installer attribution
+  remains explicitly unknown without supporting evidence.
+- Daily hash-chained companion audit records, trusted-prefix checkpoints and optional
+  checkpoint anchoring in evidence summaries. Integrity degradation is exposed.
+- Authenticated Cloudflare Worker `/report/evidence` handler with minimal, content-addressed
+  KV anchors, bounded request bodies, explicit storage failures, and eight regression tests.
+- Provisional subsystem ratings and a documented path toward stronger validation.
+
+### Fixed
+- Supervisor ticks no longer masquerade as successful sensor collection. Faulted background
+  monitors restart without prior disposal; optional monitors that complete cleanly remain
+  stopped instead of repeatedly restarting on custom/debloated Windows.
+- Weighted correlation explanations reflect actual score/category/terminal gates. A high
+  score alone or a plugin finding without independent terminal evidence cannot confer
+  destructive authority; weighted composites require at least two categories.
+- Unexplained module observations remain eligible for review instead of silently becoming
+  accepted baseline entries. Baseline replacement preserves the last valid file on failure.
+- Explicit quarantine restores refuse overwrites, journal Prepared/Applied/Verified states,
+  verify restored content and retain the encrypted vault for recovery review.
+
+### Release workflow
+- Handle an expected missing release without leaving a failing native exit status;
+  genuine lookup/authentication errors still block publication.
+- Keep the product, tests and diagnostics on `net48-windows`; no Linux CI/product target.
+- Require the Windows Framework test suite and Worker tests before installer publication.
+- Attach a directly copyable Worker JavaScript file, Windows Framework diagnostics ZIP
+  and SHA-256 checksums with the installer.
+- Support `release.ps1 -PrepareOnly` / `build.ps1 -StampOnly` for repository-controlled
+  version preparation when GitHub Actions performs the Windows installer build.
+
 ## [3.1.6] - 2026-10-15
 ### Changed
 - Removed `Rules.DefenseTamper.cs` stub (tombstone comment file left over from v3.1.5 decision to drop the anti-tamper rule). No functional change.

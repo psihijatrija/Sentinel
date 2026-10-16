@@ -73,7 +73,9 @@ namespace Sentinel.Core
                         AvailableIOThreads = ioThreads,
                         Uptime = (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).ToString(@"d\.hh\:mm\:ss"),
                         DetectionsTotal = _metrics.GetDetectionsCount(),
-                        ResponsesTotal = _metrics.GetResponsesCount()
+                        ResponsesTotal = _metrics.GetResponsesCount(),
+                        AuditIntegrityDegraded = _eventLogger.AuditIntegrityDegraded,
+                        LoggerDroppedEvents = _eventLogger.DroppedEvents
                     };
 
                     await _eventLogger.LogEventAsync("health", health, ct);

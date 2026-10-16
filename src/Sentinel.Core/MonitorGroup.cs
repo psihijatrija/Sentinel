@@ -75,7 +75,7 @@ namespace Sentinel.Core
                 _states[monitor] = new MonitorState();
                 // Register with the health registry up front so the dashboard reflects
                 // the full monitor roster even before staggered startup completes.
-                _registry?.Register(GetMonitorName(monitor), _config.Category, monitor);
+                _registry?.Register(GetMonitorName(monitor), _config.Category);
             }
         }
 
@@ -140,11 +140,32 @@ namespace Sentinel.Core
                     if (stoppingToken.IsCancellationRequested) break;
 
                     var state = _states[monitor];
+                    if (state.Completed) continue;
+                    if (state.IsRunning && monitor is BackgroundService background &&
+                        background.ExecuteTask is { IsCompleted: true } completed)
+                    {
+                        state.IsRunning = false;
+                        if (completed.Status == TaskStatus.RanToCompletion)
+                        {
+                            // Optional sensors may deliberately exit on unsupported/debloated
+                            // Windows. Do not restart them forever or claim active coverage.
+                            state.Completed = true;
+                            _registry?.MarkStopped(GetMonitorName(monitor));
+                            _logger.LogInformation("Monitor {Monitor} completed; active coverage unavailable", GetMonitorName(monitor));
+                            continue;
+                        }
+                        state.Failed = true;
+                        state.LastError = completed.Exception?.GetBaseException() ??
+                            new InvalidOperationException("Monitor execution ended before group shutdown.");
+                        _registry?.MarkFailed(GetMonitorName(monitor), state.LastError);
+                        _logger.LogWarning(state.LastError, "Monitor {Monitor} stopped executing", GetMonitorName(monitor));
+                    }
                     if (state.IsRunning)
                     {
-                        // Piggyback a heartbeat onto the group health check so the
-                        // MonitorRegistry watchdog sees running monitors as alive.
-                        _registry?.Heartbeat(GetMonitorName(monitor));
+                        // Liveness is separate from successful sensor collection.
+                        _registry?.SupervisorHeartbeat(GetMonitorName(monitor));
+                        if (monitor is ISensorProgressSource source)
+                            _registry?.ReportProgress(GetMonitorName(monitor), source.Progress.Snapshot());
                         continue;
                     }
                     if (state.Failed && !ShouldRestart(state)) continue;
@@ -160,7 +181,7 @@ namespace Sentinel.Core
             _logger.LogInformation("[MonitorGroup:{Group}] Stopping all monitors", _config.Name);
             for (int i = _monitors.Count - 1; i >= 0; i--)
             {
-                await StopMonitorAsync(_monitors[i]);
+                await StopMonitorAsync(_monitors[i], dispose: true);
             }
         }
 
@@ -204,7 +225,7 @@ namespace Sentinel.Core
             await StartMonitorAsync(monitor, ct);
         }
 
-        private async Task StopMonitorAsync(IHostedService monitor)
+        private async Task StopMonitorAsync(IHostedService monitor, bool dispose = false)
         {
             var state = _states[monitor];
             try
@@ -222,10 +243,10 @@ namespace Sentinel.Core
                 state.IsRunning = false;
                 _registry?.MarkStopped(GetMonitorName(monitor));
 
-                if (monitor is IDisposable disposable)
+                if (dispose && monitor is IDisposable disposable)
                 {
                     try { disposable.Dispose(); }
-                    catch { }
+                    catch (Exception ex) { _logger.LogDebug(ex, "Error disposing monitor {Monitor}", GetMonitorName(monitor)); }
                 }
             }
         }
@@ -253,6 +274,7 @@ namespace Sentinel.Core
         private sealed class MonitorState
         {
             public bool IsRunning { get; set; }
+            public bool Completed { get; set; }
             public bool Failed { get; set; }
             public DateTimeOffset? StartedAt { get; set; }
             public int RestartAttempts { get; set; }

@@ -4132,4 +4132,65 @@ namespace Sentinel.Core
     }
 
 
+    /// <summary>Observational network/certificate history; no host mutations or trust grants.</summary>
+    public sealed class HostIntegrityInventoryMonitor : BackgroundService, ISensorProgressSource
+    {
+        private readonly IHostIntegrityInventory _inventory;
+        private readonly HostIntegrityHistory _history;
+        private readonly JsonlEventLogger _events;
+        private readonly ILogger<HostIntegrityInventoryMonitor> _logger;
+        private readonly VisibilityGapTracker? _gaps;
+        private long _reconciledGeneration;
+        public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(5));
+
+        public HostIntegrityInventoryMonitor(IHostIntegrityInventory inventory, HostIntegrityHistory history,
+            JsonlEventLogger events, ILogger<HostIntegrityInventoryMonitor> logger, VisibilityGapTracker? gaps = null)
+        {
+            _inventory = inventory; _history = history; _events = events; _logger = logger; _gaps = gaps;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken ct)
+        {
+            HostIntegritySnapshot? previous = null;
+            try { previous = _history.Load(); }
+            catch (Exception ex)
+            {
+                Progress.Failed(ex.Message);
+                _logger.LogWarning(ex, "Integrity observation baseline unavailable; new observations will not be considered trusted");
+                await _events.LogEventAsync("integrity_baseline_unavailable", new { Reason = ex.GetType().Name }, ct);
+            }
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var visibilityGap = _gaps?.Snapshot();
+                    var current = _inventory.Capture();
+                    foreach (var change in HostIntegrityHistory.Compare(previous, current))
+                        await _events.LogEventAsync("integrity_change", change, ct);
+                    _history.Save(current);
+                    previous = current;
+                    Progress.Succeeded();
+                    if (visibilityGap != null && visibilityGap.Generation != _reconciledGeneration)
+                    {
+                        await _events.LogEventAsync("integrity_reconciled_after_visibility_gap", new
+                        { Gap = visibilityGap, SnapshotUtc = current.ObservedUtc, Attribution = "Unknown during missing telemetry" }, ct);
+                        _reconciledGeneration = visibilityGap.Generation;
+                    }
+                    var gap = Progress.AcknowledgeRecovery();
+                    if (gap.HasValue)
+                        await _events.LogEventAsync("integrity_coverage_restored", new
+                        { GapStarted = gap.Value, ReconciledUtc = current.ObservedUtc, Attribution = "Unknown during gap" }, ct);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Progress.Failed(ex.Message);
+                    _logger.LogWarning(ex, "Host integrity inventory failed; previous observations retained");
+                }
+                try { await Task.Delay(TimeSpan.FromMinutes(2), ct); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+    }
+
 }
