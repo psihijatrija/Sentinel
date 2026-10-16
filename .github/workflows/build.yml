@@ -16,7 +16,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 2
-    - name: Route version changes to the release gate
+    - name: Route version and release-workflow changes to the release gate
       id: route
       shell: pwsh
       env:
@@ -29,13 +29,13 @@ jobs:
           if ($parents.Count -ge 2) {
             $changed = @(git diff --name-only HEAD^ HEAD)
             if ($LASTEXITCODE -ne 0) { throw "Cannot determine changed files" }
-            $release = $changed -contains 'version.txt'
+            $release = ($changed -contains 'version.txt') -or ($changed -contains '.github/workflows/release.yml')
           }
           $global:LASTEXITCODE = 0
         }
         "release=$($release.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append
         if ($release) {
-          "This version change is built and tested by the Release workflow before packaging. The ordinary suite is skipped to avoid duplicate runs." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "This version or release-workflow change is built and tested by the Release workflow before packaging. The ordinary suite is skipped to avoid duplicate runs." | Out-File $env:GITHUB_STEP_SUMMARY -Append
         }
 
   build:

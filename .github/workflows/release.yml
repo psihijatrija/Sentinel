@@ -92,6 +92,9 @@ jobs:
         run: |
           dotnet build Sentinel.sln -c Release -warnaserror
           if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
+          # Fail early on response-boundary contracts before running the longer suite.
+          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~NativeResolverCompletenessTests|FullyQualifiedName~TraceAndRespond_ActiveResponseCannotBeDisabled_MissingProcessIsNotReportedKilled" --logger "trx;LogFileName=release-guards.trx" --results-directory TestResults
+          if ($LASTEXITCODE -ne 0) { throw "Response boundary regression checks failed; release blocked" }
           dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --logger "trx;LogFileName=release-tests.trx" --results-directory TestResults
           if ($LASTEXITCODE -ne 0) { throw "Windows regression tests failed; release blocked" }
           [xml]$trx = Get-Content TestResults/release-tests.trx -Raw

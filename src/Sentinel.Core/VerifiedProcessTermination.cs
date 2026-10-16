@@ -19,7 +19,8 @@ namespace Sentinel.Core
             if (pid <= 4 || pid == System.Net48Environment.ProcessId) return false;
             try
             {
-                using var handle = OpenProcess(QueryLimitedInformation | Terminate | Synchronize, false, pid);
+                using var handle = new SafeProcessHandle(
+                    NativeResolver.OpenProcess(QueryLimitedInformation | Terminate | Synchronize, false, pid), ownsHandle: true);
                 if (handle.IsInvalid) { reason = "Cannot open target process with required rights"; return false; }
                 using var target = new NativeTarget(handle);
                 return ProcessTerminationPolicy.TryTerminate(target, evidenceUtc, DateTime.UtcNow,
@@ -59,8 +60,6 @@ namespace Sentinel.Core
             public void Dispose() { }
         }
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetProcessTimes(SafeProcessHandle process, out long created, out long exited, out long kernel, out long user);
         [DllImport("kernel32.dll", SetLastError = true)]

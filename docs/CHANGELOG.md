@@ -1,6 +1,8 @@
 # Changelog
 ## [3.1.9] - 2026-10-16
 
+- Follow up Windows CI findings: route process opening through NativeResolver and distinguish armed response authority from a verified kill of a nonexistent process. Run these boundary checks before the longer release suite.
+
 - Verify process creation time, image identity, critical-process protection and exit using one process handle before reporting a successful kill. Retain generation identity in ancestry and chain tracing.
 - Bound reputation work, expose dropped work, preserve evidence timestamps and make detection deduplication atomic under contention.
 - Journal firewall isolation before mutation, verify rule readback and provide explicit inspection/rollback diagnostics that refuse changed rules. Restrict Docker and VM containment to validated identities and dedicated workers.

@@ -57,18 +57,19 @@ namespace Sentinel.Tests
             var result = await _tracer.TraceAndRespondAsync(detection);
 
             Assert.NotNull(result);
-            Assert.True(result.Success);
+            Assert.True(result.Success, result.ErrorMessage);
             Assert.NotNull(result.RootDetection);
             Assert.Equal("LsassAccessRule", result.RootDetection.RuleName);
         }
 
         [Fact]
-        public async Task TraceAndRespond_ActiveResponseCannotBeDisabled_StillRespondsToTier1()
+        public async Task TraceAndRespond_ActiveResponseCannotBeDisabled_MissingProcessIsNotReportedKilled()
         {
             // v2.9.4: There is no off switch for response. ActiveResponse's setter is a no-op
             // (Models.cs) and ObserveUntilChain now defaults false, so an attempt to disable
-            // response via config must be ignored and a Tier1 kill-grade detection must still
-            // be actioned. This guards against the "switch to turn defense off" regression:
+            // response via config must be ignored and a Tier1 kill-grade detection must retain
+            // response authority. Missing process identity still refuses a host action.
+            // This guards against the "switch to turn defense off" regression:
             // config-driven disarming must never resurrect.
             var config = new SentinelConfig { ActiveResponse = false }; // no-op setter; stays true
             Assert.True(config.ActiveResponse); // proves the off switch is dead
@@ -79,22 +80,23 @@ namespace Sentinel.Tests
             var detection = new DetectionEvent
             {
                 RuleName = "Ransomware",
-                ProcessId = 99998,
+                ProcessId = int.MaxValue,
                 ProcessName = "ransom.exe",
                 Confidence = 0.99,
                 Tier = DetectionTier.Tier1Behavioral,
                 AuthorizedResponse = ResponseAction.KillProcessTree
             };
 
+            Assert.True(detection.KillAuthorized);
+            Assert.True(ResponsePolicy.MayPerformDestructiveResponse(detection, config));
             var result = await tracer.TraceAndRespondAsync(detection);
 
             Assert.NotNull(result);
-            Assert.True(result.Success);
-            // Response is armed regardless of the attempted disable: the kill-grade Tier1
-            // ransomware detection is acted on (the PID does not exist, so the recorded
-            // KilledProcesses entry reflects the attempt against the target PID).
-            Assert.NotEmpty(result.KilledProcesses);
-            Assert.Contains(result.KilledProcesses, k => k.ProcessId == 99998);
+            Assert.True(result.Success, result.ErrorMessage);
+            // Response remains armed, but a nonexistent PID has no verified generation or
+            // exit. KilledProcesses is evidence of completed kills, never an attempt counter.
+            Assert.Empty(result.ParentChain);
+            Assert.Empty(result.KilledProcesses);
         }
 
         [Fact]
@@ -113,7 +115,7 @@ namespace Sentinel.Tests
             var result = await _tracer.TraceAndRespondAsync(detection);
 
             Assert.NotNull(result);
-            Assert.True(result.Success);
+            Assert.True(result.Success, result.ErrorMessage);
             Assert.Empty(result.KilledProcesses);
         }
 
@@ -159,7 +161,7 @@ namespace Sentinel.Tests
 
             // Should handle gracefully - no crash, no kills on PID 0
             Assert.NotNull(result);
-            Assert.True(result.Success);
+            Assert.True(result.Success, result.ErrorMessage);
         }
 
         [Fact]
