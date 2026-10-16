@@ -31,7 +31,7 @@ namespace Sentinel.Tests
             _tempDir = Path.Combine(Path.GetTempPath(), "sentinel_atg_test_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(_tempDir);
             _eventLogger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
-            _config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            _config = new SentinelConfig { ActiveResponse = true };
             _metrics = new SentinelMetrics();
 
             var cacheStore = new SecureCacheStore(_tempDir);
@@ -78,8 +78,7 @@ namespace Sentinel.Tests
             // Verify custom timing tick configuration is accepted
             var config = new SentinelConfig
             {
-                ActiveResponse = true, ObserveUntilChain = false,
-                AntiTamperTimingTickMs = 1000,
+                ActiveResponse = true, AntiTamperTimingTickMs = 1000,
                 AntiTamperIntegrityTickMs = 5000
             };
 

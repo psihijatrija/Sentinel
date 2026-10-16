@@ -22,7 +22,6 @@ namespace Sentinel.Tests
         private static SentinelConfig ObserveConfig() => new()
         {
             ActiveResponse = true,
-            ObserveUntilChain = true,
             ChainConfirmMinSignals = 2,
             ChainConfirmWindowSeconds = 300,
             MinTier1Confidence = 0.85,
@@ -52,9 +51,6 @@ namespace Sentinel.Tests
 
         private static void AssertObserves(DetectionEvent d)
         {
-            // v2.9.4: observe-until-chain removed as a settable mode; the destructive-response
-            // gate no longer distinguishes observe vs live. The safety property that survives is
-            // the classification: these civilians must never classify as attack-class terminal.
             Assert.False(ResponsePolicy.IsAttackClassTerminal(d));
         }
 

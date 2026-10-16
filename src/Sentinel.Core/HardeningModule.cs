@@ -702,69 +702,19 @@ namespace Sentinel.Core
             }
         }
 
-        public static void SafeKillProcessTree(int processId)
+        /// <summary>Terminate and verify the observed process tree; protected descendants are refused too.</summary>
+        public static ProcessTreeTerminationResult SafeKillProcessTree(int processId, long? expectedCreationTime = null)
+            => new ProcessTreeTerminator(new WindowsProcessTreeOperations()).Terminate(processId, expectedCreationTime);
+
+        internal static bool CanTerminateProcess(int processId, string name, string? imagePath)
         {
-            if (processId <= 4) return; // Never target System/Idle
-
-            // CRITICAL: Never kill our own process or our Agent sibling
-            if (processId == System.Net48Environment.ProcessId) return;
-
-            // HARDENING v1.3.8 / v2.0.8: Never kill verified Sentinel product binaries.
-            // v2.0.8 RT: Do NOT exclude every PE under the install directory - that let an
-            // attacker plant malware during the installer ACL window and become unkillable.
-            // SelfPathGuard requires known Sentinel binary names under the install final path
-            // (hardlink-aware). Arbitrary files under Program Files\Sentinel are fair game.
-            try
-            {
-                var targetImagePath = SecurityValidation.GetProcessImagePath(processId);
-                if (targetImagePath != null && SelfPathGuard.IsSentinelSelfBinary(targetImagePath))
-                {
-                    Debug.WriteLine($"SafeKillProcessTree: REFUSED to kill Sentinel self binary PID {processId} at '{targetImagePath}'");
-                    return;
-                }
-            }
-            catch { /* process may have already exited - continue with kill attempt */ }
-
-            try
-            {
-                using var proc = Process.GetProcessById(processId);
-
-                // Final safeguard: never kill BSOD-critical processes or user shells regardless of what triggered the kill
-                var name = proc.ProcessName;
-                if (IsCriticalProcessName(name))
-                {
-                    // HARDENING: Verify the binary actually resides in a system directory.
-                    // An attacker can manipulate the PEB ProcessName field to masquerade as
-                    // "csrss" or "explorer" - but they cannot move their binary into System32
-                    // without triggering FileActivityMonitor's System32 write detection.
-                    var imagePath = SecurityValidation.GetProcessImagePath(processId);
-                    if (imagePath != null && IsInSystemDirectory(imagePath))
-                    {
-                        Debug.WriteLine($"SafeKillProcessTree: REFUSED to kill critical process {name} (PID {processId}) at verified system path");
-                        return;
-                    }
-                    // Name matches critical process but path is NOT in system directory -
-                    // this is masquerading. Allow the kill to proceed.
-                    Debug.WriteLine($"SafeKillProcessTree: Process claims to be '{name}' but path is '{imagePath}' - masquerading detected, allowing kill");
-                }
-
-                proc.KillTree();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Failed to kill process tree for PID {processId}: {ex.Message}");
-            }
+            if (processId <= 4 || processId == System.Net48Environment.ProcessId ||
+                string.IsNullOrEmpty(imagePath)) return false;
+            if (SelfPathGuard.IsSentinelSelfBinary(imagePath)) return false;
+            if (AlwaysOnPolicies.IsProtectedGamePath(imagePath)) return false;
+            return !IsCriticalProcessName(name) || !IsInSystemDirectory(imagePath!);
         }
 
-        /// <summary>
-        /// Returns true for processes whose termination would cause BSOD or system instability.
-        /// v1.5.5: Removed cmd, powershell, and pwsh from this list (RT-HIGH-2/5).
-        /// These are NOT BSOD-critical - they are the most common LOLBin attack vectors.
-        /// Sentinel's detection rules (ReverseShellRule, AttackToolsRule) authorize killing
-        /// them, and the safety guard must not contradict the response engine.
-        /// explorer.exe is retained because killing it destabilizes the user session
-        /// (taskbar, Start menu, desktop icons all disappear).
-        /// </summary>
         private static bool IsCriticalProcessName(string name)
         {
             return string.Equals(name, "csrss") ||

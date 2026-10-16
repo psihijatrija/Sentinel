@@ -323,9 +323,6 @@ namespace Sentinel.Core
 
                     await EmitCuckooDetection(baseline, "REPLACED", evidence, reasoning, offenderPid, currentHash, currentPublisher, currentProductName);
 
-                    // Observe-until-chain (default): detect + log only. No kill/quarantine/restore
-                    // until ResponsePolicy authorizes host mutation (multi-signal / chain).
-                    // Never pass null chain context - single cuckoo signal is not kill authority.
                     if (ResponsePolicy.MayPerformInlineHostMutation(_sentinelConfig))
                     {
                         await RespondToCuckooEgg(executablePath, baseline, offenderPid);
@@ -333,7 +330,7 @@ namespace Sentinel.Core
                     else
                     {
                         _logger.LogInformation(
-                            "[ApplicationIntegrityMonitor] Cuckoo egg observed for {Name} - LogOnly (observe-until-chain; no inline kill)",
+                            "[ApplicationIntegrityMonitor] Cuckoo egg observed for {Name} - LogOnly (response authorization; no inline kill)",
                             baseline.Name);
                     }
 
@@ -385,11 +382,10 @@ namespace Sentinel.Core
 
         private async Task RespondToCuckooEgg(string executablePath, AppBaseline baseline, int offenderPid)
         {
-            // Defense in depth: never kill/quarantine if observe-until-chain is on without gate.
             if (!ResponsePolicy.MayPerformInlineHostMutation(_sentinelConfig))
             {
                 _logger.LogInformation(
-                    "[ApplicationIntegrityMonitor] RespondToCuckooEgg suppressed for {Name} (observe-until-chain)",
+                    "[ApplicationIntegrityMonitor] RespondToCuckooEgg suppressed for {Name} (response authorization)",
                     baseline.Name);
                 return;
             }

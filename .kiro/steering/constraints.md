@@ -14,9 +14,9 @@ must not be made.
   only; must remain visible in process list, Task Manager, and event logs.
 - **Tier2 can NEVER trigger a response action** - enforced unconditionally in
   `AdvancedResponseEngine.HandleAsync`. No config override, no exceptions.
-- **Observe-until-chain.** Kill / quarantine / isolate / host mutation only after multi-signal
-  or composite proof of a kill-grade terminal (token theft, credential dump, reverse shell,
-  C2 beaconing), or an `IsAttackClassTerminal` solo-confirm at the documented threshold.
+- **Immediate authorized Tier1 response.** Kill / quarantine / isolate / host mutation
+  follows the relevant high-confidence Tier1 and action-specific policy. No configurable
+  chain-wait mode exists. Tier2 remains LogOnly unconditionally.
 - **Tier1 = kill-grade only.** High-confidence terminal classes only; critical score alone
   must not promote noise to Tier1.
 - **Behavioral signals only for kill authority** - detect what a process DOES, not what it IS

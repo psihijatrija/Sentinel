@@ -6,8 +6,8 @@ providers (process, image load, file, registry, DNS, network, PowerShell script-
 firewall, task scheduler, WMI activity, and the Microsoft Threat-Intelligence provider)
 with behavioral rules, weighted multi-signal correlation, and offline ML scoring for PE,
 URL, and command-line artifacts. It maps detections to MITRE ATT&CK and terminates a
-process tree only when a multi-signal chain confirms a kill-grade attack
-(`ObserveUntilChain`).
+process tree when an authorized high-confidence Tier1 detection identifies a kill-grade
+attack. Tier2 indicators remain log-only; correlation supplies additional context.
 
 Detection coverage spans process injection and evasion (including ETW-TI call-stack
 analysis of unbacked return frames), credential theft, C2 and beaconing, ransomware I/O,
@@ -16,7 +16,7 @@ correlation engine is explainable: every composite emits the score breakdown and
 ATT&CK techniques that fired.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.2.1 (single source of truth: `version.txt`)
+**Version:** 3.2.2 (single source of truth: `version.txt`)
 
 Engineering assessment, provisional subsystem ratings and remaining validation:
 [quality review](docs/QUALITY_REVIEW.md). Offline replay, evidence verification,

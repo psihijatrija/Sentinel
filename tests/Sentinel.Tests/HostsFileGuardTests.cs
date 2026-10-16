@@ -132,14 +132,9 @@ namespace Sentinel.Tests
             var cfg = new SentinelConfig
             {
                 ActiveResponse = true,
-                ObserveUntilChain = true,
                 MitmDefense = new MitmDefenseConfig { Enabled = true }
             };
             Assert.True(ProductPosture.AllowsMitmDefenseMutations(cfg));
-            // v2.9.4: observe-until-chain removed as a settable mode; MayPerformInlineHostMutation
-            // no longer gates on observe, so the "MitmDefense does not unlock arbitrary inline
-            // mutation while observing" assertion is moot. The MitmDefense posture + action
-            // classification below is the surviving coverage.
 
             var castEvt = new DetectionEvent
             {

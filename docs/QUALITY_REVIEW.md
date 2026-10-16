@@ -36,6 +36,12 @@ would conceal work the product still needs.
 
 ## Implemented improvements
 
+- The main response pipeline carries structured effect receipts through coordination and
+  incident state. Completion/deduplication requires verified requested effects; dashboard
+  success indicators require that receipt. Native state read-back was added where supported;
+  legacy asynchronous/isolated-environment executors remain explicitly unverified. Portable
+  logic/renderer tests do not replace Windows validation of the native actions or Framework suite.
+
 - Separate actual sensor collection progress from supervisor task liveness. Existing
   uninstrumented sensors report Unknown. ETW, module reconciliation and the new integrity
   inventory publish progress. Native ETW queries report provider enable status and lost

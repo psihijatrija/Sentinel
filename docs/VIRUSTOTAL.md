@@ -121,7 +121,7 @@ and extracted it at runtime - the classic dropper pattern.
    `DuplicateHandle`, `EnumModules`.
 2. **Standard EDR containment** - `SafeKillProcessTree` + disk quarantine vault.
 3. **LGPO.exe / GSecurity.inf** as plain files.
-4. **Observe-until-chain** responses.
+4. **Authorized high-confidence Tier1** responses; Tier2 is log-only.
 5. **Game / anti-cheat memory policy** - no `PROCESS_VM_READ` on those trees.
 6. **Installer** uses `taskkill` + minimal `icacls` on upgrade.
 

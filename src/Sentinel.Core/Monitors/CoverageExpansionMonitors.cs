@@ -1,7 +1,3 @@
-// Phase A coverage expansion (v2.1.0) - LPE scaffolding, initial-access paths,
-// persistence surfaces (COM/IFEO/accessibility/Winlogon).
-// v2.5.3: named LPE tools (potato / PrintSpoofer / winPEAS) are kill-grade.
-// Elevated-from-staging and persistence surfaces stay observe-until-chain.
 
 using System;
 using System.Collections.Generic;

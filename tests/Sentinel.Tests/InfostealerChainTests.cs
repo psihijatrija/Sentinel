@@ -7,15 +7,6 @@ using Sentinel.Core;
 
 namespace Sentinel.Tests
 {
-    /// <summary>
-    /// v2.6.x coverage: general-case infostealer credential-file access and the
-    /// collect->package->exfil chain (SensitiveFileAccessMonitor +
-    /// "Infostealer: Credential Access + Outbound" / "Data Staging + Exfiltration").
-    ///
-    /// Enforces the observe-until-chain contract for the new signals:
-    ///   - The raw file-read / archive-staging legs are Tier2 + LogOnly and NEVER solo-kill.
-    ///   - Kill authority arrives ONLY via the correlated composite (read/staging + outbound).
-    /// </summary>
     [Collection("ResponsePolicy")]
     public class InfostealerChainTests
     {
@@ -84,9 +75,6 @@ namespace Sentinel.Tests
             Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(d));
             Assert.False(ResponsePolicy.IsKillGradeTerminal(d));
             Assert.False(ResponsePolicy.IsAttackClassTerminal(d));
-            // v2.9.4: observe-until-chain removed as a settable mode; the classification safety
-            // properties above (non-terminal, not kill-grade, not attack-class) are what keep this
-            // raw file-read leg from ever soloing a kill.
         }
 
         [Fact]
@@ -102,9 +90,6 @@ namespace Sentinel.Tests
             // so it can never authorize a destructive response alone.
             Assert.False(ResponsePolicy.IsKillGradeTerminal(d));
             Assert.False(ResponsePolicy.IsAttackClassTerminal(d));
-            // v2.9.4: observe-until-chain removed as a settable mode; the classification safety
-            // properties above (not kill-grade, not attack-class) keep this archive-staging leg
-            // from ever soloing a kill.
         }
 
         // 
@@ -172,9 +157,7 @@ namespace Sentinel.Tests
             Directory.CreateDirectory(tempDir);
             try
             {
-                // ActiveResponse on, ObserveUntilChain off (lab path) - even so a Tier2 observe
-                // signal that isn't chain-confirmed must produce LOG, never a destructive action.
-                var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+                var config = new SentinelConfig { ActiveResponse = true };
                 var metrics = new SentinelMetrics();
                 var logPath = Path.Combine(tempDir, "events.jsonl");
                 var logger = new JsonlEventLogger(logPath);

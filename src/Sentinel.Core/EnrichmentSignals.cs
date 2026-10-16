@@ -211,18 +211,6 @@ namespace Sentinel.Core
     // Command-Line Obfuscation Signals (v2.7.8)
     // 
 
-    /// <summary>
-    /// Published by any monitor that holds a process command line and scores it via
-    /// <c>MlThreatScorer.ScoreCommandLine</c>. Captures the *shape* of command-line obfuscation
-    /// (encoded PowerShell, base64/hex blobs, escape-char stuffing, download+IEX combos) that
-    /// defeats signature / regex matching - the dominant modern LOLBin tradecraft.
-    ///
-    /// Consumed by: WeightedCorrelationEngine / BehavioralCorrelationEngine (composite fuel),
-    ///              ChainTracer (enrich chain evidence with the obfuscated launch string).
-    ///
-    /// SOFT SIGNAL ONLY. A high score is observe-fuel; it never authorises a kill on its own -
-    /// only a chain-confirmed terminal does. Consistent with the observe-until-chain constraint.
-    /// </summary>
     public sealed class CommandLineObfuscationSignal : EnrichmentSignal
     {
         /// <summary>Obfuscation risk in [0,100] from the ML model or heuristic fallback.</summary>

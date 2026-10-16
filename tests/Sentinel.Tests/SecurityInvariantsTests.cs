@@ -24,7 +24,6 @@ namespace Sentinel.Tests
         private static SentinelConfig ObserveConfig() => new()
         {
             ActiveResponse = true,
-            ObserveUntilChain = true,
             ChainConfirmMinSignals = 2,
             ChainConfirmWindowSeconds = 300,
             MinTier1Confidence = 0.85,
@@ -120,12 +119,6 @@ namespace Sentinel.Tests
             Assert.Equal(ResponseAction.LogOnly, d.AuthorizedResponse);
         }
 
-        // ---------------------------------------------------------------------
-        // INVARIANT-004: A single high-confidence kill-grade terminal is correctly
-        // classified. v2.9.4: observe-until-chain removed as a settable mode, so the
-        // "does not solo-nuke under observe" gate no longer exists; the classification
-        // safety properties remain asserted.
-        // ---------------------------------------------------------------------
         [Fact]
         public void Invariant_Single_KillGrade_Terminal_Is_Classified()
         {
@@ -188,10 +181,6 @@ namespace Sentinel.Tests
             // v2.9.4: PID<=4 protection is observe-independent; enforced via IsAttackClassTerminal.
             Assert.False(ResponsePolicy.IsAttackClassTerminal(d));
         }
-
-        // v2.9.4: INVARIANT-007 (inline host mutation blocked WHILE OBSERVING) removed -
-        // observe-until-chain is no longer a settable mode, so there is no "while observing"
-        // state to assert. Inline host mutation is now governed by the armed posture.
 
         // ---------------------------------------------------------------------
         // INVARIANT-008: The dashboard Referer header is never an authenticator.

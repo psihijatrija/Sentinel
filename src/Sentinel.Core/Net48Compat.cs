@@ -274,15 +274,16 @@ namespace System.Diagnostics
             return tcs.Task;
         }
 
-        /// <summary>net48 has no Kill(entireProcessTree). Kill process + children best-effort.</summary>
-        public static void KillTree(this Process process)
+        /// <summary>Verified, bounded termination of the process and its observed descendants.</summary>
+        public static Sentinel.Core.ProcessTreeTerminationResult KillTree(this Process process)
         {
-            try
-            {
-                if (!process.HasExited) process.Kill();
-            }
-            catch { /* already exited */ }
+            if (process == null) throw new ArgumentNullException(nameof(process));
+            // Match the caller's process generation before any native termination.
+            long created = process.StartTime.ToUniversalTime().ToFileTimeUtc();
+            return new Sentinel.Core.ProcessTreeTerminator(new Sentinel.Core.WindowsProcessTreeOperations())
+                .Terminate(process.Id, created);
         }
+
     }
 }
 

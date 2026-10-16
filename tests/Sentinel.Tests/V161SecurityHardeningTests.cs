@@ -67,8 +67,7 @@ namespace Sentinel.Tests
         {
             var config = new SentinelConfig
             {
-                ActiveResponse = true, ObserveUntilChain = false,
-                MaxKillsPerMinute = 2,
+                ActiveResponse = true, MaxKillsPerMinute = 2,
                 MaxNetworkIsolatesPerMinute = 100
             };
             var quarantine = new QuarantineManager(Path.Combine(_tempDir, "q2"));
@@ -164,8 +163,7 @@ namespace Sentinel.Tests
         {
             var config = new SentinelConfig
             {
-                ActiveResponse = true, ObserveUntilChain = false,
-                MaxNetworkIsolatesPerMinute = 2,
+                ActiveResponse = true, MaxNetworkIsolatesPerMinute = 2,
                 MaxKillsPerMinute = 100
             };
             var quarantine = new QuarantineManager(Path.Combine(_tempDir, "q"));

@@ -31,6 +31,17 @@ namespace Sentinel.Tests
             try { Directory.Delete(_tempDir, true); } catch { }
         }
 
+        private static ResponseExecutionResult VerifiedResponse(int pid)
+        {
+            var result = new ResponseExecutionResult
+            {
+                ProcessId = pid, RequestedAction = "KillProcessTree", EffectiveAction = "KillProcessTree",
+                CompletedAt = DateTimeOffset.UtcNow
+            };
+            result.Add("ProcessTree", pid.ToString(), ResponseExecutionStatus.Verified, "Fixture exit verified.");
+            return result;
+        }
+
         private DetectionEvent MakeDetection(int pid = 1000, string rule = "TestRule",
             double confidence = 0.80, DetectionTier tier = DetectionTier.Tier1Behavioral)
         {
@@ -107,7 +118,7 @@ namespace Sentinel.Tests
         public void MarkResponded_SetsRespondedState()
         {
             var inc = _manager.RegisterDetection(MakeDetection(pid: 600));
-            _manager.MarkResponded(inc.Id, "KillProcessTree");
+            _manager.RecordResponse(inc.Id, VerifiedResponse(600));
 
             Assert.Equal(IncidentState.Responded, inc.State);
             Assert.Equal("KillProcessTree", inc.ResponseAction);
@@ -118,7 +129,7 @@ namespace Sentinel.Tests
         public void MarkRespondedByPid_Works()
         {
             var inc = _manager.RegisterDetection(MakeDetection(pid: 700));
-            _manager.MarkRespondedByPid(700, "Kill");
+            _manager.RecordResponseByPid(700, VerifiedResponse(700));
 
             Assert.Equal(IncidentState.Responded, inc.State);
         }
@@ -144,7 +155,7 @@ namespace Sentinel.Tests
         public void GetActiveIncidents_ExcludesClosed()
         {
             var inc = _manager.RegisterDetection(MakeDetection(pid: 900));
-            _manager.MarkResponded(inc.Id, "Kill");
+            _manager.RecordResponse(inc.Id, VerifiedResponse(900));
 
             // Force closed state
             inc.State = IncidentState.Closed;

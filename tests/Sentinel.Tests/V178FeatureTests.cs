@@ -124,7 +124,7 @@ namespace Sentinel.Tests
 
                 var threat = new ThreatReportService(new ThreatReportingConfig { Enabled = false },
                     NullLogger<ThreatReportService>.Instance);
-                var sentinelCfg = new SentinelConfig { SilentObserve = false, ObserveUntilChain = false };
+                var sentinelCfg = new SentinelConfig { SilentObserve = false };
                 var reporter = new AutoIncidentReporter(cfg, threat, NullLogger<AutoIncidentReporter>.Instance,
                     sentinelConfig: sentinelCfg);
 

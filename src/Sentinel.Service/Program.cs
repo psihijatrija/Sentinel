@@ -306,9 +306,6 @@ namespace Sentinel.Service
 
                     var encryptedStore = new EncryptedConfigStore();
                     encryptedStore.ApplyOverrides(config, threatReportingConfig, autoIncidentReportingConfig);
-                    // v2.9.4: ObserveUntilChain is hardwired false (no-op setter in Models.cs);
-                    // the former `config.ObserveUntilChain = true` line is removed - observe mode
-                    // can no longer be selected by config, override, or planted file.
                     if (!ProxyAuthHelper.HasSharedSecret(threatReportingConfig))
                         threatReportingConfig.ProxySharedSecret = ThreatReportingConfig.CompiledProxySharedSecret;
                     // v2.5.5: HardeningModule.RestrictivePortHardeningEnabled is always-on - no sync needed.

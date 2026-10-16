@@ -108,25 +108,6 @@ namespace Sentinel.Core
         public string[] KnownRogueCastIps { get; set; } = { "192.168.1.100" };
     }
 
-    /// <summary>
-    /// v2.6.0: Protective VPN-shield remediation for confirmed local network tampering.
-    ///
-    /// When a network-tamper incident is chain-confirmed (rogue gateway / ARP poisoning,
-    /// DNS hijack, route injection, adapter bridging), Sentinel can raise a userland VPN
-    /// tunnel as a TEMPORARY shield so the user's traffic is encrypted and routed off the
-    /// hostile local path while the network is cleaned (unbridge, restore DNS, drop rogue
-    /// routes). Once the path is verified clean, the tunnel is dropped.
-    ///
-    /// Design invariants:
-    /// - Userland only. The tunnel is a standard RAS/VPN dial (visible in Task Manager,
-    ///   the network list, and event logs). No kernel driver, no self-hiding. Honors the
-    ///   product's transparency constraint.
-    /// - Fail-safe: if the network cannot be VERIFIED clean, the tunnel STAYS UP. The whole
-    ///   point is to protect the user until the path is trustworthy.
-    /// - Opt-in: <see cref="Enabled"/> defaults false. Clean installs do nothing here.
-    /// - Never speculative: only fires on a confirmed network-tamper chain (routed through
-    ///   the same observe-until-chain / MitmDefense gate as the rest of the MITM suite).
-    /// </summary>
     public class VpnShieldConfig
     {
         /// <summary>
@@ -312,16 +293,6 @@ namespace Sentinel.Core
         /// </summary>
         [System.Obsolete("v2.0.4: ActiveResponse cannot be disabled. This property is a no-op.")]
         public bool EnforceActiveResponse { get; set; } = true;
-
-        /// <summary>
-        /// v2.9.4: ALWAYS FALSE - no off switch. Setter is a no-op. Sentinel acts on single
-        /// high-confidence Tier1 signals; it does not wait for a multi-signal chain, and this
-        /// cannot be re-enabled from config or a planted file. Tier2 remains LogOnly
-        /// unconditionally (that invariant is unchanged). Chosen for a repeat-target host;
-        /// accepts higher false-positive-action risk so a lone strong indicator is never
-        /// left un-actioned.
-        /// </summary>
-        public bool ObserveUntilChain { get => false; set { } }
 
         /// <summary>
         /// Minimum confidence (0-1) for a kill-grade family to remain Tier1.
@@ -656,6 +627,10 @@ namespace Sentinel.Core
 
     public class DetectionEvent
     {
+        // Only trusted in-process executors may attach an already completed action receipt.
+        // It cannot be supplied through serialized telemetry or a metadata dictionary.
+        [System.Text.Json.Serialization.JsonIgnore]
+        internal ResponseExecutionResult? RecordedExecution { get; set; }
         public string RuleName { get; set; } = string.Empty;
         /// <summary>
         /// Stable rule identifier (e.g. "SENT-001") used for central action mapping,
@@ -686,6 +661,7 @@ namespace Sentinel.Core
 
     public class ResponseEvent
     {
+        public ResponseExecutionResult? Execution { get; set; }
         public int ProcessId { get; set; }
         public string ProcessName { get; set; } = string.Empty;
         public string ActionTaken { get; set; } = string.Empty;

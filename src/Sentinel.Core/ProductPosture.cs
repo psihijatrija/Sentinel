@@ -2,34 +2,15 @@ using System;
 
 namespace Sentinel.Core
 {
-    /// <summary>
-    /// Standing product law (v2.5.5+). Hardening is unconditional - always active.
-    ///
-    /// <para><b>ALL HARDENING IS ALWAYS-ON.</b> IPSec port lockdown, ASR Block rules,
-    /// RPC/DCOM firewall, remote session guard, registry hardening, credential hardening
-    /// (LSASS PPL, WDigest off), browser hardening, and LGPO security policy run on every
-    /// Sentinel startup with no config gate. The work-first observe-only default is retired.</para>
-    ///
-    /// <para>Allowed without any flag:</para>
-    /// <list type="bullet">
-    /// <item>Self-protect Sentinel (DLL path, install ACLs, Safe Mode registration)</item>
-    /// <item>Detect + log to events.jsonl</item>
-    /// <item>Destructive response only after multi-signal chain confirmation
-    ///       (<see cref="ResponsePolicy"/> / ObserveUntilChain)</item>
-    /// <item>Module identity unload is always on. Foreign mapped PEs are FreeLibrary'd.
-    ///       Hijack-name plants are quarantined on drop (file only, never kill the host).
-    ///       Games are not VM_READ. Never OS servicing. No config flag may disable this.</item>
-    /// <item>Full proactive OS hardening - IPSec, ASR Block, RPC firewall, remote session
-    ///       kill, registry hardening, credential hardening, browser hardening.</item>
-    /// </list>
-    /// </summary>
+    /// <summary>Always-on host-hardening policy and action-specific response checks.
+    /// Authorized Tier1 response can act immediately; Tier2 never authorizes mutation.</summary>
     public static class ProductPosture
     {
         /// <summary>
         /// Standing law: <c>MemoryBehaviorAnalyzer</c> + <c>ModuleIdentity</c> +
-        /// <c>DllUnloadEngine</c> scan every process and unload foreign mapped PEs
-        /// immediately. There is no config switch. Games/anti-cheat are skipped only
-        /// for handle safety (Denuvo). OS servicing / lsass / csrss are never FreeLibrary'd.
+        /// <c>DllUnloadEngine</c> check mapped-module identity and contain eligible hosts.
+        /// Disk quarantine and verified process-tree outcomes are reported separately.
+        /// Games/anti-cheat, OS servicing and critical hosts retain their protections.
         /// </summary>
         public const bool ModuleIdentityUnloadAlwaysOn = true;
 
@@ -49,10 +30,6 @@ namespace Sentinel.Core
             return true;
         }
 
-        /// <summary>
-        /// Destructive response after detection pipeline - separate from proactive lockdown.
-        /// Still gated by ActiveResponse + ObserveUntilChain / chain confirm.
-        /// </summary>
         public static bool AllowsChainConfirmedResponse(SentinelConfig? config, DetectionEvent? detection)
         {
             if (config == null || !config.ActiveResponse || detection == null)

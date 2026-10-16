@@ -15,7 +15,6 @@ namespace Sentinel.Tests
         private static SentinelConfig ObserveConfig() => new()
         {
             ActiveResponse = true,
-            ObserveUntilChain = true,
             ChainConfirmMinSignals = 2,
             ChainConfirmWindowSeconds = 300,
             SilentObserve = true,
@@ -72,9 +71,6 @@ namespace Sentinel.Tests
             ResponsePolicy.ApplyTierLaw(ephemeral);
             Assert.Equal(DetectionTier.Tier2Indicator, ephemeral.Tier);
             Assert.True(ResponsePolicy.IsBenignInstallerNoise(ephemeral));
-            // v2.9.4: observe-until-chain removed as a settable mode; the destructive-response
-            // gate no longer distinguishes observe vs live. The surviving safety property is the
-            // Tier2/benign-noise classification asserted above, which keeps this out of kill-grade.
         }
 
         [Fact]
@@ -158,9 +154,6 @@ namespace Sentinel.Tests
             };
             ResponsePolicy.ApplyTierLaw(highConfC2);
             Assert.Equal(DetectionTier.Tier1Behavioral, highConfC2.Tier);
-            // v2.9.4: observe-until-chain removed as a settable mode; the "no single-signal nuke
-            // under observe" gate no longer exists. The tier-law classification above is the
-            // surviving safety coverage.
         }
 
         [Fact]
@@ -201,17 +194,11 @@ namespace Sentinel.Tests
 
             Assert.True(ResponsePolicy.IsBenignInstallerNoise(d));
             Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(d));
-            // v2.9.4: observe-until-chain removed as a settable mode; benign-noise classification
-            // (asserted above) is the surviving safety property that keeps this out of kill-grade.
         }
 
         [Fact]
         public void Single_Statistical_Beacon_Classifies_As_C2Beacon_But_Is_Not_AttackClassSolo()
         {
-            // v2.9.4: observe-until-chain removed as a settable mode, so the old "does not nuke
-            // alone under observe" gate no longer exists. The surviving safety property is the
-            // classification: a lone statistical beacon is a C2Beacon family signal, but it is
-            // NOT an attack-class terminal that could solo-confirm a chain (needs a 2nd signal).
             var d = new DetectionEvent
             {
                 RuleName = "C2 Beaconing: Statistical Beacon Detected",
@@ -252,10 +239,6 @@ namespace Sentinel.Tests
                 AuthorizedResponse = ResponseAction.KillProcessTree,
             };
 
-            // v2.9.4: observe-until-chain removed as a settable mode. Drive the observe-independent
-            // multi-signal correlation directly (the same RegisterAndEvaluateChain path the observe
-            // gate used to invoke): a lone C2 beacon must not confirm, and the second independent
-            // signal on the same PID completes the chain and tags it ChainConfirmed.
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(c2, cfg));
             Assert.True(ResponsePolicy.RegisterAndEvaluateChain(inject, cfg));
             Assert.True(inject.Metadata.ContainsKey(ResponsePolicy.ChainConfirmedKey));
@@ -334,10 +317,6 @@ namespace Sentinel.Tests
             Assert.True(ResponsePolicy.IsPermanentModuleIdentityUnload(d));
         }
 
-        // v2.9.4: observe-until-chain removed as a settable mode; the "inline host mutation blocked
-        // while observing" scenario no longer exists (MayPerformInlineHostMutation no longer gates
-        // on observe), so Inline_Host_Mutation_Blocked_While_Observing was removed.
-
         [Fact]
         public void Cast_Observe_Is_Weak_Seed_Never_Terminal_Or_Chain()
         {
@@ -375,9 +354,6 @@ namespace Sentinel.Tests
                 Metadata = new Dictionary<string, string> { ["WeakObserveSeed"] = "true" }
             };
             Assert.True(ResponsePolicy.IsWeakObserveSeed(growth));
-            // v2.9.4: observe-until-chain removed as a settable mode; the weak-observe-seed
-            // classification above is the surviving safety property (weak seeds never fill the
-            // chain buffer inside RegisterAndEvaluateChain).
         }
 
         [Fact]
@@ -400,9 +376,6 @@ namespace Sentinel.Tests
                 Confidence = 0.88,
             };
 
-            // v2.9.4: observe-until-chain removed as a settable mode. Drive the observe-independent
-            // multi-signal correlation directly: module growth is a weak observe seed and PPID
-            // mismatch is a weak chain-only seed, so neither completes a chain on its own.
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(growth, cfg));
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(ppid, cfg));
         }
@@ -433,9 +406,6 @@ namespace Sentinel.Tests
                 AuthorizedResponse = ResponseAction.LogOnly,
             };
 
-            // v2.9.4: observe-until-chain removed as a settable mode. Drive the observe-independent
-            // multi-signal correlation directly so the chain-confirm still promotes the kill-grade
-            // fields the evidence packs rely on.
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(c2, cfg));
             Assert.True(ResponsePolicy.RegisterAndEvaluateChain(inject, cfg));
             Assert.True(inject.KillAuthorized); // derived from AuthorizedResponse
@@ -469,9 +439,6 @@ namespace Sentinel.Tests
                 Confidence = 0.40,
             };
 
-            // v2.9.4: observe-until-chain removed as a settable mode. Drive the observe-independent
-            // multi-signal correlation directly: low-confidence + non-terminal signals must not
-            // confirm a chain.
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(lowC2, cfg));
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(suspPath, cfg));
         }

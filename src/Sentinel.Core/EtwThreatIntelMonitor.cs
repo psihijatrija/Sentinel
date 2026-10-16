@@ -106,14 +106,6 @@ namespace Sentinel.Core
             }
         }
 
-        /// <summary>
-        /// Off-thread call-stack analysis. Consumes the frames stashed by the ETW dispatcher
-        /// (captured via ETW-TI STACKWALK) and flags a return frame that resolves to committed,
-        /// executable, non-image (unbacked) memory outside every loaded module. Emits a
-        /// Tier1Behavioral observe-until-chain signal; correlation decides any terminal action.
-        /// Fail-closed: any inspection failure yields no signal. Runs on the scan loop thread,
-        /// never on the ETW callback thread.
-        /// </summary>
         private void ScanOneProcessStack(Process proc)
         {
             int pid = proc.Id;
@@ -179,7 +171,7 @@ namespace Sentinel.Core
                            $"non-image memory ({frames.Length} frame(s) captured).",
                 Reasoning = "A return address outside every loaded module, in unbacked executable memory, " +
                             "indicates injected/manually-mapped code or call-stack spoofing (T1055). " +
-                            "Observe-until-chain: correlation decides terminal action.",
+                            "response authorization: correlation decides terminal action.",
                 Confidence = 0.88,
                 Tier = DetectionTier.Tier1Behavioral,
                 AuthorizedResponse = ResponseAction.LogOnly,

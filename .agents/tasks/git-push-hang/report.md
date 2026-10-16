@@ -24,8 +24,8 @@ Because `NetworkIsolate` requires a **chain-confirmed or kill-grade-terminal** s
 
 `AdvancedResponseEngine.HandleAsync` is the single response funnel.
 
-- Global observe-until-chain gate (src/Sentinel.Core/AdvancedResponseEngine.cs, ~L430-470): when `ObserveUntilChain` is true (product default, and `constraints.md` says it is locked on), `chainAuthorized = ResponsePolicy.MayPerformDestructiveResponse(...)`. If not chain-authorized (and not DLL-/MitM-exempt), the detection is forced to `Tier2Indicator` + `LogOnly`.
-- The `NetworkIsolate` branch (src/Sentinel.Core/AdvancedResponseEngine.cs:571) only sets `shouldIsolateNetwork = true` when `effectiveResponse == NetworkIsolate && effectiveTier == Tier1Behavioral && ar`. `ar` itself requires `ActiveResponse && (!ObserveUntilChain || chainAuthorized || dllExempt || mitmExempt)`.
+- Global legacy chain-wait mode gate (src/Sentinel.Core/AdvancedResponseEngine.cs, ~L430-470): when `legacy chain-wait mode` is true (product default, and `constraints.md` says it is locked on), `chainAuthorized = ResponsePolicy.MayPerformDestructiveResponse(...)`. If not chain-authorized (and not DLL-/MitM-exempt), the detection is forced to `Tier2Indicator` + `LogOnly`.
+- The `NetworkIsolate` branch (src/Sentinel.Core/AdvancedResponseEngine.cs:571) only sets `shouldIsolateNetwork = true` when `effectiveResponse == NetworkIsolate && effectiveTier == Tier1Behavioral && ar`. `ar` itself requires `ActiveResponse && (!legacy chain-wait mode || chainAuthorized || dllExempt || mitmExempt)`.
 - `ResponsePolicy.DemoteToObserve` (src/Sentinel.Core/ResponsePolicy.cs:443-448) lowers any `AuthorizedResponse >= NetworkIsolate` to `LogOnly` whenever a signal is demoted to Tier2.
 - `constraints.md`: *"Tier2 can never trigger action — enforced unconditionally in `AdvancedResponseEngine.HandleAsync`."*
 

@@ -26,7 +26,7 @@ namespace Sentinel.Core
     /// </summary>
     public sealed class ResponseCoordinator : IDisposable
     {
-        private readonly AdvancedResponseEngine _responseEngine;
+        private readonly Func<DetectionEvent, Task<ResponseExecutionResult>> _executeResponse;
         private readonly IncidentManager _incidentManager;
         private readonly ContextBus _contextBus;
         private readonly JsonlEventLogger _eventLogger;
@@ -46,6 +46,9 @@ namespace Sentinel.Core
         private long _totalResponsesDeduplicated;
         private long _totalResponsesDeferred;
         private long _totalResponsesFailed;
+        private long _totalResponsesPartial;
+        private long _totalResponsesAttempted;
+        private long _totalResponsesRefused;
 
         private static readonly TimeSpan DeduplicationWindow = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan ChainTraceHoldTimeout = TimeSpan.FromSeconds(10);
@@ -57,8 +60,16 @@ namespace Sentinel.Core
             ContextBus contextBus,
             JsonlEventLogger eventLogger,
             ILogger<ResponseCoordinator> logger)
+            : this(responseEngine.HandleAsync, incidentManager, contextBus, eventLogger, logger) { }
+
+        internal ResponseCoordinator(
+            Func<DetectionEvent, Task<ResponseExecutionResult>> executeResponse,
+            IncidentManager incidentManager,
+            ContextBus contextBus,
+            JsonlEventLogger eventLogger,
+            ILogger<ResponseCoordinator> logger)
         {
-            _responseEngine = responseEngine;
+            _executeResponse = executeResponse;
             _incidentManager = incidentManager;
             _contextBus = contextBus;
             _eventLogger = eventLogger;
@@ -74,19 +85,24 @@ namespace Sentinel.Core
         /// Handles deduplication, locking, chain trace deferral, and incident marking.
         /// This is the ONLY entry point for response actions.
         /// </summary>
-        public async Task<ResponseResult> ExecuteResponseAsync(DetectionEvent detection)
+        public async Task<ResponseResult> ExecuteResponseAsync(DetectionEvent detection, string? incidentId = null)
         {
+            bool recordedOutcome = detection.RecordedExecution != null;
+            var requestedAction = detection.AuthorizedResponse;
+            if (recordedOutcome && (!Enum.TryParse(detection.RecordedExecution!.RequestedAction, out requestedAction) ||
+                !Enum.IsDefined(typeof(ResponseAction), requestedAction)))
+                throw new InvalidOperationException("Inline receipt action is not supported.");
             var result = new ResponseResult
             {
                 ProcessId = detection.ProcessId,
                 ProcessName = detection.ProcessName,
-                RequestedAction = detection.AuthorizedResponse
+                RequestedAction = requestedAction
             };
 
             int pid = detection.ProcessId;
 
             // 1. Check deduplication window - was this PID already responded to?
-            if (pid > 0 && IsRecentlyResponded(pid, detection.AuthorizedResponse))
+            if (!recordedOutcome && pid > 0 && IsRecentlyResponded(pid, requestedAction))
             {
                 Interlocked.Increment(ref _totalResponsesDeduplicated);
                 result.Outcome = ResponseOutcome.Deduplicated;
@@ -96,7 +112,7 @@ namespace Sentinel.Core
             }
 
             // 2. Check chain trace hold - is ChainTracer currently walking this PID?
-            if (pid > 0 && detection.KillAuthorized && IsHeldForChainTrace(pid))
+            if (!recordedOutcome && pid > 0 && detection.KillAuthorized && IsHeldForChainTrace(pid))
             {
                 Interlocked.Increment(ref _totalResponsesDeferred);
                 result.Outcome = ResponseOutcome.DeferredForChainTrace;
@@ -106,58 +122,90 @@ namespace Sentinel.Core
             }
 
             // 3. Acquire per-PID lock (serialize responses on same PID)
-            var pidLock = _pidLocks.GetOrAdd(pid > 0 ? pid : -1, _ => new SemaphoreSlim(1, 1));
-            if (!await pidLock.WaitAsync(LockAcquireTimeout))
+            SemaphoreSlim? pidLock = null;
+            if (!recordedOutcome)
             {
-                result.Outcome = ResponseOutcome.LockTimeout;
-                result.Reason = $"Could not acquire response lock for PID {pid} within {LockAcquireTimeout.TotalSeconds}s";
-                return result;
+                pidLock = _pidLocks.GetOrAdd(pid > 0 ? pid : -1, _ => new SemaphoreSlim(1, 1));
+                if (!await pidLock.WaitAsync(LockAcquireTimeout))
+                {
+                    result.Outcome = ResponseOutcome.LockTimeout;
+                    result.Reason = $"Could not acquire response lock for PID {pid} within {LockAcquireTimeout.TotalSeconds}s";
+                    return result;
+                }
             }
 
             try
             {
                 // 4. Double-check deduplication after acquiring lock
-                if (pid > 0 && IsRecentlyResponded(pid, detection.AuthorizedResponse))
+                if (!recordedOutcome && pid > 0 && IsRecentlyResponded(pid, requestedAction))
                 {
                     Interlocked.Increment(ref _totalResponsesDeduplicated);
                     result.Outcome = ResponseOutcome.Deduplicated;
                     return result;
                 }
 
-                // 5. Execute the response via AdvancedResponseEngine
-                await _responseEngine.HandleAsync(detection);
-
-                // 6. Record the response
-                Interlocked.Increment(ref _totalResponsesExecuted);
-                if (pid > 0)
+                // A returned task is not an action receipt. Only verified requested effects
+                // qualify for incident completion or the successful-response deduplication cache.
+                var execution = await _executeResponse(detection).ConfigureAwait(false);
+                if (execution.ProcessId != pid || execution.RequestedAction != requestedAction.ToString())
+                    throw new InvalidOperationException("Executor receipt did not match the requested target/action.");
+                result.Execution = execution;
+                result.Reason = execution.Reason;
+                result.Outcome = execution.Status switch
                 {
-                    _responseHistory[pid] = new ResponseRecord
-                    {
-                        Timestamp = DateTimeOffset.UtcNow,
-                        Action = detection.AuthorizedResponse,
-                        RuleName = detection.RuleName
-                    };
-                }
-
-                // 7. Mark incident as responded
-                if (pid > 0 && detection.KillAuthorized && detection.Tier == DetectionTier.Tier1Behavioral)
+                    ResponseExecutionStatus.Verified when execution.VerifiesRequestedAction => ResponseOutcome.Verified,
+                    ResponseExecutionStatus.NotRequested => ResponseOutcome.NotRequested,
+                    ResponseExecutionStatus.Refused => ResponseOutcome.Refused,
+                    ResponseExecutionStatus.Failed => ResponseOutcome.Failed,
+                    ResponseExecutionStatus.PartiallyCompleted => ResponseOutcome.PartiallyCompleted,
+                    _ => ResponseOutcome.Attempted
+                };
+                if (!execution.VerifiesRequestedAction && pid > 0 && requestedAction != ResponseAction.LogOnly)
+                    _responseHistory.TryRemove(pid, out _);
+                if (incidentId != null) _incidentManager.RecordResponse(incidentId, execution);
+                else _incidentManager.RecordResponseByPid(pid, execution);
+                if (execution.VerifiesRequestedAction)
                 {
-                    _incidentManager.MarkRespondedByPid(pid, detection.AuthorizedResponse.ToString());
+                    Interlocked.Increment(ref _totalResponsesExecuted);
+                    result.ExecutedAt = execution.CompletedAt ?? DateTimeOffset.UtcNow;
+                    if (!recordedOutcome && pid > 0)
+                        _responseHistory[pid] = new ResponseRecord
+                        {
+                            Timestamp = result.ExecutedAt.Value,
+                            Action = requestedAction,
+                            RuleName = detection.RuleName
+                        };
                 }
+                else if (execution.Status == ResponseExecutionStatus.Failed)
+                    Interlocked.Increment(ref _totalResponsesFailed);
+                else if (execution.Status == ResponseExecutionStatus.PartiallyCompleted)
+                    Interlocked.Increment(ref _totalResponsesPartial);
+                else if (execution.Status == ResponseExecutionStatus.Attempted)
+                    Interlocked.Increment(ref _totalResponsesAttempted);
+                else if (execution.Status == ResponseExecutionStatus.Refused)
+                    Interlocked.Increment(ref _totalResponsesRefused);
 
-                result.Outcome = ResponseOutcome.Executed;
-                result.ExecutedAt = DateTimeOffset.UtcNow;
             }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _totalResponsesFailed);
                 result.Outcome = ResponseOutcome.Failed;
                 result.Reason = ex.Message;
+                var failure = new ResponseExecutionResult
+                {
+                    ProcessId = pid, ProcessName = detection.ProcessName,
+                    RequestedAction = requestedAction.ToString(), EffectiveAction = requestedAction.ToString(),
+                    CompletedAt = DateTimeOffset.UtcNow, Reason = ex.Message
+                };
+                failure.Add("Executor", pid.ToString(), ResponseExecutionStatus.Failed, ex.Message);
+                result.Execution = failure;
+                if (incidentId != null) _incidentManager.RecordResponse(incidentId, failure);
+                else _incidentManager.RecordResponseByPid(pid, failure);
                 _logger.LogError(ex, "[ResponseCoordinator] Response failed for PID {Pid}", pid);
             }
             finally
             {
-                pidLock.Release();
+                pidLock?.Release();
             }
 
             return result;
@@ -208,11 +256,11 @@ namespace Sentinel.Core
         {
             if (_responseHistory.TryGetValue(pid, out var record))
             {
-                // Only deduplicate if same or weaker action was already taken
+                // Different action kinds are not interchangeable, regardless of enum ordering.
                 if (DateTimeOffset.UtcNow - record.Timestamp < DeduplicationWindow)
                 {
-                    // Allow escalation: if new action is stronger than what was done, let it through
-                    if (requestedAction <= record.Action)
+                    // Only the exact requested action with a verified receipt can be suppressed.
+                    if (requestedAction == record.Action)
                         return true;
                 }
             }
@@ -229,6 +277,9 @@ namespace Sentinel.Core
             TotalDeduplicated = Interlocked.Read(ref _totalResponsesDeduplicated),
             TotalDeferred = Interlocked.Read(ref _totalResponsesDeferred),
             TotalFailed = Interlocked.Read(ref _totalResponsesFailed),
+            TotalPartial = Interlocked.Read(ref _totalResponsesPartial),
+            TotalAttempted = Interlocked.Read(ref _totalResponsesAttempted),
+            TotalRefused = Interlocked.Read(ref _totalResponsesRefused),
             ActiveLocks = _pidLocks.Count(kv => kv.Value.CurrentCount == 0),
             ActiveChainTraceHolds = _chainTraceHolds.Count
         };
@@ -280,7 +331,12 @@ namespace Sentinel.Core
         Deduplicated,
         DeferredForChainTrace,
         LockTimeout,
-        Failed
+        Failed,
+        NotRequested,
+        Refused,
+        Attempted,
+        PartiallyCompleted,
+        Verified
     }
 
     public sealed class ResponseResult
@@ -288,7 +344,8 @@ namespace Sentinel.Core
         public int ProcessId { get; set; }
         public string ProcessName { get; set; } = string.Empty;
         public ResponseAction RequestedAction { get; set; }
-        public ResponseOutcome Outcome { get; set; }
+        public ResponseOutcome Outcome { get; set; } = ResponseOutcome.NotRequested;
+        public ResponseExecutionResult? Execution { get; set; }
         public string? Reason { get; set; }
         public DateTimeOffset? ExecutedAt { get; set; }
     }
@@ -306,6 +363,9 @@ namespace Sentinel.Core
         public long TotalDeduplicated { get; set; }
         public long TotalDeferred { get; set; }
         public long TotalFailed { get; set; }
+        public long TotalPartial { get; set; }
+        public long TotalAttempted { get; set; }
+        public long TotalRefused { get; set; }
         public int ActiveLocks { get; set; }
         public int ActiveChainTraceHolds { get; set; }
     }

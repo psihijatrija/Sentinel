@@ -160,7 +160,7 @@ namespace Sentinel.Tests
                 var threatCfg = new ThreatReportingConfig { Enabled = false };
                 var threat = new ThreatReportService(threatCfg, NullLogger<ThreatReportService>.Instance);
                 // SilentObserve default blocks packs until chain-confirmed - disable for pack-path unit test
-                var sentinelCfg = new SentinelConfig { SilentObserve = false, ObserveUntilChain = false };
+                var sentinelCfg = new SentinelConfig { SilentObserve = false };
                 var reporter = new AutoIncidentReporter(cfg, threat, NullLogger<AutoIncidentReporter>.Instance,
                     sentinelConfig: sentinelCfg);
 
@@ -191,13 +191,26 @@ namespace Sentinel.Tests
                     ReceivedAt = DateTimeOffset.UtcNow
                 });
 
-                await reporter.HandleDetectionAsync(detection, incident);
+                var execution = new ResponseExecutionResult
+                {
+                    ProcessId = detection.ProcessId, RequestedAction = "KillProcessTree", EffectiveAction = "KillProcessTree",
+                    CompletedAt = DateTimeOffset.UtcNow
+                };
+                execution.Add("ProcessTree", detection.ProcessId.ToString(), ResponseExecutionStatus.Failed, "Fixture denial.");
+                await reporter.HandleDetectionAsync(detection, incident, execution);
 
                 Assert.Equal(1, reporter.PacksGenerated);
                 var dirs = Directory.GetDirectories(temp);
                 Assert.Single(dirs);
                 Assert.True(File.Exists(Path.Combine(dirs[0], "incident_report.txt")));
                 Assert.True(File.Exists(Path.Combine(dirs[0], "indicators.txt")));
+                using var receipt = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(dirs[0], "response_execution.json")));
+                Assert.Equal("Failed", receipt.RootElement.GetProperty("Status").GetString());
+                Assert.False(receipt.RootElement.GetProperty("VerifiesRequestedAction").GetBoolean());
+                Assert.Contains("response_execution.json", File.ReadAllText(Path.Combine(dirs[0], "MANIFEST.sha256")));
+                var affidavit = File.ReadAllText(Path.Combine(dirs[0], "victim_affidavit.txt"));
+                Assert.Contains("Recorded outcome:          Failed", affidavit);
+                Assert.DoesNotContain("Automated response:        KillProcessTree", affidavit);
 
                 var body = File.ReadAllText(Path.Combine(dirs[0], "incident_report.txt"));
                 Assert.Contains("REPORTABLE-GRADE EVIDENCE PACK", body);
@@ -280,9 +293,8 @@ namespace Sentinel.Tests
                 var sentinelCfg = new SentinelConfig
                 {
                     SilentObserve = true,
-                    ObserveUntilChain = true,
                     ActiveResponse = true,
-                };
+            };
                 var reporter = new AutoIncidentReporter(cfg, threat, NullLogger<AutoIncidentReporter>.Instance,
                     sentinelConfig: sentinelCfg);
 

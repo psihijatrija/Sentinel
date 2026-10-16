@@ -14,15 +14,14 @@ Reference docs (authoritative): `#[[file:../../../docs/requirements.md]]`,
 ## Problem statement
 
 Every existing Sentinel terminal family (credential theft, C2, ransomware, injection-then-exfil)
-is defined around harm to the **system or its secrets**, and every kill decision is gated on
-*behavior over time* (`ObserveUntilChain`). This leaves a real blind spot:
+is defined around harm to the **system or its secrets**, and kill authority requires qualifying terminal behavior. This leaves a real blind spot:
 
 > A payload that harms the **user** rather than the system - e.g. a DLL that merely emits an
 > audio/hypnotic stream, flickers the screen, or otherwise degrades the human (headache, sleep
 > disruption) - has **no** network leg, **no** credential access, **no** file destruction, and
 > **no** escalation. It produces zero terminal telemetry. It may be signed with a stolen but
-> validly-chaining certificate. Because there is no chain and no escalation, `ObserveUntilChain`
-> can *never* confirm it: the steady state *is* the attack, and waiting is losing.
+> validly-chaining certificate. The absence of terminal behavior means behavioral classification alone
+> cannot establish its intent.
 
 Neither axis alone catches this: behavior gives nothing, and signature can be forged. But the
 payload cannot avoid one thing - **it must persist somewhere** (a module mapped into some process,
@@ -160,7 +159,7 @@ Acceptance criteria (EARS):
 - The reconciler SHALL re-emit the durable "unexplained since X" observation on its cadence so it
   can land within the correlation window if a correlating leg appears.
 - A reconciliation observation SHALL NOT, alone, satisfy a kill-grade composite (it is one weak
-  observe leg; consistent with observe-until-chain and the evidence-independence work).
+  observe leg; consistent with Tier2 log-only policy and evidence independence).
 
 ---
 

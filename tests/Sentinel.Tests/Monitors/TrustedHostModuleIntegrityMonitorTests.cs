@@ -291,7 +291,7 @@ namespace Sentinel.Tests.Monitors
             var cache = new SecureCacheStore(tempDir);
             var metrics = new SentinelMetrics();
             var logger = new JsonlEventLogger(logPath);
-            var config = new SentinelConfig { ActiveResponse = activeResponse, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = activeResponse };
             var allowlist = new AllowlistService(cache, NullLogger<AllowlistService>.Instance);
             var responseEngine = new AdvancedResponseEngine(config, metrics, logger, new QuarantineManager(tempDir));
             var iocScanner = new IoCScanner(cache);

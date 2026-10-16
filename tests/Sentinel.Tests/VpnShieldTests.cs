@@ -280,7 +280,7 @@ namespace Sentinel.Tests
             var tempDir = NewTemp();
             try
             {
-                var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = true };
+                var config = new SentinelConfig { ActiveResponse = true };
                 config.VpnShield.Enabled = true;
                 var logPath = Path.Combine(tempDir, "events.jsonl");
                 var logger = new JsonlEventLogger(logPath);
@@ -292,7 +292,8 @@ namespace Sentinel.Tests
 
                 var lines = File.ReadAllLines(logPath);
                 // The network-integrity remediation fires...
-                Assert.Contains(lines, l => l.Contains("\"ActionTaken\":\"VPN_SHIELD\""));
+                Assert.Contains(lines, l => l.Contains("\"ActionTaken\":\"RESPONSE_ATTEMPTED\""));
+                Assert.Contains(lines, l => l.Contains("\"VerifiesRequestedAction\":false"));
                 // ...and it is NOT escalated to a process kill/quarantine.
                 Assert.DoesNotContain(lines, l =>
                     l.Contains("\"ActionTaken\":\"KILL") || l.Contains("QUARANTINE"));

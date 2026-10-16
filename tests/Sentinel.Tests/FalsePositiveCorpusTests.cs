@@ -6,20 +6,8 @@ using Sentinel.Core;
 
 namespace Sentinel.Tests
 {
-    /// <summary>
-    /// Behavioral false-positive / true-positive corpus.
-    ///
-    /// Each scenario is a realistic, named SEQUENCE of detection signals fed through the
-    /// real <see cref="ResponsePolicy"/> chain logic under a production-like ObserveUntilChain
-    /// config. This is the EDR-grade contract that unit tests alone don't cover:
-    ///
-    ///   - BENIGN scenarios (legit software behavior) must NEVER authorize a destructive
-    ///     response, no matter how many weak signals stack up.
-    ///   - MALICIOUS scenarios (real attack chains) MUST confirm the chain and authorize.
-    ///
-    /// These are synthetic signal sequences - no real malware, no process execution. They
-    /// exercise the decision logic exactly as the live pipeline would drive it.
-    /// </summary>
+    /// <summary>Synthetic regression corpus for independent correlation decisions.
+    /// These tests do not execute host actions or model a configurable response-wait mode.</summary>
     [Collection("ResponsePolicy")]
     public class FalsePositiveCorpusTests
     {
@@ -31,7 +19,6 @@ namespace Sentinel.Tests
         private static SentinelConfig LiveConfig() => new()
         {
             ActiveResponse = true,
-            ObserveUntilChain = true,
             ChainConfirmMinSignals = 2,
             ChainConfirmWindowSeconds = 300,
             MinTier1Confidence = 0.85,
@@ -69,12 +56,6 @@ namespace Sentinel.Tests
             {
                 // Tier law runs first in the live path (non-consultant branch).
                 ResponsePolicy.ApplyTierLaw(s);
-                // v2.9.4: observe-until-chain removed as a settable mode, so
-                // MayPerformDestructiveResponse no longer gates on the chain buffer.
-                // Drive the observe-independent multi-signal correlation directly - this is
-                // the same RegisterAndEvaluateChain path the observe gate used to invoke, so
-                // the benign/malicious contract (weak seeds + benign noise never confirm, real
-                // multi-signal / attack-class chains do) is preserved exactly.
                 if (ResponsePolicy.RegisterAndEvaluateChain(s, cfg))
                     authorized = true;
             }

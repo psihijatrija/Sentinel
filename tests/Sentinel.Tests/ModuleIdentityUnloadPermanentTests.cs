@@ -162,7 +162,6 @@ namespace Sentinel.Tests
             var cfg = new SentinelConfig
             {
                 ActiveResponse = true,
-                ObserveUntilChain = true,
             };
             var d = new DetectionEvent
             {

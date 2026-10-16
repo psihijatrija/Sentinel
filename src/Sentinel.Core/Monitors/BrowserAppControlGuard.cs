@@ -1,30 +1,3 @@
-// BrowserAppControlGuard - v2.7.1
-//
-// Protects against a website hijacking / pairing with a local browser-like desktop
-// application so it can drive or relay through it. The existing BrowserC2Guard only
-// recognizes the mainstream browsers (chrome/msedge/brave/vivaldi/opera/chromium) and
-// only the Chrome DevTools "--remote-debugging-port" channel. That leaves three gaps
-// that this file closes, WITHOUT touching or knowing about any specific app:
-//
-//   1. NativeMessagingHostGuard - the canonical page -> extension -> native messaging
-//      host -> arbitrary local binary bridge. Baselines the registered native-messaging
-//      hosts (registry + on-disk manifests) and flags new / unsigned / user-writable
-//      host targets. This is how a web origin reaches out of the browser sandbox to a
-//      native app.
-//
-//   2. LocalControlChannelMonitor - generalizes the CDP-loopback detector: ANY GUI /
-//      browser-like process that opens a loopback listener which a NON-browser,
-//      NON-parent local process then connects to is a "something is remote-controlling
-//      this app locally" signal, regardless of what the port is called.
-//
-//   3. DangerousLaunchFlagHeuristics - a pure classifier for dangerous browser/app
-//      launch flags (--load-extension, --disable-web-security, --proxy-server,
-//      --remote-debugging-*, app-mode + persistent profile). Used by a launch-time rule
-//      and by the shortcut guard.
-//
-// All of this is behavioral, userland-only, and observe-until-chain: weak single signals
-// are Tier2 LogOnly; kill authority requires a confirmed control channel or multi-signal
-// proof. Gated on the always-on hardening posture like the rest of the suite.
 
 using System;
 using System.Collections.Concurrent;

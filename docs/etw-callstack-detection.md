@@ -87,8 +87,8 @@ Three scoped changes, no new architecture:
 - **Userland only.** Pure ETW consumer; no kernel driver, no hooks. ETW-TI itself is a
   Microsoft-provided kernel telemetry source consumed from userland — the same source the
   session already enables.
-- **Observe-until-chain.** The new signal is fed to the correlation engine as evidence; it
-  does not directly authorize a kill on its own. Terminal authority stays with the chain.
+- **Evidence-only signal.** The new signal is fed to the correlation engine as evidence; it
+  does not directly authorize a kill on its own. Other qualifying Tier1 detections retain their own response authority.
 - **Tier2 = LogOnly.** Unchanged. The unbacked-frame signal is `Tier1Behavioral` evidence
   for correlation, consistent with how the existing unbacked-RWX signal is treated.
 - **Fail-closed.** Unresolvable PID / stack / memory query yields no signal rather than a

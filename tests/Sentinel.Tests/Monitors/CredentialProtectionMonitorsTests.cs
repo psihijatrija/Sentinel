@@ -84,10 +84,6 @@ namespace Sentinel.Tests.Monitors
             Assert.Equal(2, (int)CredentialAccessType.CanaryModified);
         }
 
-        // 
-        // Null session guard - observe-until-chain enforcement
-        // 
-
         [Fact]
         public void NullSessionProtection_Detection_IsTier2WhenObserveMode()
         {

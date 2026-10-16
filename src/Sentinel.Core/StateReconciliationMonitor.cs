@@ -9,22 +9,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Sentinel.Core
 {
-    /// <summary>
-    /// State-baseline reconciliation (drift detection) - surface #1: loaded-module inventory of a
-    /// fixed set of long-lived, low-churn processes.
-    ///
-    /// This is a STATE-driven detector, complementing Sentinel's event-driven monitors. It answers
-    /// the "silent module" gap: a payload that merely runs (audio/flicker/etc.) with no network,
-    /// credential, or file-destruction behavior produces no terminal telemetry and cannot be caught
-    /// by observe-until-chain - but it must still be MAPPED somewhere. Periodically snapshotting a
-    /// stable process's module set and diffing against a durable baseline surfaces such a module.
-    ///
-    /// The diff is cheap; ATTRIBUTION is the whole product. A delta is surfaced only if it cannot be
-    /// attributed to a trusted cause (trusted load position, active servicing window, or a publisher
-    /// already accepted on this host). Everything surfaced is OBSERVE-ONLY (Tier2 / LogOnly) and is
-    /// worded as "unexplained module, review it" - it never claims to know who placed it or why, and
-    /// it never auto-kills. Kill authority stays entirely in the behavioral engines.
-    /// </summary>
     public sealed class StateReconciliationMonitor : BackgroundService, ISensorProgressSource
     {
         private readonly DetectionEngine _detectionEngine;

@@ -23,7 +23,7 @@ namespace Sentinel.Core
     /// Lifecycle: Open -> Active -> Responded -> Closed
     ///   - Open: First detection received, investigation window starts
     ///   - Active: Multiple detections corroborating, severity escalating
-    ///   - Responded: Kill/quarantine/isolate action executed
+    ///   - Responded: Requested response effects verified
     ///   - Closed: Incident resolved (process dead, no reinfection within 5 min)
     /// </summary>
     public sealed class IncidentManager : IDisposable
@@ -63,6 +63,9 @@ namespace Sentinel.Core
 
             lock (incident)
             {
+                if (detection.RecordedExecution == null && detection.Tier == DetectionTier.Tier1Behavioral &&
+                    detection.AuthorizedResponse != ResponseAction.LogOnly)
+                    incident.LastActionableDetectionAt = DateTimeOffset.UtcNow;
                 incident.Detections.Add(new IncidentDetection
                 {
                     DetectionEvent = detection,
@@ -71,6 +74,18 @@ namespace Sentinel.Core
 
                 // Escalate severity based on detection count and confidence
                 EscalateSeverity(incident);
+
+                // Fresh actionable evidence reopens a previously responded incident. An old
+                // verified action is not proof that a newly observed threat remains contained.
+                if (incident.State == IncidentState.Responded && detection.Tier == DetectionTier.Tier1Behavioral &&
+                    detection.AuthorizedResponse != ResponseAction.LogOnly)
+                {
+                    incident.State = IncidentState.Active;
+                    incident.ResponseAction = null;
+                    incident.RespondedAt = null;
+                    incident.LastResponse = null;
+                    incident.ResponseStatus = ResponseExecutionStatus.NotRequested;
+                }
 
                 // Transition state if needed
                 if (incident.State == IncidentState.Open && incident.Detections.Count >= 2)
@@ -89,32 +104,43 @@ namespace Sentinel.Core
             return incident;
         }
 
-        /// <summary>
-        /// Marks an incident as responded - a kill/quarantine/isolate action was executed.
-        /// </summary>
-        public void MarkResponded(string incidentId, string actionTaken)
+        /// <summary>Record an outcome without confusing attempted effects with completed response.</summary>
+        public void RecordResponse(string incidentId, ResponseExecutionResult execution)
         {
-            if (_activeIncidents.TryGetValue(incidentId, out var incident))
+            if (execution.RequestedAction == nameof(ResponseAction.LogOnly)) return;
+            if (!_activeIncidents.TryGetValue(incidentId, out var incident)) return;
+            lock (incident)
             {
-                lock (incident)
+                incident.ResponseAttempts.Add(execution);
+                if (incident.ResponseAttempts.Count > 16) incident.ResponseAttempts.RemoveAt(0);
+                var receiptTime = execution.CompletedAt ?? execution.StartedAt;
+                if (incident.LastActionableDetectionAt > receiptTime ||
+                    (incident.LastResponse != null &&
+                     (incident.LastResponse.CompletedAt ?? incident.LastResponse.StartedAt) > receiptTime))
+                    return; // Late inline receipts cannot erase newer unresolved evidence/outcomes.
+                incident.LastResponse = execution;
+                incident.ResponseStatus = execution.Status;
+                incident.LastActivity = DateTimeOffset.UtcNow;
+                incident.LastStateChange = DateTimeOffset.UtcNow;
+                if (execution.VerifiesRequestedAction)
                 {
                     incident.State = IncidentState.Responded;
-                    incident.ResponseAction = actionTaken;
-                    incident.RespondedAt = DateTimeOffset.UtcNow;
-                    incident.LastStateChange = DateTimeOffset.UtcNow;
+                    incident.ResponseAction = execution.EffectiveAction;
+                    incident.RespondedAt = execution.CompletedAt ?? DateTimeOffset.UtcNow;
+                }
+                else if (execution.RequestedAction != nameof(ResponseAction.LogOnly))
+                {
+                    // A new incomplete response supersedes any previous completion claim.
+                    incident.State = IncidentState.Active;
+                    incident.ResponseAction = null;
+                    incident.RespondedAt = null;
                 }
             }
         }
 
-        /// <summary>
-        /// Marks an incident as responded by PID (convenience for ResponseEngine which doesn't track incident IDs).
-        /// </summary>
-        public void MarkRespondedByPid(int pid, string actionTaken)
+        public void RecordResponseByPid(int pid, ResponseExecutionResult execution)
         {
-            if (_pidToIncident.TryGetValue(pid, out var incidentId))
-            {
-                MarkResponded(incidentId, actionTaken);
-            }
+            if (_pidToIncident.TryGetValue(pid, out var incidentId)) RecordResponse(incidentId, execution);
         }
 
         /// <summary>
@@ -296,7 +322,8 @@ namespace Sentinel.Core
 
                     // Auto-close stale open/active incidents (no new detections in 10 minutes)
                     if ((incident.State == IncidentState.Open || incident.State == IncidentState.Active) &&
-                        now - incident.LastActivity > TimeSpan.FromMinutes(10))
+                        now - incident.LastActivity > TimeSpan.FromMinutes(10) &&
+                        (incident.LastResponse == null || incident.LastResponse.RequestedAction == nameof(ResponseAction.LogOnly)))
                     {
                         incident.State = IncidentState.Closed;
                         incident.ClosedAt = now;
@@ -358,7 +385,7 @@ namespace Sentinel.Core
     {
         Open,       // First detection received
         Active,     // Multiple detections corroborating
-        Responded,  // Kill/quarantine/isolate executed
+        Responded,  // Requested response effects verified
         Closed      // Resolved, no reinfection
     }
 
@@ -383,6 +410,10 @@ namespace Sentinel.Core
         public int PrimaryPid { get; set; }
         public string PrimaryProcessName { get; set; } = "";
         public string? ResponseAction { get; set; }
+        public ResponseExecutionStatus ResponseStatus { get; set; } = ResponseExecutionStatus.NotRequested;
+        public ResponseExecutionResult? LastResponse { get; set; }
+        public DateTimeOffset? LastActionableDetectionAt { get; set; }
+        public List<ResponseExecutionResult> ResponseAttempts { get; set; } = new();
         public bool IsReinfection { get; set; }
         public HashSet<int> InvolvedPids { get; set; } = new();
         public HashSet<string> Hashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);

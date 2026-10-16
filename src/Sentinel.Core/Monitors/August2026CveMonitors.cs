@@ -115,7 +115,7 @@ namespace Sentinel.Core
                                 "Dream Job: SecurityPDF loader",
                                 $"Process '{name}' (PID {pid}) matches Operation Dream Job loader path='{path ?? "?"}'",
                                 "Filename matches Lazarus Operation Dream Job (SecurityPDF / plugin modules). " +
-                                "Observe-until-chain; distinctive names are campaign IOCs (T1204.002 / T1574.002).",
+                                "response authorization; distinctive names are campaign IOCs (T1204.002 / T1574.002).",
                                 0.90, DetectionTier.Tier1Behavioral, ResponseAction.KillProcessTree,
                                 name, pid, path, SignalType.SuspiciousProcess, weak: false).ConfigureAwait(false);
                         }

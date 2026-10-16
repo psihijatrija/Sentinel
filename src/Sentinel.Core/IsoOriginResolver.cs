@@ -7,19 +7,6 @@ using System.Management;
 
 namespace Sentinel.Core
 {
-    /// <summary>
-    /// Resolves the "isolation origin" of a process or volume so the response path can hand
-    /// <see cref="IsolationResponseEngine.HandleIsoThreatAsync"/> a real (processId, isoPath)
-    /// pair. Historically that engine was dead code precisely because nothing mapped a running
-    /// PID back to the mounted ISO it executes from, nor a CD-ROM drive letter back to the
-    /// backing .iso file on disk. This class closes both gaps.
-    ///
-    /// Everything here is read-only enumeration (WMI + Win32_Volume / Get-DiskImage-equivalent
-    /// via WMI, and process image-path checks). It NEVER mounts, dismounts, or mutates - the
-    /// destructive step stays in IsolationResponseEngine, gated by the response engine's
-    /// observe-until-chain / Tier1 kill-grade rules. All methods fail closed (return null /
-    /// empty) rather than throw.
-    /// </summary>
     public static class IsoOriginResolver
     {
         /// <summary>

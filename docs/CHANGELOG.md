@@ -1,4 +1,37 @@
 # Changelog
+## [3.2.2] - 2026-10-16
+### Fixed
+- Response executors now return structured receipts with refused, attempted, failed,
+  partial and verified effects. Normal task completion no longer establishes success.
+- The coordinator records incident outcomes, caches only verified exact-action receipts,
+  and does not mark incomplete responses as responded. New actionable evidence reopens
+  a previously responded incident; unresolved responses are not silently aged into closure.
+- Process-tree results, quarantine read-back, firewall configuration read-back, certificate
+  store read-back and registry value/key read-back contribute explicit outcomes. Legacy
+  VPN/ISO/container/VM executors without final-state receipts remain attempted/unverified.
+- Dashboard response rows display actual outcomes. Checkmarks require a completed,
+  verified requested-action receipt; historical action labels alone do not establish success.
+- Tray success notifications require a verified receipt for the matching PID. Reinfection
+  tracking registers only verified target exits. Evidence packs include the final receipt
+  under the integrity manifest and distinguish requested actions from recorded outcomes.
+- Process-tree containment now enumerates and rescans descendants, pins native process
+  handles, checks creation identity and target protections, and verifies exits within a
+  bounded budget. Incomplete discovery, refused targets and termination failures remain visible.
+- DLL containment reports separate process-tree outcomes from quarantined, already absent,
+  deferred and failed files. Failed/refused termination cannot report a contained host;
+  detected DLLs are no longer counted as quarantined. Removed the unchecked fallback kill.
+### Removed
+- Removed the obsolete chain-wait configuration option and unreachable response branches
+  throughout runtime code, configuration, fixtures, documentation and repository guidance.
+  Authorized Tier1 responses still act immediately; Tier2 remains log-only.
+### Validation
+- Added portable receipt/file verification tests, coordinator/incident flow regressions,
+  and dashboard renderer tests. Build and release CI run the dashboard tests as well.
+- Added deterministic containment/outcome regressions and a Windows integration test using
+  disposable parent/child/grandchild fixtures plus an unrelated process control.
+- Windows execution of the native integration test and full Framework suite is required
+  before release; Linux cross-compilation alone does not establish native containment.
+
 ## [3.2.1] - 2026-10-16
 ### Fixed
 - **`FileVerdictScanner` self-scanning loop (primary RAM cause).**
@@ -328,7 +361,7 @@
 - **Aggressive unsigned-module sweep now covers every loadable-module extension**, not just `.dll`/`.winmd`. `AggressiveUnsignedDllSweepMonitor` enumerates each drive once and quarantines any unsigned module in `ModuleIdentity.ModuleExtensions` (`.dll`, `.winmd`, `.ocx`, `.cpl`, `.ax`, `.node`, `.drv`, `.acm`, `.tsp`, `.mui`, `.efi`), using hardened removal so locked modules are removed on sight. `DllUnloadEngine` mapped-DLL remediation also uses hardened removal (closes the "re-quarantined the same mapped DLL forever" path).
 - **`EnableAggressiveUnsignedDllSweep` now defaults TRUE.** The sweep is armed by default on this hardened product line. It remains compiled-only — disk JSON and `config.enc` can neither arm nor disarm it.
 - **Work-first USB restraint dropped: `AutoDisableFailedUsbEnumeration` now defaults TRUE.** A USB node that fails descriptor enumeration (VID_0000 / "Device Descriptor Request Failed") is disabled + ejected on sight as a BadUSB/rogue-HID tell. The unknown-HID disable path was already always-on (gated on the `RestrictivePortHardening` invariant); stale "work-first / log-only / Hardened-Mode-only" comments were corrected to match. Legitimate controllers/receivers must be allowlisted via `TrustedUsbDevices` (VID:PID) to survive.
-- Sabotage audit: all hardwired config invariants (`ActiveResponse`, `ObserveUntilChain`, `ThreatIntelProactiveFirewall`, `BlockFcmPushChannel`, `RestrictivePortHardening`, `MitmDefense`/`VpnShield` `Enabled`) verified intact in HEAD and the working tree — none had been downgraded to a flippable default. `EnableHardwarePmuMonitor`/`EnableAiBehaviorScoring` left false (no wired consumer); `EnableIntelThreatIntel`/`EnableDynamicSandboxing` left false (placeholder feed / requires the Windows Sandbox feature).
+- Sabotage audit: all hardwired config invariants (`ActiveResponse`, `legacy chain-wait mode`, `ThreatIntelProactiveFirewall`, `BlockFcmPushChannel`, `RestrictivePortHardening`, `MitmDefense`/`VpnShield` `Enabled`) verified intact in HEAD and the working tree — none had been downgraded to a flippable default. `EnableHardwarePmuMonitor`/`EnableAiBehaviorScoring` left false (no wired consumer); `EnableIntelThreatIntel`/`EnableDynamicSandboxing` left false (placeholder feed / requires the Windows Sandbox feature).
 - Version stamp 3.0.2 -> 3.0.3.
 
 ## [3.0.2] - 2026-10-08
@@ -411,7 +444,7 @@
 This machine sustained the 2026-06 MitM chain (planted root -> TLS intercept -> Chrome sync
 token theft -> FCM "Send Tab to Self" -> rogue Cast :8009 C2 relay at 192.168.1.100, MAC OUI
 B0-B3-69 / Shenzhen SDMC). A device at that IP is still live on the LAN and the browser holds
-an active Cast connection to it. The prior observe-until-chain / clean-install defaults left
+an active Cast connection to it. The prior legacy chain-wait mode / clean-install defaults left
 that class of threat detected-but-not-blocked. Defenses are now **hardwired on and cannot be
 disabled** - the relevant config booleans are compiled getters with no-op setters (the same
 pattern already used for `ActiveResponse` and `RestrictivePortHardening`), so no config value,
@@ -422,9 +455,9 @@ DPAPI override, or planted file can turn them off:
   `AutoBlockRogueCast` within the suite are likewise hardwired `true`.
 - **`MitmDefense.KnownRogueCastIps` seeded with `192.168.1.100`** (was empty) - the confirmed
   attacker relay is blocked by default. `RogueCastMacPrefixes` already carried `B0-B3-69`.
-- **`SentinelConfig.ObserveUntilChain` => always `false`** (no-op setter). Response fires on
+- **`SentinelConfig.legacy chain-wait mode` => always `false`** (no-op setter). Response fires on
   single high-confidence Tier1 signals; observe mode can no longer be selected by config,
-  override, or planted file. The `config.ObserveUntilChain = true` lines in the Agent/Service
+  override, or planted file. The `config.legacy chain-wait mode = true` lines in the Agent/Service
   host startup were removed. Tradeoff: higher false-positive-action risk, accepted for a
   repeat-target host, bounded by `MaxKillsPerMinute`. Tier2 remains LogOnly unconditionally
   (unchanged invariant). The observe-mode branches remain in `AdvancedResponseEngine` /
@@ -450,7 +483,7 @@ plaintext or otherwise, that can disable response.
 ### Tests
 
 Updated the product-default posture tests to assert the hardwired armed values
-(`ObserveUntilChain=false`, `MitmDefense.Enabled=true`, `BlockFcmPushChannel=true`,
+(`legacy chain-wait mode=false`, `MitmDefense.Enabled=true`, `BlockFcmPushChannel=true`,
 `ThreatIntelProactiveFirewall=true`, `VpnShield.Enabled=true`, `192.168.1.100` pinned) in
 `ModelAndInfraTests`, `V160SecurityHardeningTests`, `ProductPostureTests`, `HostsFileGuardTests`,
 `V212WorkFirstTests`, `ThreatIntelAndLnkTests`. Reworked
@@ -465,7 +498,7 @@ re-driven through the observe-independent `ResponsePolicy.RegisterAndEvaluateCha
 same path the observe gate called), so benign-never-kills / chain-confirm semantics are intact.
 Tests whose only remaining assertion was the now-impossible "no action while observing" were
 removed (`ResponsePolicyTests.Inline_Host_Mutation_Blocked_While_Observing`, the two
-`IsoDismountResponseTests.*_ObserveUntilChain_NoChain_IsLogOnly`). Affected files:
+`IsoDismountResponseTests.*_legacy chain-wait mode_NoChain_IsLogOnly`). Affected files:
 `AttackClassKillTests`, `FalsePositiveCorpusTests`, `ResponsePolicyTests`, `InfostealerChainTests`,
 `IsoArchiveContentTests`, `HostsFileGuardTests`, `V212WorkFirstTests`, `VpnShieldTests`,
 `SecurityInvariantsTests`, `TerminalFamilyConsistencyTests`, `ProtocolCoverageMonitorsTests`.
@@ -591,7 +624,7 @@ moment a sensitive syscall fires. This release consumes it.
   documented `LOW-4` gap for in-memory living-off-the-land execution where every module on
   disk is signed and benign.
 
-Observe-until-chain is preserved: the new signal is `LogOnly` evidence for the correlation
+legacy chain-wait mode is preserved: the new signal is `LogOnly` evidence for the correlation
 engine and never authorizes a kill on its own. Fail-closed: any inspection failure yields
 no signal. Userland only; no kernel driver added. See `docs/etw-callstack-detection.md`.
 
@@ -755,7 +788,7 @@ detected but never contained. `AdvancedResponseEngine` now dispatches to it:
   stops/removes the container or terminates the VM host, alongside the process kill.
 
 **Constraint compliance.** Every containment path is gated exactly like all other destructive
-responses: observe-until-chain must have authorized the action (`ar` + Tier1 kill-grade). Tier2 can
+responses: legacy chain-wait mode must have authorized the action (`ar` + Tier1 kill-grade). Tier2 can
 never reach these branches; a bare container-config observation or a content signal never triggers
 containment. If an ISO origin cannot be confirmed, the response degrades to a plain process kill and
 never dismounts or deletes an unrelated volume. All destructive containment writes a PRE_ACTION audit
@@ -763,7 +796,7 @@ entry first, like every other action.
 
 Tests: new `IsoArchiveContentTests` (+16) cover the inspector (bomb / polyglot / nested / embedded
 executable / benign / bomb-safety timing) and the response gating (Tier2 stays LogOnly with
-ActiveResponse on; observe-until-chain default-deny with no chain; Tier1 chain-authorized ISO
+ActiveResponse on; legacy chain-wait mode default-deny with no chain; Tier1 chain-authorized ISO
 dismount, Docker containment, and VM containment; ISO-origin-unresolved degrades to kill-only).
 
 ### Fixed - Dead code / honesty cleanup found during a full-codebase sabotage sweep
@@ -870,7 +903,7 @@ a valid Authenticode signature as that anchor.
   that encoded the old name/path-only bypass were rewritten to assert the hardened, fail-closed
   contract.
 
-**Constraint compliance:** `UnsignedBinaryRule` stays Tier2 / LogOnly (observe-until-chain
+**Constraint compliance:** `UnsignedBinaryRule` stays Tier2 / LogOnly (legacy chain-wait mode
 unchanged). `DllSideloadingDetectionRule`'s Tier1 authority is unchanged in scope - the fix only
 removes an attacker-controllable *exemption*, so it produces strictly fewer bypasses and no new
 kills on previously-safe cases. The anchor (Authenticode signature) is behavioral/provenance, not a
@@ -910,7 +943,7 @@ self-authorize and that trust must combine with a non-attacker-controllable anch
 
 **Constraint compliance:** the rule remains Tier2 / LogOnly - this fix changes only *what is
 observed*, never authorizing a kill on its own. Auto-kill still requires chain confirmation
-(observe-until-chain). Behavioral, not name-based: the kill authority is unchanged; the fix
+(legacy chain-wait mode). Behavioral, not name-based: the kill authority is unchanged; the fix
 removes an attacker-controllable trust shortcut and makes the detection fail closed.
 
 
@@ -931,7 +964,7 @@ test suite (2469 tests) passes identically before and after, and the build is 0W
   all tests bind unchanged.
 - **`AdvancedResponseEngine.cs`** is now a `partial class`. The self-contained network/certificate
   P/Invoke executor helpers moved to `AdvancedResponseEngine.NetworkActions.cs`. `HandleAsync`, the
-  Tier1-only branch guards, the observe-until-chain gate, and the mandatory pre-action audit
+  Tier1-only branch guards, the legacy chain-wait mode gate, and the mandatory pre-action audit
   ordering are untouched in the main file - the kill contract stays in one place.
 - **`BehavioralCorrelationEngine.cs`** is now a `partial class`. The host-wide (PID 0)
   network-tamper / VPN-shield correlation subsystem moved to
@@ -940,7 +973,7 @@ test suite (2469 tests) passes identically before and after, and the build is 0W
 
 **Constraint compliance:** this is a pure structural split. Because the response and correlation
 engines were split with C# `partial class`, the compiled types are identical - the Tier2-can-never-act
-and observe-until-chain invariants are byte-for-byte the same code paths, just in more readable files.
+and legacy chain-wait mode invariants are byte-for-byte the same code paths, just in more readable files.
 
 
 ## [2.7.8] - 2026-09-21
@@ -978,7 +1011,7 @@ statistical/lexical analysis of the command line itself. This adds exactly that,
   benign < obfuscated heuristic ordering, bounded/never-throws scoring, empty-input handling).
 
 **Constraint compliance:** this is observe-fuel only. A high score never authorises a kill on its
-own - only a chain-confirmed terminal does (observe-until-chain). It detects command-line *behaviour
+own - only a chain-confirmed terminal does (legacy chain-wait mode). It detects command-line *behaviour
 shape*, not process name/path/hash, and adds no privileged collection path.
 
 ## [2.7.7] - 2026-09-20
@@ -1183,7 +1216,7 @@ cancellation flow unchanged. Verified: solution builds 0W/0E, all 2440 tests pas
 
 ### Detection - close the "malicious DLL that harms locally, never phones home" gap
 
-Observe-until-chain historically leaned on a network terminal (C2/beacon/exfil) to complete a
+legacy chain-wait mode historically leaned on a network terminal (C2/beacon/exfil) to complete a
 chain. A hostile module loaded into a trusted host can do all its damage locally - ransomware
 encryption, credential/LSASS theft, defense tampering - without ever connecting out, so a
 network-gated chain would never quarantine it. Two additions close this, staying within the hard
@@ -1345,7 +1378,7 @@ lock in each closed gap.
 Defends against a website hijacking or pairing with a local browser-like desktop app to
 drive it or relay through it - even when the app is not one of the mainstream browsers the
 existing `BrowserC2Guard`/`ChromeRemoteDebuggingRule` recognize. Three additions, all
-behavioral, userland-only, observe-until-chain, and gated on the always-on hardening posture:
+behavioral, userland-only, legacy chain-wait mode, and gated on the always-on hardening posture:
 
 - **`NativeMessagingHostGuard`** (Service, CredentialProtection group, 60s scan) - baselines
   registered browser native-messaging hosts (HKCU/HKLM registry + on-disk manifests, Chrome/
@@ -1446,7 +1479,7 @@ New third detection axis: **state-driven**, complementing the event-driven monit
 "silent / user-directed harm" blind spot - a module that merely runs (audio/hypnotic stream,
 screen flicker, etc.) with no network, credential, or file-destruction behavior, possibly signed
 with a stolen certificate, produces zero terminal telemetry and cannot be caught by
-observe-until-chain, but it must still be *mapped* somewhere.
+legacy chain-wait mode, but it must still be *mapped* somewhere.
 
 `StateReconciliationMonitor` (SystemIntegrity group, 5-min cadence, 30s boot-settle) keeps a
 **reboot-durable** baseline (`ModuleBaselineStore`, `System.Text.Json` under
@@ -1726,7 +1759,7 @@ have flagged the DLL at all.
 
 Userland only, no new egress, no new dependencies - installer size is unchanged within normal
 per-release variation. These are correctness fixes to the DLL-unload/quarantine and agent-watchdog
-paths; detection tiers, response contracts, and the observe-until-chain law are unchanged.
+paths; detection tiers, response contracts, and the legacy chain-wait mode law are unchanged.
 
 ## [2.6.0] - 2026-09-10
 
@@ -1800,7 +1833,7 @@ general case.
   Secret`**. It also detects **`Data Staging: Archive of User Documents`** when a non-owning
   process packages a user document tree into an archive (>=512 KB). The owning browser / signed
   first-party clients / OS-critical readers are skipped, so this attributes stealers, not normal use.
-- **Observe-until-chain honored strictly.** All three raw signals are **Tier2 + LogOnly +
+- **legacy chain-wait mode honored strictly.** All three raw signals are **Tier2 + LogOnly +
   `SignalType.Generic`** and can never solo-kill (`ClassifyTerminalOutcome` returns null / the Exfil
   family is terminal-but-never-solo-kill-grade). They deliberately are *not* tagged
   `WeakObserveSeed`, so they still feed correlation.
@@ -2724,8 +2757,8 @@ Critical fix for game interference (Football Manager / Denuvo titles crashing on
 ### Added
 
 - **`AlwaysOnPolicies.cs`** - new static class formalizing permanent product invariants:
-  - `IsProtectedGameProcess()` / `IsProtectedGamePath()` / `ApplyGameProtection()` - game protection checked BEFORE allowlist and observe-until-chain in the response engine. Cannot be overridden by config.
-  - `IsDllUnloadAlwaysOn()` / `MayUnloadDllsFrom()` - DLL unload formalized as metadata-driven always-on policy. Never demoted by tier law, never gated on ObserveUntilChain.
+  - `IsProtectedGameProcess()` / `IsProtectedGamePath()` / `ApplyGameProtection()` - game protection checked BEFORE allowlist and legacy chain-wait mode in the response engine. Cannot be overridden by config.
+  - `IsDllUnloadAlwaysOn()` / `MayUnloadDllsFrom()` - DLL unload formalized as metadata-driven always-on policy. Never demoted by tier law, never gated on legacy chain-wait mode.
 - **`SecurityValidation.IsKnownGameProcessName()`** - public API for name-only game process checks (used by EphemeralProcessMonitor).
 - **DLL unload emissions** now carry `["AlwaysOnPolicy"] = "DllUnload"` metadata marker for explicit policy recognition.
 
@@ -2774,7 +2807,7 @@ WMI is a first-class persistence and policy-overwrite surface again. Consumer *n
 
 ### Changed
 
-- `ResponsePolicy` kill-grade families include `WmiPersistence`. Name-only new consumers stay observe fuel (0.75). Executable consumers are a terminal leg under observe-until-chain.
+- `ResponsePolicy` kill-grade families include `WmiPersistence`. Name-only new consumers stay observe fuel (0.75). Executable consumers are a terminal leg under legacy chain-wait mode.
 - Kernel-Registry ETW records the last WMI-host writer (`WmiHostRegistryHint`) so policy-tree changes can be attributed without a key path in the payload.
 - `ProductInfo.Version` -> `2.2.8`
 - Installer -> `SentinelSetup-2.2.8`
@@ -2844,7 +2877,7 @@ Generic CVE-class coverage so the next Patch Tuesday does not require a named ca
 
 ### Changed
 
-- **CVE Shield** matches Windows OS-class KEV (WorkstationOs) instead of requiring a process named "Windows". Server roles (SharePoint/Exchange/DNS Server) match only if installed. Process-spawn rules are LogOnly observe-until-chain. Synthetic PoC salt hashes are gone (security theater). KEV catalog is cached under ProgramData.
+- **CVE Shield** matches Windows OS-class KEV (WorkstationOs) instead of requiring a process named "Windows". Server roles (SharePoint/Exchange/DNS Server) match only if installed. Process-spawn rules are LogOnly legacy chain-wait mode. Synthetic PoC salt hashes are gone (security theater). KEV catalog is cached under ProgramData.
 - `V217Hardening.cs` namespace is `Sentinel.Core` like every other monitor file (folder `Monitors/` is layout only - not a second type universe).
 - `ProductInfo.Version` -> `2.2.4`
 - Installer -> `SentinelSetup-2.2.4`
@@ -2927,7 +2960,7 @@ Honest remediations from a full source red-team. Several items previously marked
 - **BrowserC2Guard** scans each interactive user's Chrome/Edge/Brave extension tree.
 - **GSecurity.inf (kiosk / Hardened Mode)** no longer sets password length 0, complexity off, all audit off, FIPS off, or Authenticode off. FIPS is left untouched. Password length 12 + complexity; logon/account/policy audit on.
 - **Worker:** `RATE_LIMITER` is actually called **after** HMAC. Unauth flood has a separate cheaper cap. MalwareBazaar `/report/hash` is an honest lookup + comment on known samples (ingest still needs the file).
-- **EncryptedConfigStore** writes an `SCFG2` HMAC envelope. Leftover `disk JSON config` cannot turn `ObserveUntilChain` off.
+- **EncryptedConfigStore** writes an `SCFG2` HMAC envelope. Leftover `disk JSON config` cannot turn `legacy chain-wait mode` off.
 - **FileVerdictAds** no longer grants Administrators FullControl on `%ProgramData%\Sentinel\Secure`.
 - **President's Law** no longer includes DnsAnomaly / NetworkAnomaly.
 
@@ -3134,7 +3167,7 @@ Expands userland coverage for campaigns that lead to local privilege escalation 
 #### Rules
 - PrivilegeEscalationRule patterns expanded (potato variants, coerce helpers)
 
-Still observe-until-chain / work-first. Kernel bugs require Windows Update.
+Still legacy chain-wait mode / work-first. Kernel bugs require Windows Update.
 
 All notable changes to Sentinel are documented in this file.
 
@@ -3187,7 +3220,7 @@ Thorough source audit with attacker and defender perspectives for gaming PCs and
 - `SecurityValidation.IsGameOrAntiCheatPath(imagePath)` - skips all Steam, Epic, GOG, EA, Ubisoft, Riot, Battle.net, Xbox, anti-cheat (EAC/BattlEye/Vanguard/Denuvo) paths
 - `InstallerHeuristics.IsDirectXOrRuntimeRedist(processName, imagePath)` - skips DXSETUP, vcredist, XNA, OpenAL, PhysX, and all runtime redistributable processes regardless of install location
 
-Behavioral monitors still observe everything - if an actual attack uses a game path, rule-based detections still fire and go through normal ObserveUntilChain gating.
+Behavioral monitors still observe everything - if an actual attack uses a game path, rule-based detections still fire and go through normal legacy chain-wait mode gating.
 
 ## [2.0.5] - 2026-08-09
 
@@ -3331,7 +3364,7 @@ Major test infrastructure expansion. Adds comprehensive unit tests for all previ
 Complete rewrite to match the 2.0.x codebase:
 
 - Corrected `EnforceActiveResponse` default (`false`, not `true` as previously documented)
-- Added full `ObserveUntilChain` / `SilentObserve` / `ChainConfirm` config model to FR-6
+- Added full `legacy chain-wait mode` / `SilentObserve` / `ChainConfirm` config model to FR-6
 - Added T1-19 through T1-23: digital coercion toolkit composites, AI agent / MCP abuse, package supply-chain runtime, indirect syscall / Hell's Gate, MitM attack chain
 - Added T2-05/T2-06: privacy service observe-only, bulk transfer / torrent observe-only
 - Expanded FR-4 to include all 19 current BehavioralCorrelationEngine composites plus WeightedCorrelationEngine as a second engine with score card requirements
@@ -3354,13 +3387,13 @@ Recreates the June 13-14 attack defense as a single opt-in suite under `Sentinel
 3. Ghost process C2s to rogue LAN Cast endpoint (e.g. `192.168.1.100:8009`, OUI `B0-B3-69` SDMC spoofed as Chromecast)
 4. Optional: stolen Chrome tokens + FCM "Send Tab to Self" opens attacker URLs in open tabs
 
-**What MitmDefense.Enabled does (narrow exception to ObserveUntilChain / work-first):**
-- **TlsCertificateMonitor** - high-confidence planted roots still `RemoveCert` / `RemoveCertAndKillAdder` under observe-until-chain
+**What MitmDefense.Enabled does (narrow exception to legacy chain-wait mode / work-first):**
+- **TlsCertificateMonitor** - high-confidence planted roots still `RemoveCert` / `RemoveCertAndKillAdder` under legacy chain-wait mode
 - **GhostProcessMonitor** - unresolvable/empty-name PID -> Cast `:8008/:8009` or known rogue IP -> **KillProcessTree** + `TargetIP` isolate metadata (immediate, no 2-scan wait)
 - **CastDeviceGuard** - auto firewall-block rogue Cast by IOC MAC (`B0-B3-69` default) / known IPs / phantom+Google-OUI spoof; does not wipe blocks when suite is on
 - **PhantomDeviceMonitor** - `B0-B3-69` no longer labeled "Google"; cast-spoof + ghost correlation blocks at >=0.90
 - **NullSessionGuard** - FCM TCP 5228 block when suite on (Send Tab to Self)
-- **AdvancedResponseEngine** - MitmDefense actions are not demoted to LogOnly by ObserveUntilChain
+- **AdvancedResponseEngine** - MitmDefense actions are not demoted to LogOnly by legacy chain-wait mode
 
 **Config** (`disk JSON config` -> `Sentinel:MitmDefense`):
 ```json
@@ -3634,7 +3667,7 @@ Protects users from **machine-side tools** used in online harassment, sexual coe
 - `ResponsePolicy.ApplyTierLaw`: **Tier1** only for high-confidence (>= `MinTier1Confidence`, default **0.85**) **token theft / credential dump / reverse shell / C2 beaconing**, or multi-signal **composites** that prove those.
 - All other monitor signals demote to **Tier2 + LogOnly** observe fuel for correlation.
 - Critical score alone no longer promotes noise to kill.
-- Live pipeline: `DetectionEngine` always applies tier law; `AdvancedResponseEngine` re-applies when `ObserveUntilChain` is on.
+- Live pipeline: `DetectionEngine` always applies tier law; `AdvancedResponseEngine` re-applies when `legacy chain-wait mode` is on.
 
 ### Policy - DirectX / redistributables stay observe-only
 - Steam DirectX, VC++, GPU redistributable System32 writes: **Tier2 observe only** (maybe 1-2 signals).
@@ -3646,21 +3679,21 @@ Protects users from **machine-side tools** used in online harassment, sexual coe
 - First agent liveness check runs **immediately** so the tray appears without a multi-second wait when the agent is missing.
 
 ### Fixed - Cuckoo / app integrity observe gate
-- `ApplicationIntegrityMonitor` emits cuckoo eggs as **Tier2 LogOnly**; inline kill/quarantine/restore only when `MayPerformInlineHostMutation` allows (observe-until-chain default: no).
+- `ApplicationIntegrityMonitor` emits cuckoo eggs as **Tier2 LogOnly**; inline kill/quarantine/restore only when `MayPerformInlineHostMutation` allows (legacy chain-wait mode default: no).
 
 ### Constraints
 - Documented Tier1 kill-grade families and DirectX observe rule in `constraints.md`.
 
 ## [1.8.6] - 2026-08-01
 
-### Policy - Observe-until-chain (rebuild)
+### Policy - legacy chain-wait mode (rebuild)
 - **Default:** all monitors **LogOnly** until a multi-signal chain points at a terminal attack.
 - **Terminal outcomes (nuke):** C2 beaconing, exfil, token theft, reverse shell, credential dump, BYOVD.
 - **Nuke = everything:** quarantine + kill + network isolate + chain tracer.
 - **Still active immediately:** DLL unloaders only (`DllUnloadEngine` FreeLibrary / proven sideload load).
 - **Not terminal:** Steam DirectX / GPU redistributable System32 writes (`vulkan*`, `nvcuda`, D3D/DXGI, VC++ runtimes), PID-0 attribution races -> Tier2 LogOnly, never a chain seed.
 - **Silent observe:** no toasts / auto evidence packs until chain-confirmed.
-- **Config:** `ObserveUntilChain` (default true), `ChainConfirmMinSignals` (2), `ChainConfirmWindowSeconds` (300), `SilentObserve` (true), `EnforceActiveResponse` default **false**.
+- **Config:** `legacy chain-wait mode` (default true), `ChainConfirmMinSignals` (2), `ChainConfirmWindowSeconds` (300), `SilentObserve` (true), `EnforceActiveResponse` default **false**.
 - **Central gate:** `ResponsePolicy` + `AdvancedResponseEngine`; inline host mutations gated the same way.
 - **FileActivityMonitor:** System32 unauthorized-write demoted to Tier2 LogOnly (DirectX-safe).
 

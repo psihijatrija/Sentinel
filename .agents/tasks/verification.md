@@ -88,7 +88,7 @@ No `.trx` artifacts were produced (none found under the worktree after the runs)
 ## Constraints honored
 
 - Userland only; no kernel/driver/syscall changes.
-- Fail-closed + observe-until-chain: all three fixes suppress only the RESPONSE for
+- Fail-closed + legacy chain-wait mode: all three fixes suppress only the RESPONSE for
   known-good processes; detections are still emitted and logged. No attack-tool signature
   weakened, no detection rule disabled.
 - Tier2-never-acts preserved (the torrent fix relies on it).

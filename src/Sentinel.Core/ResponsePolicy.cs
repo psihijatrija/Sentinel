@@ -367,11 +367,6 @@ namespace Sentinel.Core
             return false;
         }
 
-        /// <summary>
-        /// Standing product law: system-wide module identity unload already remediates
-        /// in <c>DllUnloadEngine</c>. The detection must remain Tier1 forever - never
-        /// demoted by observe-until-chain or kill-grade filtering.
-        /// </summary>
         public static bool IsPermanentModuleIdentityUnload(DetectionEvent? detection)
         {
             if (detection == null) return false;
@@ -459,8 +454,6 @@ namespace Sentinel.Core
                 detection.Tier = DetectionTier.Tier1Behavioral;
                 detection.Metadata["TierLaw"] = outcome!;
                 detection.Metadata[TerminalOutcomeKey] = outcome!;
-                // Recommended action may be kill-grade; ObserveUntilChain still gates execution
-                // until a second independent signal / composite confirms.
                 return;
             }
 
@@ -862,50 +855,14 @@ namespace Sentinel.Core
             return false;
         }
 
-        /// <summary>
-        /// When ObserveUntilChain is on: may we take kill/quarantine/isolate/host mutation?
-        /// DLL unload path is always allowed (callers still use DllUnloadEngine).
-        /// </summary>
+        /// <summary>Product arming check. Callers must still enforce tier and action-specific authority.</summary>
         public static bool MayPerformDestructiveResponse(DetectionEvent detection, SentinelConfig config)
-        {
-            if (config == null || !config.ActiveResponse)
-                return false;
+            => config != null && config.ActiveResponse;
 
-            if (!config.ObserveUntilChain)
-                return true;
-
-            if (IsDllUnloadExempt(detection))
-                return true;
-
-            return RegisterAndEvaluateChain(detection, config);
-        }
-
-        /// <summary>
-        /// Inline monitor host mutations (hosts rewrite, SUBST kill, USB disable, cuckoo restore)
-        /// when ObserveUntilChain is on - never, unless a detection is already chain-confirmed.
-        /// Prefer routing through DetectionEngine so chain logic applies.
-        /// </summary>
+        /// <summary>Product arming check for existing inline host-mutation policies.</summary>
         public static bool MayPerformInlineHostMutation(SentinelConfig config, DetectionEvent? chainContext = null)
-        {
-            if (config == null || !config.ActiveResponse)
-                return false;
+            => config != null && config.ActiveResponse;
 
-            if (!config.ObserveUntilChain)
-                return true;
-
-            if (chainContext != null && MayPerformDestructiveResponse(chainContext, config))
-                return true;
-
-            // MitmDefense does not unlock USB / admin / registry / volume mutations.
-            // Those callers must use AllowsMitmDefenseMutations / IsMitmDefenseAction.
-            return false;
-        }
-
-        /// <summary>
-        /// True when a detection is part of the MITM suite and MitmDefense is enabled
-        /// (cert remove / cast block / FCM). Used by AdvancedResponseEngine to act under
-        /// ObserveUntilChain without requiring a multi-signal kill chain.
-        /// </summary>
         public static bool IsMitmDefenseAction(DetectionEvent detection, SentinelConfig config)
         {
             if (detection == null || config == null)

@@ -1,24 +1,3 @@
-// Infostealer coverage (v2.6.x) - general-case sensitive-file access + collect/package/exfil.
-//
-// Gap this closes: the modern infostealer kill chain (RedLine / Lumma / Vidar class) never
-// touches LSASS. It reads the browser credential/cookie SQLite DBs and developer secret files
-// (.ssh, .aws, tokens), optionally packages user documents into an archive, then exfiltrates.
-//
-// Existing coverage was partial:
-//   - BrowserCredentialGuard only fires when the browser is CLOSED and emits PID 0 / LogOnly
-//     (no attribution, cannot feed a chain).
-//   - AgenticProcessMonitor watches the same credential paths but ONLY for AI-agent process trees.
-//   - DataExfiltrationMonitor is host-wide PID 0 volume only (deliberately weak).
-//
-// This monitor supplies the missing behavioral leg: an ATTRIBUTED (real PID) observe signal when
-// a non-owning, non-trusted process reads a sensitive credential/secret store, or packages user
-// documents into an archive. It is Tier2 + LogOnly + SignalType.Generic by itself and can NEVER
-// solo-kill (ClassifyTerminalOutcome returns null for it). Kill authority arrives only through the
-// hand-authored composites (read/staging + outbound) in BehavioralCorrelationEngine.
-//
-// SAFETY: the raw signal is deliberately NOT tagged WeakObserveSeed - that flag would exclude it
-// from the correlation engines. It is Generic/Tier2 so the tier law demotes it to observe while
-// still feeding correlation, which is exactly the observe-until-chain contract.
 
 using System;
 using System.Collections.Concurrent;

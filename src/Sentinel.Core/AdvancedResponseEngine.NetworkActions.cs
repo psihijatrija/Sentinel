@@ -11,15 +11,14 @@ using System.Threading.Tasks;
 
 namespace Sentinel.Core
 {
-    // Network / certificate response executors and P/Invoke helpers for
-    // AdvancedResponseEngine. Split out of the main file for reviewability;
-    // this is the SAME type (partial class) - no behavior change. These are the
-    // low-level host-mutation primitives; the Tier1/observe-until-chain gating that
-    // authorizes calling them lives in the decision layer in AdvancedResponseEngine.cs.
     public partial class AdvancedResponseEngine
     {
-        private void RemoveCertificateFromStore(string thumbprint)
+        private IReadOnlyList<ResponseEffect> RemoveCertificateFromStore(string thumbprint)
         {
+            var results = new List<ResponseEffect>();
+            if (string.IsNullOrWhiteSpace(thumbprint) || thumbprint.Length < 40 || !thumbprint.All(Uri.IsHexDigit))
+                return new[] { new ResponseEffect { Action = "CertificateRemoval", Target = thumbprint,
+                    Status = ResponseExecutionStatus.Refused, Detail = "Valid certificate thumbprint was not supplied." } };
             var stores = new (System.Security.Cryptography.X509Certificates.StoreName Name, System.Security.Cryptography.X509Certificates.StoreLocation Location)[]
             {
                 (System.Security.Cryptography.X509Certificates.StoreName.Root, System.Security.Cryptography.X509Certificates.StoreLocation.LocalMachine),
@@ -27,119 +26,129 @@ namespace Sentinel.Core
                 (System.Security.Cryptography.X509Certificates.StoreName.Root, System.Security.Cryptography.X509Certificates.StoreLocation.CurrentUser),
                 (System.Security.Cryptography.X509Certificates.StoreName.TrustedPublisher, System.Security.Cryptography.X509Certificates.StoreLocation.CurrentUser)
             };
-
             foreach (var (storeName, storeLocation) in stores)
             {
+                var effect = new ResponseEffect { Action = "CertificateRemoval", Target = $"{storeLocation}/{storeName}/{thumbprint}" };
                 try
                 {
-                    using var store = new System.Security.Cryptography.X509Certificates.X509Store(storeName, storeLocation);
-                    store.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadWrite);
-
-                    var certs = store.Certificates.Find(
-                        System.Security.Cryptography.X509Certificates.X509FindType.FindByThumbprint,
-                        thumbprint,
-                        validOnly: false);
-
-                    foreach (var cert in certs)
+                    using (var store = new System.Security.Cryptography.X509Certificates.X509Store(storeName, storeLocation))
                     {
-                        store.Remove(cert);
-                        _eventLogger.LogEventAsync("debug", new { Message = $"Successfully removed cert {thumbprint} from {storeName} ({storeLocation})" }).GetAwaiter().GetResult();
+                        store.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadWrite);
+                        var certs = store.Certificates.Find(System.Security.Cryptography.X509Certificates.X509FindType.FindByThumbprint,
+                            thumbprint, validOnly: false);
+                        foreach (var cert in certs) { using (cert) store.Remove(cert); }
                     }
+                    using var readBack = new System.Security.Cryptography.X509Certificates.X509Store(storeName, storeLocation);
+                    readBack.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadOnly);
+                    var remaining = readBack.Certificates.Find(System.Security.Cryptography.X509Certificates.X509FindType.FindByThumbprint,
+                        thumbprint, validOnly: false);
+                    effect.Status = remaining.Count == 0 ? ResponseExecutionStatus.Verified : ResponseExecutionStatus.Failed;
+                    effect.Detail = remaining.Count == 0 ? "Certificate absent on independent store read-back."
+                        : "Certificate remains in the store after removal.";
+                    foreach (var cert in remaining) cert.Dispose();
                 }
                 catch (Exception ex)
                 {
-                    _eventLogger.LogEventAsync("debug", new { Message = $"Failed to open/remove cert {thumbprint} from {storeName} ({storeLocation}): {ex.Message}" }).GetAwaiter().GetResult();
+                    effect.Status = ResponseExecutionStatus.Failed;
+                    effect.Detail = "Store removal/read-back failed: " + ex.Message;
                 }
+                results.Add(effect);
             }
+            return results;
         }
 
-        private void IsolateNetworkTarget(string ip, string ruleName)
+        private ResponseEffect IsolateNetworkTarget(string ip, string ruleName)
         {
+            var effect = new ResponseEffect { Action = "FirewallRules", Target = ip };
             var safeName = ip.Replace('.', '_').Replace(':', '_');
             var fwRule = $"Sentinel-Isolate-{safeName}";
-
+            int verifiedRules = 0;
             try
             {
-                // Use Windows Firewall COM API (INetFwPolicy2) instead of shelling out to netsh.
-                // This avoids Process.Start patterns that AV engines flag as malware behavior.
-                var fwPolicyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
-                if (fwPolicyType == null) return;
-                dynamic? fwPolicy = Activator.CreateInstance(fwPolicyType);
-                if (fwPolicy == null) return;
-
-                var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule");
-                if (ruleType == null) return;
-
-                // Outbound block
-                dynamic? outRule = Activator.CreateInstance(ruleType);
-                if (outRule != null)
+                var policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2")
+                    ?? throw new InvalidOperationException("Windows Firewall COM policy is unavailable.");
+                dynamic policy = Activator.CreateInstance(policyType)
+                    ?? throw new InvalidOperationException("Windows Firewall policy could not be opened.");
+                var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule")
+                    ?? throw new InvalidOperationException("Windows Firewall rule API is unavailable.");
+                foreach (int direction in new[] { 2, 1 })
                 {
-                    outRule.Name = $"{fwRule}-OUT";
-                    outRule.Description = $"Sentinel: Block outbound to {ip} ({ruleName})";
-                    outRule.Direction = 2; // NET_FW_RULE_DIR_OUT
-                    outRule.Action = 0;    // NET_FW_ACTION_BLOCK
-                    outRule.RemoteAddresses = ip;
-                    outRule.Enabled = true;
-                    outRule.Profiles = 0x7FFFFFFF; // All profiles
-                    fwPolicy.Rules.Add(outRule);
+                    dynamic rule = Activator.CreateInstance(ruleType)
+                        ?? throw new InvalidOperationException("Unable to create firewall rule.");
+                    rule.Name = fwRule + (direction == 2 ? "-OUT" : "-IN");
+                    rule.Description = $"Sentinel: Block {ip} ({ruleName})";
+                    rule.Direction = direction;
+                    rule.Action = 0;
+                    rule.RemoteAddresses = ip;
+                    rule.Enabled = true;
+                    rule.Profiles = 0x7FFFFFFF;
+                    policy.Rules.Add(rule);
+                    dynamic readBack = policy.Rules.Item((string)rule.Name);
+                    string remote = (string)readBack.RemoteAddresses;
+                    string address = remote.Split('/')[0];
+                    bool sameAddress = IPAddress.TryParse(address, out var actual) && IPAddress.TryParse(ip, out var expected) && actual.Equals(expected);
+                    if (!(bool)readBack.Enabled || (int)readBack.Action != 0 || (int)readBack.Direction != direction ||
+                        (int)readBack.Profiles != 0x7FFFFFFF || !sameAddress || (int)readBack.Protocol != 256 ||
+                        !string.IsNullOrEmpty((string)readBack.ApplicationName) || !string.IsNullOrEmpty((string)readBack.ServiceName))
+                        throw new InvalidOperationException("Installed firewall rule did not match the requested unrestricted block rule.");
+                    verifiedRules++;
                 }
-
-                // Inbound block
-                dynamic? inRule = Activator.CreateInstance(ruleType);
-                if (inRule != null)
-                {
-                    inRule.Name = $"{fwRule}-IN";
-                    inRule.Description = $"Sentinel: Block inbound from {ip} ({ruleName})";
-                    inRule.Direction = 1; // NET_FW_RULE_DIR_IN
-                    inRule.Action = 0;    // NET_FW_ACTION_BLOCK
-                    inRule.RemoteAddresses = ip;
-                    inRule.Enabled = true;
-                    inRule.Profiles = 0x7FFFFFFF;
-                    fwPolicy.Rules.Add(inRule);
-                }
+                // Installed rules alone cannot isolate traffic if the active firewall profile is disabled.
+                if ((int)policy.LocalPolicyModifyState != 0)
+                    throw new InvalidOperationException("Active firewall policy does not permit unrestricted local rule changes.");
+                int activeProfiles = (int)policy.CurrentProfileTypes;
+                if (activeProfiles == 0) throw new InvalidOperationException("Active firewall profile could not be established.");
+                foreach (int profile in new[] { 1, 2, 4 })
+                    if ((activeProfiles & profile) != 0 && !(bool)policyType.InvokeMember("FirewallEnabled",
+                        System.Reflection.BindingFlags.GetProperty, null, (object)policy, new object[] { profile })!)
+                        throw new InvalidOperationException("Firewall is disabled on an active profile.");
+                effect.Status = ResponseExecutionStatus.Verified;
+                effect.Detail = "Inbound/outbound all-protocol block rules read back correctly; active firewall profiles enabled. This verifies policy configuration, not an end-to-end connectivity test.";
             }
             catch (Exception ex)
             {
-                // Fallback: if COM fails (e.g., service not running), log and continue
-                _eventLogger.LogEventAsync("debug", new { Message = $"Firewall COM failed for {ip}: {ex.Message}" }).GetAwaiter().GetResult();
+                effect.Status = verifiedRules > 0 ? ResponseExecutionStatus.PartiallyCompleted : ResponseExecutionStatus.Failed;
+                effect.Detail = "Firewall configuration/read-back failed: " + ex.Message;
             }
+            return effect;
         }
 
-        private static void FlushDnsCache()
+        private static ResponseEffect FlushDnsCache()
         {
+            var effect = new ResponseEffect { Action = "DnsCacheCleanup", Target = "resolver" };
             try
             {
-                // DnsFlushResolverCache is a documented public API - not a shell-out
-                DnsFlushResolverCache();
+                bool succeeded = DnsFlushResolverCache() != 0;
+                effect.Status = succeeded ? ResponseExecutionStatus.Verified : ResponseExecutionStatus.Failed;
+                effect.Detail = succeeded ? "DNS resolver API confirmed synchronous cache flush." : "DNS resolver API reported failure.";
             }
-            catch { }
+            catch (Exception ex) { effect.Status = ResponseExecutionStatus.Failed; effect.Detail = ex.Message; }
+            return effect;
         }
 
-        /// <summary>
-        /// v1.8.1: Drop a single IPv4 ARP cache entry without shelling to <c>arp.exe</c>.
-        /// Restores NetworkIsolate parity with v5.9.0 (firewall + ARP + DNS flush).
-        /// </summary>
-        private static void FlushArpEntry(string ip)
+        private static ResponseEffect FlushArpEntry(string ip)
         {
+            var effect = new ResponseEffect { Action = "ArpCacheCleanup", Target = ip };
             try
             {
-                if (!IPAddress.TryParse(ip, out var addr) ||
-                    addr.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
-                    return;
-
-                var ipBytes = addr.GetAddressBytes();
-                uint ipInt = BitConverter.ToUInt32(ipBytes, 0);
-                if (GetBestInterface(ipInt, out int ifIndex) != 0)
-                    return;
-
-                var row = new MibIpNetRow
+                if (!IPAddress.TryParse(ip, out var addr)) throw new ArgumentException("Invalid ARP target.");
+                if (addr.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
                 {
-                    dwIndex = ifIndex,
-                    dwAddr = unchecked((int)ipInt)
-                };
-                DeleteIpNetEntry(ref row);
+                    effect.Status = ResponseExecutionStatus.Verified;
+                    effect.Detail = "No IPv4 ARP entry applies to this IPv6 target.";
+                    return effect;
+                }
+                uint ipInt = BitConverter.ToUInt32(addr.GetAddressBytes(), 0);
+                int routeStatus = GetBestInterface(ipInt, out int ifIndex);
+                if (routeStatus != 0) throw new InvalidOperationException("Interface lookup failed: " + routeStatus);
+                var row = new MibIpNetRow { dwIndex = ifIndex, dwAddr = unchecked((int)ipInt) };
+                int status = DeleteIpNetEntry(ref row);
+                effect.Status = status == 0 || status == 1168 ? ResponseExecutionStatus.Verified : ResponseExecutionStatus.Failed;
+                effect.Detail = status == 0 ? "IP helper API confirmed synchronous entry deletion."
+                    : status == 1168 ? "ARP entry already absent." : "ARP deletion failed: " + status;
             }
-            catch { }
+            catch (Exception ex) { effect.Status = ResponseExecutionStatus.Failed; effect.Detail = ex.Message; }
+            return effect;
         }
 
         [DllImport("dnsapi.dll", EntryPoint = "DnsFlushResolverCache")]

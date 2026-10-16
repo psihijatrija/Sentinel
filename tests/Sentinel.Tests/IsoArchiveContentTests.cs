@@ -10,20 +10,6 @@ using Sentinel.Core;
 
 namespace Sentinel.Tests
 {
-    /// <summary>
-    /// v2.8.4: Tests for bounded, bomb-safe archive / disk-image content inspection
-    /// (ArchiveContentInspector) and the newly-wired ISO isolation-response path
-    /// (AdvancedResponseEngine.DismountVolume -> IsolationResponseEngine).
-    ///
-    /// Covers the docs/constraints.md testing requirements for the new/changed surface:
-    ///   (1) new Tier2 content signal returns Tier2Indicator and is LogOnly even with
-    ///       ActiveResponse=true (Tier2 log-only contract);
-    ///   (2) the new destructive DismountVolume action is gated by observe-until-chain
-    ///       (default-deny: no multi-signal chain -> LogOnly);
-    ///   (3) a Tier1 chain-authorized DismountVolume fires the containment branch;
-    ///   (4) the inspector is fail-closed and bomb-safe (a decompression bomb is flagged,
-    ///       never expanded to exhaustion).
-    /// </summary>
     public class ArchiveContentInspectorTests : IDisposable
     {
         private readonly string _tempDir;
@@ -178,9 +164,9 @@ namespace Sentinel.Tests
         }
 
         private (AdvancedResponseEngine engine, JsonlEventLogger logger, string logPath) BuildEngine(
-            bool observeUntilChain, IsolationResponseEngine? iso = null)
+            IsolationResponseEngine? iso = null)
         {
-            var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = observeUntilChain };
+            var config = new SentinelConfig { ActiveResponse = true };
             var metrics = new SentinelMetrics();
             var logPath = Path.Combine(_tempDir, "events_" + Guid.NewGuid().ToString("N")[..6] + ".jsonl");
             var logger = new JsonlEventLogger(logPath);
@@ -193,7 +179,7 @@ namespace Sentinel.Tests
         public async Task DismountVolume_Tier2_IsLogOnly_EvenWithActiveResponse()
         {
             // Tier2 log-only contract: a Tier2 indicator authoring DismountVolume must never act.
-            var (engine, logger, logPath) = BuildEngine(observeUntilChain: false);
+            var (engine, logger, logPath) = BuildEngine();
             var detection = new DetectionEvent
             {
                 RuleName = "Content Smuggling: Payload in Disk Image",
@@ -212,18 +198,10 @@ namespace Sentinel.Tests
             Assert.DoesNotContain("ISO_KILL_DISMOUNT_DELETE", log);
         }
 
-        // v2.9.4: observe-until-chain removed as a settable mode; no-chain LogOnly scenario no longer exists
-        // (DismountVolume_ObserveUntilChain_NoChain_IsLogOnly deleted). A Tier1 kill-grade detection now
-        // fires the containment branch, so the "observe -> LogOnly" scenario it asserted cannot occur.
-        // The non-observe counterparts (Tier2 LogOnly, Tier1 kill/containment) remain below.
-
         [Fact]
         public async Task DismountVolume_Tier1_NoIsoOriginResolved_DegradesToKillOnly()
         {
-            // With ObserveUntilChain off, a Tier1 DismountVolume fires the containment branch.
-            // The PID does not exist and no ISO backs it, so it must degrade to a plain kill and
-            // NEVER dismount/delete an unrelated volume.
-            var (engine, logger, logPath) = BuildEngine(observeUntilChain: false);
+            var (engine, logger, logPath) = BuildEngine();
             var detection = new DetectionEvent
             {
                 RuleName = "Isolation: ISO-hosted Confirmed Reverse Shell",
@@ -239,7 +217,8 @@ namespace Sentinel.Tests
 
             var log = File.ReadAllText(logPath);
             // Branch was taken (kill), but no volume mutation happened (ISO origin unresolved).
-            Assert.Contains("\"ActionTaken\":\"KILL\"", log);
+            Assert.Contains("\"VerifiesRequestedAction\":false", log);
+            Assert.DoesNotContain("\"ActionTaken\":\"KILL\"", log);
             Assert.Contains("ISO origin unresolved", log);
             Assert.DoesNotContain("ISO_KILL_DISMOUNT_DELETE", log);
         }
@@ -251,7 +230,7 @@ namespace Sentinel.Tests
             var iso = new IsolationResponseEngine(
                 NullLogger<IsolationResponseEngine>.Instance,
                 new JsonlEventLogger(Path.Combine(_tempDir, "iso1.jsonl")));
-            var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
+            var (engine, logger, logPath) = BuildEngine(iso: iso);
 
             var detection = new DetectionEvent
             {
@@ -272,22 +251,13 @@ namespace Sentinel.Tests
             Assert.DoesNotContain("Docker containment", log);
         }
 
-        // v2.9.4: observe-until-chain removed as a settable mode; no-chain LogOnly scenario no longer exists
-        // (DockerContainment_ObserveUntilChain_NoChain_IsLogOnly deleted). A Tier1 kill-grade container
-        // escape now fires the containment branch, so the "observe -> LogOnly" scenario cannot occur.
-        // The non-observe counterparts (Tier2 LogOnly, Tier1 chain-authorized containment) remain below.
-
         [Fact]
         public async Task DockerContainment_Tier1_ChainAuthorized_TakesKillAndAttemptsContainment()
         {
-            // ObserveUntilChain off + Tier1 kill-grade + ContainerId + wired IsolationResponseEngine:
-            // the process kill fires (safe no-op PID) and Docker containment is attempted (docker.exe
-            // absent -> harmless failure inside the engine's try/catch). The response is logged KILL
-            // with a Docker-containment reason.
             var iso = new IsolationResponseEngine(
                 NullLogger<IsolationResponseEngine>.Instance,
                 new JsonlEventLogger(Path.Combine(_tempDir, "iso3.jsonl")));
-            var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
+            var (engine, logger, logPath) = BuildEngine(iso: iso);
 
             var detection = new DetectionEvent
             {
@@ -304,7 +274,8 @@ namespace Sentinel.Tests
             await logger.DisposeAsync();
 
             var log = File.ReadAllText(logPath);
-            Assert.Contains("\"ActionTaken\":\"KILL\"", log);
+            Assert.Contains("\"VerifiesRequestedAction\":false", log);
+            Assert.DoesNotContain("\"ActionTaken\":\"KILL\"", log);
             Assert.Contains("Docker containment", log);
         }
 
@@ -314,7 +285,7 @@ namespace Sentinel.Tests
             var iso = new IsolationResponseEngine(
                 NullLogger<IsolationResponseEngine>.Instance,
                 new JsonlEventLogger(Path.Combine(_tempDir, "iso4.jsonl")));
-            var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
+            var (engine, logger, logPath) = BuildEngine(iso: iso);
 
             var detection = new DetectionEvent
             {
@@ -335,7 +306,8 @@ namespace Sentinel.Tests
             await logger.DisposeAsync();
 
             var log = File.ReadAllText(logPath);
-            Assert.Contains("\"ActionTaken\":\"KILL\"", log);
+            Assert.Contains("\"VerifiesRequestedAction\":false", log);
+            Assert.DoesNotContain("\"ActionTaken\":\"KILL\"", log);
             Assert.Contains("VM containment", log);
         }
 
@@ -353,7 +325,7 @@ namespace Sentinel.Tests
                 NullLogger<IsolationResponseEngine>.Instance,
                 new JsonlEventLogger(Path.Combine(_tempDir, "iso_events.jsonl")));
 
-            var (engine, logger, logPath) = BuildEngine(observeUntilChain: false, iso: iso);
+            var (engine, logger, logPath) = BuildEngine(iso: iso);
             var detection = new DetectionEvent
             {
                 RuleName = "Isolation: ISO-hosted Confirmed C2 Beacon",
@@ -369,7 +341,9 @@ namespace Sentinel.Tests
             await logger.DisposeAsync();
 
             var log = File.ReadAllText(logPath);
-            Assert.Contains("ISO_KILL_DISMOUNT_DELETE", log);
+            Assert.Contains("\"Status\":\"Attempted\"", log);
+            Assert.Contains("\"VerifiesRequestedAction\":false", log);
+            Assert.DoesNotContain("\"ActionTaken\":\"ISO_KILL_DISMOUNT_DELETE\"", log);
         }
     }
 }

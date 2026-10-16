@@ -62,7 +62,7 @@ $payload = [IO.File]::ReadAllText("pack.unsigned.json")
 - Each rule becomes an `ICorrelationRule` (`FragmentCorrelationRule`).
 - All `requiredFragments` must appear (case-insensitive substring) in **distinct** rule names already buffered for the same PID.
 - Match emits a chain-confirmed composite: `Rule Pack: {name}`.
-- Still subject to `ObserveUntilChain` / `ResponsePolicy` / product posture.
+- Still subject to `ResponsePolicy` classification, Tier2 log-only enforcement and product posture.
 
 ## Security notes
 

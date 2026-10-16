@@ -31,7 +31,7 @@ namespace Sentinel.Tests
             _ancestryCache = new ProcessAncestryCache();
             _quarantineManager = new QuarantineManager(Path.Combine(_tempDir, "quarantine"));
             _eventLogger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
-            _config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            _config = new SentinelConfig { ActiveResponse = true };
             _tracer = new ChainTracer(_ancestryCache, _quarantineManager, _eventLogger, _config, NullLogger<ChainTracer>.Instance);
         }
 
@@ -65,14 +65,8 @@ namespace Sentinel.Tests
         [Fact]
         public async Task TraceAndRespond_ActiveResponseCannotBeDisabled_StillRespondsToTier1()
         {
-            // v2.9.4: There is no off switch for response. ActiveResponse's setter is a no-op
-            // (Models.cs) and ObserveUntilChain now defaults false, so an attempt to disable
-            // response via config must be ignored and a Tier1 kill-grade detection must still
-            // be actioned. This guards against the "switch to turn defense off" regression:
-            // config-driven disarming must never resurrect.
             var config = new SentinelConfig { ActiveResponse = false }; // no-op setter; stays true
             Assert.True(config.ActiveResponse); // proves the off switch is dead
-            Assert.False(config.ObserveUntilChain); // armed default, not observe-only
 
             var tracer = new ChainTracer(_ancestryCache, _quarantineManager, _eventLogger, config, NullLogger<ChainTracer>.Instance);
 
@@ -90,11 +84,10 @@ namespace Sentinel.Tests
 
             Assert.NotNull(result);
             Assert.True(result.Success);
-            // Response is armed regardless of the attempted disable: the kill-grade Tier1
-            // ransomware detection is acted on (the PID does not exist, so the recorded
-            // KilledProcesses entry reflects the attempt against the target PID).
-            Assert.NotEmpty(result.KilledProcesses);
-            Assert.Contains(result.KilledProcesses, k => k.ProcessId == 99998);
+            // Tracing can complete while containment remains unverified. A nonexistent
+            // target is never counted as a process that Sentinel killed.
+            Assert.Empty(result.KilledProcesses);
+            Assert.Contains(result.ProcessContainments, c => c.RootProcessId == 99998 && !c.Success);
         }
 
         [Fact]

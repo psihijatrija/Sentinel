@@ -33,7 +33,7 @@ namespace Sentinel.Agent
         private Thread? _uiThread;
         private readonly CancellationTokenSource _cts = new();
         private readonly string _version;
-        private (string RuleName, string ProcessName, double Confidence, string Evidence)? _pendingDetection;
+        private (string RuleName, string ProcessName, double Confidence, string Evidence, int ProcessId)? _pendingDetection;
         private AgentDashboardForm? _settingsForm;
 
         public TrayIconService(QuarantineManager quarantine)
@@ -336,7 +336,7 @@ namespace Sentinel.Agent
                                             tierVal = tierProp.GetInt32();
 
                                         if (tierVal == 0)
-                                            _pendingDetection = (ruleName, processName, confidence, evidence);
+                                            _pendingDetection = (ruleName, processName, confidence, evidence, data.GetProperty("ProcessId").GetInt32());
                                     }
                                     catch { }
                                 }
@@ -348,11 +348,16 @@ namespace Sentinel.Agent
                                         var data = doc.RootElement.GetProperty("data");
                                         var actionTaken = data.GetProperty("ActionTaken").GetString() ?? "";
 
-                                        if (_pendingDetection.HasValue &&
+                                        bool verified = data.TryGetProperty("Execution", out var execution) &&
+                                            execution.ValueKind == JsonValueKind.Object &&
+                                            execution.TryGetProperty("VerifiesRequestedAction", out var verifiedFlag) &&
+                                            verifiedFlag.ValueKind == JsonValueKind.True;
+                                        if (_pendingDetection.HasValue && verified &&
+                                            data.GetProperty("ProcessId").GetInt32() == _pendingDetection.Value.ProcessId &&
                                             (actionTaken == "KILL" || actionTaken == "QUARANTINE_AND_KILL" ||
                                              actionTaken == "NETWORK_ISOLATE" || actionTaken == "REMOVE_CERT_AND_KILL_ADDER"))
                                         {
-                                            var (ruleName, processName, confidence, evidence) = _pendingDetection.Value;
+                                            var (ruleName, processName, confidence, evidence, _) = _pendingDetection.Value;
 
                                             var cacheKey = $"{ruleName}:{processName}";
                                             if (shownCache.TryGetValue(cacheKey, out var lastShown))

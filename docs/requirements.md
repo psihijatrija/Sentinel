@@ -159,13 +159,13 @@ The system must implement two correlation engines that fire composite detections
 
 | Action | Condition |
 |--------|-----------|
-| Log detection + log response (`LogOnly`) | Always for Tier2; consultant signals; ActiveResponse disabled (lab); allowlist demotion; IDE host protection; observe-until-chain pending |
-| Kill process / process tree | Tier1 with kill authority when `ActiveResponse=true` and chain confirmed; rate-limited (`MaxKillsPerMinute`, default 15) |
+| Log detection + log response (`LogOnly`) | Always for Tier2; consultant signals; ActiveResponse disabled (lab); allowlist demotion; IDE host protection |
+| Kill process / process tree | Authorized high-confidence Tier1 with kill authority; no second signal is required; rate-limited (`MaxKillsPerMinute`, default 15) |
 | Quarantine / QuarantineAndKill | DPAPI machine-scope under `%ProgramData%\Sentinel\Quarantine`; refuse OS-critical paths; max 128 MB; production ACL SYSTEM+Admins |
 | NetworkIsolate | Public C2 IP only: firewall block (COM), DNS flush, ARP entry purge (native). Skip private/LAN/link-local/multicast/CDN resolvers. Rate-limited (`MaxNetworkIsolatesPerMinute`, default 10) |
 | RemoveCert / RemoveCertAndKillAdder | Planted / high-confidence rogue certificates |
 | RemoveRegistryEntry | Malicious autorun / service / COM persistence |
-| DismountVolume (wired v2.8.4) | Chain-confirmed Tier1 kill whose process runs from a mounted ISO -> `IsolationResponseEngine.HandleIsoThreatAsync`: kill process tree, `Dismount-DiskImage`, delete backing `.iso`. ISO origin resolved from non-attacker-controllable anchors (OS-recorded mounted-image + process image path); degrades to plain kill (never dismounts an unrelated volume) if origin unconfirmed. Also drives Docker (`HandleDockerThreatAsync`, via `ContainerId`) and VM (`HandleVmThreatAsync`, via VM host PID) containment alongside the kill. VHD/SUBST fallback drives are dismounted by `VolumeMountMonitor` |
+| DismountVolume (wired v2.8.4) | Authorized Tier1 kill whose process runs from a mounted ISO -> `IsolationResponseEngine.HandleIsoThreatAsync`: kill process tree, `Dismount-DiskImage`, delete backing `.iso`. ISO origin resolved from non-attacker-controllable anchors (OS-recorded mounted-image + process image path); degrades to plain kill (never dismounts an unrelated volume) if origin unconfirmed. Also drives Docker (`HandleDockerThreatAsync`, via `ContainerId`) and VM (`HandleVmThreatAsync`, via VM host PID) containment alongside the kill. VHD/SUBST fallback drives are dismounted by `VolumeMountMonitor` |
 | VpnShieldUp (v2.6.0) | Confirmed local network tamper: raise a userland RAS VPN tunnel (visible; no kernel), clean the path (unbridge / re-enable adapters / restore DNS), verify clean, then drop the tunnel. Fail-safe: hold tunnel if not verified clean. Non-kill (ordered below KillProcess). Gated on `VpnShield.Enabled` (`ProductPosture.AllowsVpnShield`, default off); prefers trusted `ProviderProfile`, VPN Gate fallback only if opted in |
 
 **ActiveResponse model:**
@@ -173,7 +173,6 @@ The system must implement two correlation engines that fire composite detections
 | Source | Behavior |
 |--------|----------|
 | `Sentinel:ActiveResponse` | Default **true** in config and install |
-| `Sentinel:ObserveUntilChain` | Default **true** - demotes all kill/quarantine/isolate to LogOnly until multi-signal chain confirms terminal attack |
 | `Sentinel:ChainConfirmMinSignals` | Default **2** - distinct rules on same PID within window required |
 | `Sentinel:ChainConfirmWindowSeconds` | Default **300** - rolling correlation window |
 | `Sentinel:SilentObserve` | Default **true** - no toasts or auto evidence packs until chain-confirmed |
@@ -285,7 +284,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 
 - `Sentinel:MitmDefense` opt-in suite for post-incident MitM attack response
 - Default `Enabled: false` on clean installs
-- When enabled: `TlsCertificateMonitor` removes high-confidence planted roots immediately; `GhostProcessMonitor` kills invisible/empty-name PID -> Cast without the normal 2-scan wait; `CastDeviceGuard` auto-blocks rogue Cast by IOC MAC prefix and known IPs; `NullSessionGuard` blocks FCM TCP 5228; `AdvancedResponseEngine` exempts MitmDefense actions from ObserveUntilChain demotion
+- When enabled: `TlsCertificateMonitor` removes high-confidence planted roots immediately; `GhostProcessMonitor` kills invisible/empty-name PID -> Cast without the normal 2-scan wait; `CastDeviceGuard` auto-blocks rogue Cast by IOC MAC prefix and known IPs; `NullSessionGuard` blocks FCM TCP 5228; `AdvancedResponseEngine` applies the MITM-specific authorization checks
 - Config fields: `Enabled`, `RemovePlantedCerts`, `BlockFcmPushChannel`, `AutoBlockRogueCast`, `RogueCastMacPrefixes`, `KnownRogueCastIps`
 
 ### FR-24: Autonomous suspicious-root guard (v3.0.4)
@@ -360,7 +359,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 - Never quarantine OS-critical / WRP paths
 - Never NetworkIsolate private/LAN addresses
 - Weak single-signal heuristics (shell+port, Downloads network, SeImpersonate alone, bulk-transfer tools, System32 redistributable writes) must be LogOnly - never kill seeds
-- DLL unloaders (`DllUnloadEngine`) exempt from observe-until-chain: FreeLibrary on identity failure; quarantine hijack-name plants on drop (file only, never kill the host from that path)
+- DLL remediation (`DllUnloadEngine`) uses process-tree containment for mapped hostile modules and disk quarantine. A disk plant alone does not authorize killing its writer. Reports distinguish verified exits, actual quarantine, already absent sources, deferred removal and failure.
 
 ### NFR-2: Reliability
 - Monitors must fail independently - one monitor failure must not crash the service
@@ -407,7 +406,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 | 1.7.9 | Agent Settings UI requirements added |
 | 1.8.1 | ActiveResponse defaults, response matrix, proxy auth, quarantine ACL, no DeceptionEngine, dedup windows, isolate private-IP deny |
 | 1.8.3 | Observe-first: protect on confirmed attack; weak path/port/shell heuristics LogOnly; IPSec attack-only by default; `RestrictivePortHardening` opt-in full lockdown |
-| 1.9.3 | Observe-until-chain chain-confirm model; silent observe; chain-confirmed packs always; weak seed never chain-nuke |
+| 1.9.3 | Tier1 response authorization chain-confirm model; silent observe; chain-confirmed packs always; weak seed never chain-nuke |
 | 1.9.4 | Digital coercion / surveillance toolkit composites; Safety UI page; platform-agnostic host-tool scope |
 | 1.9.5 | Windows Event Log trail (critical only); graceful degradation on barebone Windows |
 | 1.9.7 | Work-first posture law; ProductPosture gate; proactive host mutation default-deny |

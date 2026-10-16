@@ -717,7 +717,7 @@ function renderEvents(events, containerId) {{
         try {{ parsed = JSON.parse(ev.data || JSON.stringify(ev)); }} catch(e) {{ parsed = ev; }}
         var type = parsed.type || ev.type || 'info';
         var ts = parsed.timestamp || ev.timestamp || '';
-        var title = '', detail = '';
+        var title = '', detail = '', responseStatus = '', responseVerified = false;
         if (parsed.data) {{
             var d = parsed.data;
             title = d.RuleName || d.ActionTaken || type;
@@ -726,13 +726,25 @@ function renderEvents(events, containerId) {{
                 title = (d.Scope || 'Integrity') + ': ' + (d.Change || 'Observation');
                 detail = (d.ObjectId || '') + ' - ' + (d.Attribution || 'Attribution unknown');
             }}
-            if (type === 'response' && d.Reason) detail += ' - ' + d.Reason;
+            if (type === 'response' || type === 'response_result') {{
+                var receipt = d.Execution || (type === 'response_result' ? d : null);
+                responseStatus = receipt ? receipt.Status : '';
+                responseVerified = receipt && receipt.Status === 'Verified' && receipt.VerifiesRequestedAction === true;
+                title = 'Response: ' + (responseStatus || 'Unverified legacy record');
+                detail += ' - ' + (d.Reason || (receipt && receipt.Reason) || '');
+                if (receipt && receipt.Effects) {{
+                    for (var j = 0; j < receipt.Effects.length; j++) {{
+                        var effect = receipt.Effects[j];
+                        detail += ' | ' + effect.Action + ': ' + effect.Status + ' - ' + effect.Detail;
+                    }}
+                }}
+            }}
             if (d.Metadata && d.Metadata.CorrelationDecision) detail += ' - Correlation: ' + d.Metadata.CorrelationDecision;
         }} else {{
             title = type;
         }}
-        var iconClass = type === 'detection' ? 'detection' : type === 'response' ? 'response' : 'info';
-        var icon = type === 'detection' ? '!' : type === 'response' ? '\u2713' : '\u2022';
+        var iconClass = type === 'detection' ? 'detection' : responseVerified ? 'response' : 'info';
+        var icon = type === 'detection' ? '!' : responseVerified ? '\u2713' : '\u2022';
         var timeStr = '';
         if (ts) {{ try {{ timeStr = new Date(ts).toLocaleTimeString(); }} catch(e) {{}} }}
         html += '<div class=""event-item""><div class=""event-icon ' + iconClass + '"">' + icon + '</div><div class=""event-body""><div class=""event-title"">' + esc(title) + '</div><div class=""event-detail"">' + esc(detail) + '</div></div><div class=""event-time"">' + esc(timeStr) + '</div></div>';

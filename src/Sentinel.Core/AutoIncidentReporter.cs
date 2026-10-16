@@ -123,7 +123,7 @@ namespace Sentinel.Core
         /// Evaluates a detection and, when policy matches, builds an evidence pack
         /// and optionally submits indicators to TI platforms. Never throws.
         /// </summary>
-        public async Task HandleDetectionAsync(DetectionEvent detection, Incident? incident = null)
+        public async Task HandleDetectionAsync(DetectionEvent detection, Incident? incident = null, ResponseExecutionResult? execution = null)
         {
             if (!_config.Enabled || detection == null)
                 return;
@@ -153,7 +153,7 @@ namespace Sentinel.Core
                 string? packPath = null;
                 if (_config.GenerateLocalEvidencePack)
                 {
-                    packPath = await WriteEvidencePackAsync(detection, incident).ConfigureAwait(false);
+                    packPath = await WriteEvidencePackAsync(detection, incident, execution).ConfigureAwait(false);
                     Interlocked.Increment(ref _packsGenerated);
                     try
                     {
@@ -436,7 +436,7 @@ namespace Sentinel.Core
             return true;
         }
 
-        private async Task<string> WriteEvidencePackAsync(DetectionEvent detection, Incident? incident)
+        private async Task<string> WriteEvidencePackAsync(DetectionEvent detection, Incident? incident, ResponseExecutionResult? execution)
         {
             var timestamp = DateTime.UtcNow;
             var safeRule = SanitizeFileToken(detection.RuleName, 48);
@@ -496,6 +496,11 @@ namespace Sentinel.Core
             report.AppendLine($"  Tier:              {detection.Tier}");
             report.AppendLine($"  Confidence:        {detection.Confidence:F2}");
             report.AppendLine($"  Authorized Action: {detection.AuthorizedResponse}");
+            report.AppendLine($"  Recorded outcome:  {execution?.Status.ToString() ?? "Unverified - no executor receipt"}");
+            report.AppendLine($"  Request verified:  {execution?.VerifiesRequestedAction ?? false}");
+            if (execution != null)
+                foreach (var effect in execution.Effects)
+                    report.AppendLine($"    {effect.Action}: {effect.Status} - {effect.Detail}");
             report.AppendLine($"  Kill Authorized:   {detection.KillAuthorized}");
             report.AppendLine($"  Attack Character:  {IsAttackCharacter(detection)}");
             report.AppendLine($"  Coercion toolkit:  {CoercionAbusePolicy.IsDigitalCoercionToolkit(detection)}");
@@ -632,11 +637,14 @@ namespace Sentinel.Core
                 Path.Combine(reportDir, "indicators.txt"),
                 summary.ToString(), Encoding.UTF8).ConfigureAwait(false);
 
-            await WriteChainOfCustodyAsync(reportDir, reportId, detection, incident, sealedAt).ConfigureAwait(false);
+            if (execution != null)
+                await System.IO.FileNet48.WriteAllTextAsync(Path.Combine(reportDir, "response_execution.json"),
+                    JsonSerializer.Serialize(execution), Encoding.UTF8).ConfigureAwait(false);
+            await WriteChainOfCustodyAsync(reportDir, reportId, detection, incident, sealedAt, execution).ConfigureAwait(false);
 
             if (_config.IncludeVictimAffidavit)
             {
-                await WriteVictimAffidavitAsync(reportDir, reportId, detection, portal, sealedAt).ConfigureAwait(false);
+                await WriteVictimAffidavitAsync(reportDir, reportId, detection, portal, sealedAt, execution).ConfigureAwait(false);
             }
 
             if (_config.IncludeIntegrityManifest)
@@ -668,7 +676,7 @@ namespace Sentinel.Core
         }
 
         private async Task WriteChainOfCustodyAsync(
-            string reportDir, string reportId, DetectionEvent detection, Incident? incident, DateTime sealedAt)
+            string reportDir, string reportId, DetectionEvent detection, Incident? incident, DateTime sealedAt, ResponseExecutionResult? execution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("SENTINEL - CHAIN OF CUSTODY");
@@ -684,8 +692,8 @@ namespace Sentinel.Core
             if (incident != null)
             {
                 sb.AppendLine($"  {incident.CreatedAt.UtcDateTime:yyyy-MM-dd HH:mm:ss}  Incident {incident.Id} opened (severity={incident.Severity})");
-                if (incident.RespondedAt.HasValue)
-                    sb.AppendLine($"  {incident.RespondedAt.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss}  Automated response: {incident.ResponseAction ?? detection.AuthorizedResponse.ToString()}");
+                if (execution?.CompletedAt != null)
+                    sb.AppendLine($"  {execution.CompletedAt.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss}  Response outcome: {execution.Status}; requested={execution.RequestedAction}; verified={execution.VerifiesRequestedAction}");
             }
             sb.AppendLine($"  {sealedAt:yyyy-MM-dd HH:mm:ss}  Evidence pack written and integrity seal applied");
             sb.AppendLine();
@@ -714,7 +722,7 @@ namespace Sentinel.Core
             string reportId,
             DetectionEvent detection,
             LawEnforcementPortals.PortalEntry portal,
-            DateTime sealedAt)
+            DateTime sealedAt, ResponseExecutionResult? execution)
         {
             var name = _config.VictimFullName ?? "________________________________";
             var email = _config.VictimEmail ?? "________________________________";
@@ -752,13 +760,15 @@ namespace Sentinel.Core
             sb.AppendLine("   I state that, on or about the detection time above, the computer system identified");
             sb.AppendLine("   in this pack was the subject of suspected unauthorized access, malware activity,");
             sb.AppendLine("   or computer interference. Sentinel (endpoint security software) automatically");
-            sb.AppendLine("   detected the activity, applied a defensive response where authorized, and");
+            sb.AppendLine("   detected the activity, recorded the available defensive-response evidence, and");
             sb.AppendLine("   generated the accompanying integrity-sealed evidence package.");
             sb.AppendLine();
             sb.AppendLine($"   Observed rule / behaviour: {detection.RuleName}");
             sb.AppendLine($"   Process involved:          {detection.ProcessName} (PID {detection.ProcessId})");
             sb.AppendLine($"   Confidence score:          {detection.Confidence:F2}");
-            sb.AppendLine($"   Automated response:        {detection.AuthorizedResponse}");
+            sb.AppendLine($"   Requested response:        {detection.AuthorizedResponse}");
+            sb.AppendLine($"   Recorded outcome:          {execution?.Status.ToString() ?? "Unverified - no executor receipt"}");
+            sb.AppendLine($"   Request verified:          {execution?.VerifiesRequestedAction ?? false}");
             sb.AppendLine();
             sb.AppendLine("   Additional narrative (what I noticed, financial loss, data stolen, etc.):");
             sb.AppendLine("   ___________________________________________________________________________");

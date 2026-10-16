@@ -16,7 +16,7 @@ namespace Sentinel.Tests
             // v2.5.5: RestrictivePortHardening is always true.
             Assert.True(c.RestrictivePortHardening);
             // v2.9.4: armed-by-default posture
-            Assert.False(c.ObserveUntilChain);
+
             Assert.True(c.SilentObserve);
             // v3.0.3: work-first dropped - descriptor-fail USB is auto-disabled by default.
             Assert.True(c.AutoDisableFailedUsbEnumeration);

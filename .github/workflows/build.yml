@@ -30,6 +30,9 @@ jobs:
       working-directory: worker
       run: npm test
 
+    - name: Dashboard response rendering tests
+      run: node --test tests/dashboard-response.test.cjs
+
     - name: Restore dependencies
       run: dotnet restore Sentinel.sln
 

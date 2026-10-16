@@ -25,8 +25,7 @@ namespace Sentinel.Tests
             Assert.Equal(10, config.MaxNetworkIsolatesPerMinute);
             // v2.0.4: EnforceActiveResponse defaults to true (red team audit CRIT-3)
             Assert.True(config.EnforceActiveResponse);
-            // v2.9.4: armed-by-default - single-signal Tier1 response (no observe-until-chain)
-            Assert.False(config.ObserveUntilChain);
+
             Assert.True(config.SilentObserve);
             Assert.True(config.AutoDisableFailedUsbEnumeration); // v3.0.3: work-first dropped - auto-disable descriptor-fail USB
             Assert.Empty(config.TrustedCastDevices);

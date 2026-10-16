@@ -17,7 +17,7 @@ namespace Sentinel.Tests
             Directory.CreateDirectory(tempDir);
             try
             {
-                var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+                var config = new SentinelConfig { ActiveResponse = true };
                 var metrics = new SentinelMetrics();
                 var logPath = Path.Combine(tempDir, "events.jsonl");
                 var logger = new JsonlEventLogger(logPath);
@@ -72,7 +72,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task HandleAsync_Tier1CertificateDetection_TriggersAction()
+        public async Task HandleAsync_InvalidCertificateThumbprint_IsRefused()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "sentinel_are_test2_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(tempDir);
@@ -81,7 +81,6 @@ namespace Sentinel.Tests
                 var config = new SentinelConfig
                 {
                     ActiveResponse = true,
-                    ObserveUntilChain = false,
                     MitmDefense = new MitmDefenseConfig { Enabled = true, RemovePlantedCerts = true }
                 };
                 var metrics = new SentinelMetrics();
@@ -103,26 +102,19 @@ namespace Sentinel.Tests
                     ProcessId = 1234,
                     Metadata = new Dictionary<string, string>
                     {
-                        { "CertThumbprint", "1234567890ABCDEF1234567890ABCDEF12345678" }
+                        { "CertThumbprint", "invalid-thumbprint" }
                     }
                 };
 
-                await engine.HandleAsync(detection);
+                var execution = await engine.HandleAsync(detection);
                 await logger.DisposeAsync();
 
-                // Read logged response event
-                var logLines = File.ReadAllLines(logPath);
-                bool foundRemoveCertAction = false;
+                Assert.Equal(ResponseExecutionStatus.Refused, execution.Status);
+                Assert.False(execution.VerifiesRequestedAction);
+                var log = File.ReadAllText(logPath);
+                Assert.Contains("RESPONSE_REFUSED", log);
+                Assert.DoesNotContain("\"ActionTaken\":\"REMOVE_CERT\"", log);
 
-                foreach (var line in logLines)
-                {
-                    if (line.Contains("\"ActionTaken\":\"REMOVE_CERT\""))
-                    {
-                        foundRemoveCertAction = true;
-                    }
-                }
-
-                Assert.True(foundRemoveCertAction, "Active response REMOVE_CERT action was not taken on Tier1 Behavioral detection.");
             }
             finally
             {
@@ -137,7 +129,7 @@ namespace Sentinel.Tests
             Directory.CreateDirectory(tempDir);
             try
             {
-                var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+                var config = new SentinelConfig { ActiveResponse = true };
                 var metrics = new SentinelMetrics();
                 var logPath = Path.Combine(tempDir, "events.jsonl");
                 var logger = new JsonlEventLogger(logPath);
@@ -213,7 +205,7 @@ namespace Sentinel.Tests
         {
             _tempDir = Path.Combine(Path.GetTempPath(), "sentinel_are_ext_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(_tempDir);
-            _config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            _config = new SentinelConfig { ActiveResponse = true };
             _metrics = new SentinelMetrics();
             var logPath = Path.Combine(_tempDir, "events.jsonl");
             _logger = new JsonlEventLogger(logPath);
@@ -240,7 +232,7 @@ namespace Sentinel.Tests
         public void ActiveResponse_CannotBeDisabled_ViaConfig()
         {
             // v2.0.4+: ActiveResponse is always armed (no off switch). Setter is a no-op.
-            var config = new SentinelConfig { ActiveResponse = false, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = false };
             Assert.True(config.ActiveResponse);
             config.ActiveResponse = false;
             Assert.True(config.ActiveResponse);
@@ -282,7 +274,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task HandleAsync_NetworkIsolation_Tier1_LogsNetworkIsolateAction()
+        public async Task HandleAsync_NetworkIsolation_PrivateTarget_IsRefused()
         {
             var detection = new DetectionEvent
             {
@@ -298,10 +290,12 @@ namespace Sentinel.Tests
                 }
             };
 
-            await _engine.HandleAsync(detection);
+            var execution = await _engine.HandleAsync(detection);
 
             var log = ReadLog();
-            Assert.Contains("\"ActionTaken\":\"NETWORK_ISOLATE\"", log);
+            Assert.Equal(ResponseExecutionStatus.Refused, execution.Status);
+            Assert.False(execution.VerifiesRequestedAction);
+            Assert.Contains("RESPONSE_REFUSED", log);
             Assert.Contains("192.168.1.100", log);
         }
 
@@ -323,41 +317,53 @@ namespace Sentinel.Tests
                 }
             };
 
-            await _engine.HandleAsync(detection);
+            var execution = await _engine.HandleAsync(detection);
 
             var log = ReadLog();
-            // Should still log the action, but the IP validation prevents actual firewall rule
-            Assert.Contains("NETWORK_ISOLATE", log);
+            // A rejected destination must never be reported as isolated.
+            Assert.False(execution.VerifiesRequestedAction);
+            Assert.Equal(ResponseExecutionStatus.Refused, execution.Status);
+            Assert.DoesNotContain("\"ActionTaken\":\"NETWORK_ISOLATE\"", log);
         }
 
         [Fact]
         public async Task HandleAsync_RemoveRegistryEntry_Tier1_ExecutesRemoval()
         {
-            var detection = new DetectionEvent
+            string fixtureKey = @"Software\SentinelReceiptTests\" + Guid.NewGuid().ToString("N");
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(fixtureKey)) key.SetValue("Fixture", "test");
+            try
             {
-                RuleName = "Persistence: Malicious Scheduled Task",
-                Confidence = 0.85,
-                Tier = DetectionTier.Tier1Behavioral,
-                AuthorizedResponse = ResponseAction.RemoveRegistryEntry,
-                ProcessName = "malware.exe",
-                ProcessId = 5555,
-                Metadata = new Dictionary<string, string>
+                var detection = new DetectionEvent
                 {
-                    { "Hive", "HKLM" },
-                    { "KeyPath", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run" },
-                    { "ValueName", "FakeValue_SentinelTest_DoesNotExist" }
-                }
-            };
+                    RuleName = "Persistence: Malicious Scheduled Task",
+                    Confidence = 0.85,
+                    Tier = DetectionTier.Tier1Behavioral,
+                    AuthorizedResponse = ResponseAction.RemoveRegistryEntry,
+                    ProcessName = "malware.exe",
+                    ProcessId = 5555,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        { "Hive", "HKCU" },
+                        { "KeyPath", fixtureKey },
+                        { "ValueName", "Fixture" }
+                    }
+                };
 
-            await _engine.HandleAsync(detection);
+                var execution = await _engine.HandleAsync(detection);
 
-            var log = ReadLog();
-            // Action should be attempted (even if the value doesn't exist)
-            Assert.Contains("REMOVE_REGISTRY_ENTRY", log);
+                var log = ReadLog();
+                Assert.Equal(ResponseExecutionStatus.Verified, execution.Status);
+                Assert.True(execution.VerifiesRequestedAction);
+                using var readBack = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(fixtureKey);
+                Assert.NotNull(readBack);
+                Assert.DoesNotContain("Fixture", readBack!.GetValueNames());
+                Assert.Contains("REMOVE_REGISTRY_ENTRY", log);
+            }
+            finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(fixtureKey, false); }
         }
 
         [Fact]
-        public async Task HandleAsync_Tier1_KillAuthorized_LogsKillAction()
+        public async Task HandleAsync_MissingProcessCannotClaimVerifiedTreeContainment()
         {
             // Use a PID that doesn't exist so kill attempt is safe
             var detection = new DetectionEvent
@@ -367,13 +373,15 @@ namespace Sentinel.Tests
                 Tier = DetectionTier.Tier1Behavioral,
                 AuthorizedResponse = ResponseAction.KillProcessTree,
                 ProcessName = "nonexistent.exe",
-                ProcessId = 99999 // PID very unlikely to exist
+                ProcessId = int.MaxValue // nonexistent fixture target
             };
 
-            await _engine.HandleAsync(detection);
+            var execution = await _engine.HandleAsync(detection);
 
             var log = ReadLog();
-            Assert.Contains("\"ActionTaken\":\"KILL\"", log);
+            Assert.False(execution.VerifiesRequestedAction);
+            Assert.NotEqual(ResponseExecutionStatus.Verified, execution.Status);
+            Assert.DoesNotContain("\"ActionTaken\":\"KILL\"", log);
         }
 
         [Fact]
@@ -454,7 +462,7 @@ namespace Sentinel.Tests
         [Fact]
         public async Task HandleAsync_DestructiveTier1Action_WritesPreActionAuditEntry()
         {
-            var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = true };
             var metrics = new SentinelMetrics();
             var logger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
             var engine = new AdvancedResponseEngine(config, metrics, logger, new QuarantineManager(_tempDir));
@@ -486,7 +494,7 @@ namespace Sentinel.Tests
             // Tier2 log-only contract: even with ActiveResponse armed, a Tier2 indicator must
             // never take a destructive action - and therefore must never write a PRE_ACTION
             // audit entry (nothing mutates the host, so there is nothing to pre-audit).
-            var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = true };
             var metrics = new SentinelMetrics();
             var logger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
             var engine = new AdvancedResponseEngine(config, metrics, logger, new QuarantineManager(_tempDir));

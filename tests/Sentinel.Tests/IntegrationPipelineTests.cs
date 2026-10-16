@@ -53,7 +53,7 @@ namespace Sentinel.Tests
 
             var logPath = Path.Combine(_tempDir, "events.jsonl");
             _eventLogger = new JsonlEventLogger(logPath);
-            _config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            _config = new SentinelConfig { ActiveResponse = true };
             _cacheStore = new SecureCacheStore(Path.Combine(_tempDir, "secure"));
             _allowlist = new AllowlistService(_cacheStore, NullLogger<AllowlistService>.Instance);
             _scoringEngine = new ScoringEngine(_allowlist, new SafeProcessExemptionRegistry(), NullLogger<ScoringEngine>.Instance);

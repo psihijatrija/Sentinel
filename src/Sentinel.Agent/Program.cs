@@ -287,9 +287,6 @@ namespace Sentinel.Agent
                     var autoIncidentReportingConfig = new AutoIncidentReportingConfig();
                     var store = new EncryptedConfigStore();
                     store.ApplyOverrides(config, threatReportingConfig, autoIncidentReportingConfig);
-                    // v2.9.4: ObserveUntilChain is hardwired false (no-op setter in Models.cs);
-                    // the former `config.ObserveUntilChain = true` line is removed - observe mode
-                    // can no longer be selected by config, override, or planted file.
                     if (!ProxyAuthHelper.HasSharedSecret(threatReportingConfig))
                         threatReportingConfig.ProxySharedSecret = ThreatReportingConfig.CompiledProxySharedSecret;
                     services.AddSingleton(config);

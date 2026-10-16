@@ -113,7 +113,7 @@ public async Task EmitAsync(DetectionEvent detectionEvent)
     await HandleDetectionEventAsync(detectionEvent);  // -> tier law -> AdvancedResponseEngine.HandleAsync
 }
 ```
-Monitors call `_detectionEngine.EmitAsync(new DetectionEvent { ... })` (fire-and-forget `_ =` for timer callbacks, `await` inside async loops). This bypasses the rule sweep but still flows through `HandleDetectionEventAsync` → `AdvancedResponseEngine.HandleAsync`, where **all tier law applies**: `ApplyTierLaw` under `ObserveUntilChain`, the Tier2-never-acts gate, allowlist/IDE/game protection, and the mandatory pre-action audit log.
+Monitors call `_detectionEngine.EmitAsync(new DetectionEvent { ... })` (fire-and-forget `_ =` for timer callbacks, `await` inside async loops). This bypasses the rule sweep but still flows through `HandleDetectionEventAsync` → `AdvancedResponseEngine.HandleAsync`, where **all tier law applies**: `ApplyTierLaw` under `legacy chain-wait mode`, the Tier2-never-acts gate, allowlist/IDE/game protection, and the mandatory pre-action audit log.
 
 ### 4.2 `DetectionEvent` shape (`src\Sentinel.Core\Models.cs`)
 ```csharp
@@ -197,7 +197,7 @@ Authoritative sources read: `.kiro\steering\constraints.md` (inclusion: always) 
 Rules that bind a new perception/input monitor:
 1. **Userland only** — no kernel driver, no direct syscalls, no self-hiding, must stay visible in process list/Task Manager/event logs. A low-level hook (`SetWindowsHookEx(WH_*_LL)`) is userland and allowed; a kernel keyboard filter is not.
 2. **Tier2 = LogOnly, unconditionally** — enforced in `AdvancedResponseEngine.HandleAsync`. If the monitor emits `Tier2Indicator`, it can never trigger an action regardless of config.
-3. **Observe-until-chain / Tier1 = kill-grade only** — a destructive `AuthorizedResponse` (`KillProcess`/`KillProcessTree`/`Quarantine`) must be reserved for high-confidence (≥ `MinTier1Confidence`, default 0.85) proven-terminal behavior or a multi-signal chain. Note current `SentinelConfig.ObserveUntilChain` is hard-wired `false` (repeat-target host) so a lone strong Tier1 can act — all the more reason weak input heuristics must be emitted as Tier2/LogOnly.
+3. **legacy chain-wait mode / Tier1 = kill-grade only** — a destructive `AuthorizedResponse` (`KillProcess`/`KillProcessTree`/`Quarantine`) must be reserved for high-confidence (≥ `MinTier1Confidence`, default 0.85) proven-terminal behavior or a multi-signal chain. Note current `SentinelConfig.legacy chain-wait mode` is hard-wired `false` (repeat-target host) so a lone strong Tier1 can act — all the more reason weak input heuristics must be emitted as Tier2/LogOnly.
 4. **Behavioral signals only for kill authority; no attacker-controllable trust** — do NOT repeat `PhantomKeystrokeGuard`'s mistake. A process name/path/folder alone must never authorize or (for an allow path) exonerate. Trust an "allow" only via a non-attacker-controllable anchor: trusted-root load location that is not user-writable, valid Authenticode signature (`SignerTrustService.IsSignedFile`), or a proven legitimate host. Fail closed when the path can't be resolved.
 5. **DI required** — all deps constructor-injected (`DetectionEngine`, `ILogger<T>`, optional `SignerTrustService`/`SentinelConfig`). No service locator, no `new` for injected services.
 6. **CancellationToken threaded through every async method**; no `Thread.Sleep` without cancellation (use `await Task.Delay(..., ct)`).

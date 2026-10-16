@@ -498,7 +498,7 @@ namespace Sentinel.Tests.Monitors
             var metrics = new SentinelMetrics();
             var logPath = Path.Combine(tempDir, "events.jsonl");
             var logger = new JsonlEventLogger(logPath);
-            var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = true };
             var allowlist = new AllowlistService(cache, NullLogger<AllowlistService>.Instance);
             var quarantine = new QuarantineManager(Path.Combine(tempDir, "quarantine"));
             var responseEngine = new AdvancedResponseEngine(config, metrics, logger, quarantine, allowlist);

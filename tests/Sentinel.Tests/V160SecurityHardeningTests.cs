@@ -38,7 +38,7 @@ namespace Sentinel.Tests
             Assert.True(cfg.EnforceActiveResponse);
             // v2.9.4: armed-by-default posture - respond on single Tier1 signals, do not
             // wait for a multi-signal chain (post-incident hardening on this product line).
-            Assert.False(cfg.ObserveUntilChain);
+
             Assert.Equal(15, cfg.MaxKillsPerMinute);
         }
 
@@ -47,8 +47,7 @@ namespace Sentinel.Tests
         {
             var config = new SentinelConfig
             {
-                ActiveResponse = true, ObserveUntilChain = false,
-                MaxKillsPerMinute = 3
+                ActiveResponse = true, MaxKillsPerMinute = 3
             };
             var quarantine = new QuarantineManager(Path.Combine(_tempDir, "q"));
             var engine = new AdvancedResponseEngine(config, _metrics, _eventLogger, quarantine);
@@ -106,7 +105,7 @@ namespace Sentinel.Tests
             var config = new SentinelConfig
             {
                 ActiveResponse = false,
-                EnforceActiveResponse = true, ObserveUntilChain = false
+                EnforceActiveResponse = true
             };
 
             var cacheStore = new SecureCacheStore(_tempDir);

@@ -400,7 +400,6 @@ namespace Sentinel.Tests.Monitors
             Assert.True(ResponsePolicy.MayPerformDestructiveResponse(d, new SentinelConfig
             {
                 ActiveResponse = true,
-                ObserveUntilChain = true,
                 ChainConfirmMinSignals = 2,
                 MinTier1Confidence = 0.85,
             }));
@@ -518,7 +517,6 @@ namespace Sentinel.Tests.Monitors
             Assert.True(ResponsePolicy.MayPerformDestructiveResponse(d, new SentinelConfig
             {
                 ActiveResponse = true,
-                ObserveUntilChain = true,
                 ChainConfirmMinSignals = 2,
                 MinTier1Confidence = 0.85,
             }));

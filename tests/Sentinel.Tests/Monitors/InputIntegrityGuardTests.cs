@@ -133,7 +133,7 @@ namespace Sentinel.Tests.Monitors
             var metrics = new SentinelMetrics();
             var logPath = Path.Combine(tempDir, "events.jsonl");
             var logger = new JsonlEventLogger(logPath);
-            var config = new SentinelConfig { ActiveResponse = activeResponse, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = activeResponse };
             var allowlist = new AllowlistService(cache, NullLogger<AllowlistService>.Instance);
             var responseEngine = new AdvancedResponseEngine(config, metrics, logger, new QuarantineManager(tempDir));
             var iocScanner = new IoCScanner(cache);

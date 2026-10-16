@@ -140,7 +140,7 @@ namespace Sentinel.Core
                                 "CVE Class: Installer EoP from Staging",
                                 $"msiexec (PID {pid}) installing/repairing MSI from staging cmd='{Truncate(cmd, 180)}'",
                                 "Windows Installer EoP class (CVE-2026-61925 and siblings): repair/install of an MSI from Temp/Downloads. " +
-                                "Custom actions run as SYSTEM. Observe-until-chain.",
+                                "Custom actions run as SYSTEM. response authorization.",
                                 0.84, name, pid, path, parentName, parentPid,
                                 SignalType.SecurityEvasion).ConfigureAwait(false);
                         }

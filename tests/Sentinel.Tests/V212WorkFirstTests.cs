@@ -24,10 +24,6 @@ namespace Sentinel.Tests
         [Fact]
         public void MitmDefense_EnabledSetsMitmPostureWithoutFullInlineMutationUnlock()
         {
-            // v2.9.4: observe-until-chain removed as a settable mode; MayPerformInlineHostMutation
-            // no longer gates on observe, so the old "MitmDefense does not unlock arbitrary inline
-            // mutation while observing" assertion is moot. The surviving coverage is that enabling
-            // MitmDefense flips ONLY the MitmDefense posture switch.
             var cfg = new SentinelConfig
             {
                 MitmDefense = new MitmDefenseConfig { Enabled = true }

@@ -128,7 +128,7 @@ this work.
 
 - Userland only; low-level hooks (`WH_*_LL`) are userland-allowed. No kernel driver. ✔
 - All InputIntegrityGuard signals Tier2Indicator / LogOnly. ✔ (test-verified)
-- No destructive response; observe-until-chain preserved (monitor only emits honest signals). ✔
+- No destructive response; legacy chain-wait mode preserved (monitor only emits honest signals). ✔
 - No attacker-controllable trust; detection is behavioral (injected flags, clipboard timing),
   never name/path based. ✔
 - DI everywhere; `CancellationToken` threaded; `ConfigureAwait(false)`; no static mutable state

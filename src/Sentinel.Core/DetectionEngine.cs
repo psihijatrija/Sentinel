@@ -23,14 +23,6 @@ namespace Sentinel.Core
         private const int TelemetryChannelCapacity = 10_000;
         private readonly TelemetryQueue _telemetryChannel;
 
-        // 1D terminal-class fast lane (FEAT-002): a second, smaller high-priority queue drained
-        // with precedence so terminal-class telemetry (BYOVD loaders, kernel-exploit scaffolds,
-        // confirmed C2, etc.) reaches the response path without waiting behind the normal rule
-        // sweep. This is SCHEDULING ONLY - events in this lane run the identical ProcessContextAsync
-        // body and still flow ProcessDetectionAsync -> HandleDetectionEventAsync ->
-        // AdvancedResponseEngine.HandleAsync, so all tier law, the Tier2-never-acts gate,
-        // observe-until-chain, and the mandatory pre-action audit still apply. Routing in
-        // SubmitTelemetry is mutually exclusive, so an event enters exactly one lane.
         private const int PriorityChannelCapacity = 1_000;
         private readonly TelemetryQueue _priorityChannel;
         private readonly ConcurrentDictionary<(string, int), DateTime> _dedupCache = new();
@@ -108,23 +100,6 @@ namespace Sentinel.Core
             _telemetryChannel.TryWrite(context);
         }
 
-        /// <summary>
-        /// Pure scheduling hint (FEAT-002 1D): decides whether a telemetry context should take
-        /// the terminal-class fast lane. Derives a DetectionEvent-shaped candidate from
-        /// <paramref name="context"/>.TriggeringEvent and returns true ONLY when
-        /// <see cref="ResponsePolicy.IsAttackClassTerminal"/> is true for that candidate AND the
-        /// candidate's confidence meets <paramref name="minConfidence"/>.
-        ///
-        /// This is NEVER an authorization decision - it only changes queue ordering. The real
-        /// detection still flows through the rule sweep and ProcessDetectionAsync ->
-        /// HandleDetectionEventAsync -> AdvancedResponseEngine.HandleAsync, where tier law, the
-        /// Tier2-never-acts gate, observe-until-chain, and the mandatory pre-action audit decide
-        /// what (if anything) actually happens. The triggering telemetry carries no confidence of
-        /// its own, so a candidate derived from a terminal-class signal is treated at full
-        /// confidence; the gate is therefore driven by the attack-class classification (which
-        /// includes the PID &lt;= 4 guard) plus the terminal rule-name mapping. If the triggering
-        /// event cannot be mapped to a terminal-class rule name, this returns false.
-        /// </summary>
         internal static bool ShouldFastLane(FusedTelemetryContext context, double minConfidence)
         {
             if (context?.TriggeringEvent == null)

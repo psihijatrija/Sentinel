@@ -72,13 +72,11 @@ multi-homing, so these observe and corroborate - they do not prevent or revert.
 
 Addresses a threat class that every prior Sentinel defense structurally misses. Every terminal
 family (credential theft, C2, ransomware, injection-then-exfil) is defined around harm to the
-**system or its secrets**, and every kill decision is gated on behavior over time
-(`ObserveUntilChain`). Consider instead a module whose only purpose is to harm the **user**: it
+**system or its secrets**, and kill authority requires qualifying terminal behavior. Consider instead a module whose only purpose is to harm the **user**: it
 emits an audio / hypnotic stream, flickers the screen, or otherwise degrades sleep and wellbeing.
 It makes no network connection, touches no credentials, destroys no files, and may be signed with
 a **stolen but validly-chaining** certificate. It produces *zero* terminal telemetry and it never
-escalates - the steady state *is* the attack. `ObserveUntilChain` can never confirm it (there is no
-chain), and signature-based trust is defeated by the stolen cert. Neither of Sentinel's existing
+escalates - the steady state *is* the attack. behavioral terminal classification cannot establish malicious intent from that alone, and signature-based trust is defeated by the stolen cert. Neither of Sentinel's existing
 axes - behavior, or provenance - is sufficient alone against an attacker who deliberately closes
 both doors.
 
@@ -349,7 +347,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 - **RemoteSessionGuard** (v1.7.5) - Force-logoff unauthorized RDP/remote sessions
 - **HostsFileGuard forum.hr block** (v2.6.9) - forum.hr + subdomains blackholed at hosts-file level plus a wildcard NRPT rule (`.forum.hr` -> 0.0.0.0) covering all subdomains (reinfection vector); `ForumHrWatchMonitor` removed
 - **Observe-first posture (v1.8.3)** - Weak path/port/shell heuristics LogOnly; IPSec attack-only by default; `RestrictivePortHardening` for full lockdown
-- **MitmDefense suite (v2.0.1)** - Opt-in post-incident: planted root cert remove, FCM Send-Tab-to-Self block, ghost process -> fake Chromecast kill, rogue Cast FW (narrow exception to ObserveUntilChain)
+- **MitmDefense suite (v2.0.1)** - Opt-in post-incident: planted root cert remove, FCM Send-Tab-to-Self block, ghost process -> fake Chromecast kill, rogue Cast FW (subject to MITM-specific response authorization)
 - **GpuProcessMonitor** (v2.1.5) - GPU sandbox escape + crypto-mining detection
 - **WebDashboardService** (v2.1.3) - Local web-based settings UI replacing WinForms
 - **ScanEngine** (v2.1.3) - On-demand comprehensive system security scan

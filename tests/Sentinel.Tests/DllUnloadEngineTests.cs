@@ -273,23 +273,22 @@ namespace Sentinel.Tests
             Assert.Equal(0, result.ProcessId);
             Assert.Equal("", result.ProcessName);
             Assert.False(result.Success);
-            Assert.Empty(result.UnloadedDlls);
+            Assert.Empty(result.QuarantinedDlls);
         }
 
         [Fact]
-        public void DllUnloadResult_TracksUnloadedDlls()
+        public void DllUnloadResult_TracksQuarantinedDlls()
         {
             var result = new DllUnloadResult
             {
                 ProcessId = 1234,
-                ProcessName = "target.exe",
-                Success = true
+                ProcessName = "target.exe"
             };
-            result.UnloadedDlls.Add("version.dll");
-            result.UnloadedDlls.Add("dbghelp.dll");
+            result.RecordFileOutcome("version.dll", DllFileOutcome.Quarantined);
+            result.RecordFileOutcome("dbghelp.dll", DllFileOutcome.Quarantined);
 
-            Assert.Equal(2, result.UnloadedDlls.Count);
-            Assert.Contains("version.dll", result.UnloadedDlls);
+            Assert.Equal(2, result.QuarantinedDlls.Count);
+            Assert.Contains("version.dll", result.QuarantinedDlls);
         }
     }
 }

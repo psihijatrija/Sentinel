@@ -3,26 +3,8 @@ using System.Collections.Generic;
 
 namespace Sentinel.Core
 {
-    /// <summary>
-    /// v2.3.1 - Always-on policies that CANNOT be disabled by configuration, observe-until-chain,
-    /// tier law, or any future code changes. These represent fundamental product invariants:
-    ///
-    /// 1. GAME PROTECTION: Never kill, quarantine, memory-inspect, or FreeLibrary game processes.
-    /// 2. DLL UNLOAD: Always remediate hostile module identity violations immediately.
-    ///
-    /// These are NOT detection rules (they don't fire detections). They are response-level
-    /// hard stops that override all other logic. Checked before observe-until-chain, before
-    /// tier law, before allowlist evaluation.
-    ///
-    /// SECURITY: These cannot be weakened by:
-    ///   - Setting ObserveUntilChain=false
-    ///   - Changing ActiveResponse
-    ///   - Adding/removing allowlist entries
-    ///   - Rule pack configuration
-    ///   - MinTier1Confidence tuning
-    ///
-    /// To modify these policies, you must edit THIS FILE. That's the point.
-    /// </summary>
+    /// <summary>Non-configurable game/anti-cheat protection and module-identity policies.
+    /// Each response path must apply the relevant target protections independently.</summary>
     public static class AlwaysOnPolicies
     {
         // 
@@ -95,25 +77,7 @@ namespace Sentinel.Core
             return true;
         }
 
-        // 
-        // POLICY 2: DLL UNLOAD (MODULE IDENTITY)
-        // Foreign/hostile module identity violations are remediated immediately.
-        // This is permanent product law - NOT gated on ObserveUntilChain,
-        // NOT gated on ActiveResponse, NOT suppressible by allowlist.
-        // 
 
-        /// <summary>
-        /// Returns true if a detection represents a DLL unload/module identity action
-        /// that must ALWAYS be permitted to act, regardless of observe-until-chain
-        /// or other response gates.
-        ///
-        /// When this returns true, the response engine MUST:
-        ///   - Keep Tier1 status (never demote to Tier2)
-        ///   - Allow FreeLibrary/quarantine to proceed
-        ///   - NOT gate on ObserveUntilChain
-        ///   - NOT gate on ActiveResponse config
-        ///   - NOT suppress via allowlist
-        /// </summary>
         public static bool IsDllUnloadAlwaysOn(DetectionEvent? detection)
         {
             if (detection == null) return false;

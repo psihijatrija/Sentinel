@@ -128,7 +128,7 @@ The name-demote grants a trust decision (decline the kill) on `processName` **al
 - **"Behavioral signals only for kill authority — detect what a process DOES, not what it IS (no filename/path/hash as a primary kill)."** Here a filename is used as the primary basis to *withhold* a kill on a behavioral detection — the inverse abuse, same category (name-based kill-authority decision).
 - **"No filename-based primary detection … Process names are trivially spoofed. Filename lists are … observe fuel only."** (Detection Integrity Constraints.)
 
-It does **not** violate the Tier2-never-acts rule or observe-until-chain — the demote direction is *toward* LogOnly, which is "safe" for FPs but is exactly what makes it an attacker-usable evasion here.
+It does **not** violate the Tier2-never-acts rule or legacy chain-wait mode — the demote direction is *toward* LogOnly, which is "safe" for FPs but is exactly what makes it an attacker-usable evasion here.
 
 Note the distinction: using an allowlisted name to decline a kill when the path is **unresolved** (the recommended tightening) is defensible — there is no resolved attacker-controllable anchor to check, and failing *open* on a transient race for a known dev-tool name is the lesser evil (mirrors the sanctioned `IsStockWindowsConsoleHost` empty-path carve-out). Using the name to decline the kill when a path **did** resolve to an untrusted location is the constraint violation.
 

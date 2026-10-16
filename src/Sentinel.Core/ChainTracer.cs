@@ -265,7 +265,9 @@ namespace Sentinel.Core
 
                         try
                         {
-                            HardeningModule.SafeKillProcessTree(node.ProcessId);
+                            var containment = HardeningModule.SafeKillProcessTree(node.ProcessId);
+                            result.ProcessContainments.Add(containment);
+                            if (!containment.ExitedProcessIds.Contains(node.ProcessId)) continue;
                             result.KilledProcesses.Add(new KilledProcessInfo
                             {
                                 ProcessId = node.ProcessId,
@@ -277,6 +279,8 @@ namespace Sentinel.Core
                         }
                         catch (Exception ex)
                         {
+                            result.AdditionalEffects.Add(new ResponseEffect { Action = "ProcessTree", Target = node.ProcessId.ToString(),
+                                Status = ResponseExecutionStatus.Failed, Detail = ex.Message });
                             _logger.LogDebug(ex, "[ChainTracer] Failed to kill PID {Pid}", node.ProcessId);
                         }
                     }
@@ -312,17 +316,20 @@ namespace Sentinel.Core
                                 // QuarantineManager refuses Authenticode-signed files by default
                                 // (Git/Chrome/VS installers, etc.). Only unsigned chain members move.
                                 var qPath = await _quarantineManager.QuarantineFileAtomicAsync(node.ImagePath!);
-                                if (qPath == null)
+                                var quarantineEffect = ResponseVerification.Quarantine(node.ImagePath!, qPath);
+                                result.AdditionalEffects.Add(quarantineEffect);
+                                if (quarantineEffect.Status != ResponseExecutionStatus.Verified)
                                 {
                                     _logger.LogInformation(
-                                        "[ChainTracer] Skipping quarantine (signed or refused): {Path}",
-                                        node.ImagePath);
+                                        "[ChainTracer] Quarantine outcome {Status} for {Path}: {Detail}",
+                                        quarantineEffect.Status, node.ImagePath, quarantineEffect.Detail);
                                     continue;
                                 }
 
                                 result.QuarantinedFiles.Add(new QuarantinedFileInfo
                                 {
                                     OriginalPath = node.ImagePath!,
+                                    QuarantinePath = qPath,
                                     ProcessId = node.ProcessId,
                                     ProcessName = node.ProcessName,
                                     FileHash = hash,
@@ -330,7 +337,11 @@ namespace Sentinel.Core
                                 });
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            result.AdditionalEffects.Add(new ResponseEffect { Action = "Quarantine", Target = node.ImagePath ?? "unknown",
+                                Status = ResponseExecutionStatus.Failed, Detail = ex.Message });
+                        }
                     }
 
                     // 5. Remove persistence
@@ -411,14 +422,22 @@ namespace Sentinel.Core
                         if (imagePaths.Any(p => val.Contains(p)))
                         {
                             key.DeleteValue(name);
-                            result.PersistenceRemoved.Add(new PersistenceInfo
+                            bool absent = !key.GetValueNames().Contains(name, StringComparer.OrdinalIgnoreCase);
+                            result.AdditionalEffects.Add(new ResponseEffect { Action = "RegistryRemoval", Target = $"HKLM\\{keyPath}\\{name}",
+                                Status = absent ? ResponseExecutionStatus.Verified : ResponseExecutionStatus.Failed,
+                                Detail = absent ? "Run value absent on read-back." : "Run value remains after deletion." });
+                            if (absent) result.PersistenceRemoved.Add(new PersistenceInfo
                             {
                                 Type = "RunKey", Location = $"HKLM\\{keyPath}", Name = name, Value = val, Removed = true
                             });
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    result.AdditionalEffects.Add(new ResponseEffect { Action = "RegistryPersistenceInspection", Target = $"HKLM\\{keyPath}",
+                        Status = ResponseExecutionStatus.Failed, Detail = ex.Message });
+                }
             }
         }
 
@@ -622,6 +641,7 @@ namespace Sentinel.Core
 
     public sealed class QuarantinedFileInfo
     {
+        public string? QuarantinePath { get; set; }
         public string OriginalPath { get; set; } = "";
         public int ProcessId { get; set; }
         public string ProcessName { get; set; } = "";
@@ -647,6 +667,8 @@ namespace Sentinel.Core
         public ProcessNode? AttackRoot { get; set; }
         public List<ProcessNode> AllChainProcesses { get; set; } = new();
         public List<KilledProcessInfo> KilledProcesses { get; set; } = new();
+        public List<ProcessTreeTerminationResult> ProcessContainments { get; set; } = new();
+        public List<ResponseEffect> AdditionalEffects { get; set; } = new();
         public List<QuarantinedFileInfo> QuarantinedFiles { get; set; } = new();
         public List<PersistenceInfo> PersistenceRemoved { get; set; } = new();
         public bool Success { get; set; }

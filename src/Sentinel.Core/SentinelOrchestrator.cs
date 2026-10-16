@@ -92,7 +92,7 @@ namespace Sentinel.Core
         ///   1. Register detection with IncidentManager (group into incident)
         ///   2. Route through ResponseCoordinator (dedup, lock, chain trace hold)
         ///   3. ResponseCoordinator executes via AdvancedResponseEngine
-        ///   4. Incident marked as responded
+        ///   4. Incident records the outcome; only verified requested effects mark it responded
         /// </summary>
         public async Task ProcessDetectionAsync(DetectionEvent detection)
         {
@@ -102,11 +102,11 @@ namespace Sentinel.Core
             var incident = _incidentManager.RegisterDetection(detection);
 
             // 2. Route through ResponseCoordinator (handles dedup, locking, chain trace holds)
-            var result = await _responseCoordinator.ExecuteResponseAsync(detection);
+            var result = await _responseCoordinator.ExecuteResponseAsync(detection, incident.Id);
 
-            if (result.Outcome == ResponseOutcome.Executed)
+            if (result.Outcome == ResponseOutcome.Verified)
             {
-                _logger.LogDebug("[Orchestrator] Response executed for PID {Pid}: {Action}",
+                _logger.LogDebug("[Orchestrator] Response verified for PID {Pid}: {Action}",
                     detection.ProcessId, detection.AuthorizedResponse);
             }
             else if (result.Outcome == ResponseOutcome.Deduplicated)
@@ -122,7 +122,7 @@ namespace Sentinel.Core
                 {
                     try
                     {
-                        await _autoIncidentReporter.HandleDetectionAsync(detection, incident).ConfigureAwait(false);
+                        await _autoIncidentReporter.HandleDetectionAsync(detection, incident, result.Execution).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {

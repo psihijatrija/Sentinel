@@ -102,6 +102,10 @@ jobs:
         working-directory: worker
         run: npm test
 
+      - name: Verify dashboard response outcome rendering
+        if: steps.exists.outputs.skip == 'false'
+        run: node --test tests/dashboard-response.test.cjs
+
       - name: Smoke test the Windows Framework diagnostic executable
         if: steps.exists.outputs.skip == 'false'
         shell: pwsh

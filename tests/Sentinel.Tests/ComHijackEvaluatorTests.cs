@@ -27,7 +27,7 @@ namespace Sentinel.Tests
             Assert.True(v.IsHijack);
             Assert.True(v.ShouldQuarantinePayload);
             Assert.Equal(DetectionTier.Tier2Indicator, v.Tier);           // never solo-acts
-            Assert.Equal(ResponseAction.LogOnly, v.AuthorizedResponse);   // observe until chain
+            Assert.Equal(ResponseAction.LogOnly, v.AuthorizedResponse);   // response authorization
         }
 
         [Fact]

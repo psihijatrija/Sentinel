@@ -294,12 +294,8 @@ namespace Sentinel.Core
                 foreach (var pid in hosts)
                 {
                     var r = await ScanProcessAsync(pid, "", allowRemediateOnProvenLoad: true);
-                    if (r.Success)
-                    {
-                        result.Success = true;
-                        result.UnloadedDlls.AddRange(r.UnloadedDlls);
-                        result.ProcessId = pid;
-                    }
+                    result.MergeFileOutcomes(r);
+                    if (r.Containment != null) result.Containments.Add(r.Containment);
                 }
 
                 var alertKey = $"plant:{dllPath.ToLowerInvariant()}";
@@ -310,20 +306,13 @@ namespace Sentinel.Core
                 if (!TryConsumeRateLimit())
                     return result;
 
-                // Only mark success and emit the "quarantined" event if remediation actually
-                // removed (or scheduled removal of) the file. A refused/failed quarantine must
-                // not report success - otherwise the file survives while we claim we handled it.
-                if (await RemediateDroppedDll(dllPath, writerName ?? "", writerPid))
-                {
-                    result.UnloadedDlls.Add(dllPath);
-                    result.Success = true;
+                // A deferred deletion is distinct from a verified quarantine/removal.
+                var fileOutcome = await RemediateDroppedDll(dllPath, writerName ?? "", writerPid);
+                result.RecordFileOutcome(dllPath, fileOutcome);
+                if (fileOutcome == DllFileOutcome.Quarantined)
                     await EmitHijackPlantQuarantinedAsync(dllPath, fileName, dir, writerPid, writerName);
-                }
-                else
-                {
-                    // Let a later scan retry: do not leave this path marked as handled.
+                if (fileOutcome == DllFileOutcome.Failed || fileOutcome == DllFileOutcome.Deferred)
                     _alertHistory.TryRemove(alertKey, out _);
-                }
             }
             catch (Exception ex)
             {
@@ -425,6 +414,7 @@ namespace Sentinel.Core
 
             try
             {
+                long originalCreationTime = WindowsProcessTreeOperations.GetCreationTime(processId);
                 var imagePath = SecurityValidation.GetProcessImagePath(processId);
                 if (string.IsNullOrEmpty(imagePath)) return result;
 
@@ -489,6 +479,7 @@ namespace Sentinel.Core
                 // bind it. Do not kill the host (0.5.3).
                 if (!provenLoad && hostileDisk.Count > 0 && !forceRemediate)
                 {
+                    result.DetectedDlls.AddRange(hostileDisk);
                     foreach (var plant in hostileDisk)
                     {
                         if (!IsHijackPlantPath(plant)) continue;
@@ -497,19 +488,17 @@ namespace Sentinel.Core
                         if (!TryConsumeRateLimit()) break;
                         // Record history only on actual success, so a failed/refused quarantine
                         // is retried on the next scan instead of being marked permanently handled.
-                        if (await RemediateDroppedDll(plant, name!, processId))
-                        {
+                        var fileOutcome = await RemediateDroppedDll(plant, name!, processId);
+                        result.RecordFileOutcome(plant, fileOutcome);
+                        if (fileOutcome == DllFileOutcome.Quarantined || fileOutcome == DllFileOutcome.AlreadyAbsent)
                             _remediationHistory[rkey] = DateTimeOffset.UtcNow;
-                            result.UnloadedDlls.Add(plant);
-                            result.Success = true;
-                        }
                     }
 
-                    if (result.Success)
+                    if (result.QuarantinedDlls.Count > 0)
                     {
                         await EmitHijackPlantQuarantinedAsync(
-                            result.UnloadedDlls[0],
-                            Path.GetFileName(result.UnloadedDlls[0]),
+                            result.QuarantinedDlls[0],
+                            Path.GetFileName(result.QuarantinedDlls[0]),
                             procDir ?? "",
                             processId,
                             name);
@@ -535,72 +524,47 @@ namespace Sentinel.Core
 
                 if (pathsToQuarantine.Count == 0) return result;
 
-                // Process Containment: Safely terminate the compromised process tree
-                bool hostTerminated = false;
-                try
-                {
-                    HardeningModule.SafeKillProcessTree(processId);
-                    hostTerminated = true;
-                }
-                catch
-                {
-                    try
-                    {
-                        using var p = Process.GetProcessById(processId);
-                        p.KillTree();
-                        hostTerminated = true;
-                    }
-                    catch { }
-                }
-
+                result.DetectedDlls.AddRange(pathsToQuarantine);
+                result.Containment = HardeningModule.SafeKillProcessTree(processId, originalCreationTime);
+                // A refused/failed protected-process kill must never fall back to an unchecked kill.
                 foreach (var dllPath in pathsToQuarantine)
                 {
-                    var rkey = $"{processId}:{dllPath.ToLowerInvariant()}";
-                    if (_remediationHistory.ContainsKey(rkey)) continue;
-                    if (!TryConsumeRateLimit()) break;
-                    // Record history only on actual success, so a failed/refused quarantine is
-                    // retried on the next scan rather than being marked permanently handled.
-                    if (await RemediateDroppedDll(dllPath, name!, processId))
+                    if (!TryConsumeRateLimit())
                     {
-                        _remediationHistory[rkey] = DateTimeOffset.UtcNow;
-                        result.UnloadedDlls.Add(dllPath);
+                        result.RecordFileOutcome(dllPath, DllFileOutcome.Failed);
+                        continue;
                     }
+                    var outcome = await RemediateDroppedDll(dllPath, name!, processId);
+                    result.RecordFileOutcome(dllPath, outcome);
+                    if (outcome == DllFileOutcome.Quarantined || outcome == DllFileOutcome.AlreadyAbsent)
+                        _remediationHistory[$"{processId}:{dllPath.ToLowerInvariant()}"] = DateTimeOffset.UtcNow;
                 }
 
-                foreach (var (path, _, _) in hostileLoaded)
-                {
-                    if (!result.UnloadedDlls.Contains(path, StringComparer.OrdinalIgnoreCase))
-                        result.UnloadedDlls.Add(path);
-                }
-
-                result.Success = result.UnloadedDlls.Count > 0;
                 if (result.Success)
+                    _logger.LogInformation("[DllUnloadEngine] PID {Pid}: {Containment}", processId, result.ContainmentSummary);
+                else
+                    _logger.LogWarning("[DllUnloadEngine] PID {Pid}: {Containment}", processId, result.ContainmentSummary);
+
+                // Always publish the attempted outcome, including refusals and partial failures.
+                // The observed hostile module list is distinct from verified disk remediation.
+                await _detectionEngine.EmitAsync(new DetectionEvent
                 {
-                    await _detectionEngine.EmitAsync(new DetectionEvent
-                    {
-                        RuleName = "DLL Injection: Foreign Module Remediated",
-                        Evidence = $"Process '{name}' (PID {processId}) loaded hostile DLL(s): " +
-                                   string.Join(", ", result.UnloadedDlls) +
-                                   $". HostContained={hostTerminated}; quarantined={result.UnloadedDlls.Count}.",
-                        Reasoning = "Proven behavior: a mapped module failed path+signer identity " +
-                                    "(foreign folder, user-writable drop, or sideload plant). Process contained and hostile DLL quarantined immediately (T1055 / T1574.001).",
-                        Confidence = 0.95,
-                        Tier = DetectionTier.Tier1Behavioral,
-                        AuthorizedResponse = ResponseAction.LogOnly, // already acted
-                        ProcessName = name!,
-                        ProcessId = processId,
-                        SignalType = SignalType.ProcessInjection,
-                        Metadata = new Dictionary<string, string>
-                        {
-                            ["ImagePath"] = imagePath!,
-                            ["SideloadedDlls"] = string.Join(";", result.UnloadedDlls),
-                            ["Phase"] = "Remediate",
-                            ["DllUnloadExempt"] = "true",
-                            ["PermanentRule"] = "ModuleIdentityUnload",
-                            ["AlwaysOnPolicy"] = "DllUnload"
-                        }
-                    });
-                }
+                    RecordedExecution = result.CreateExecutionReceipt(),
+                    RuleName = result.Success ? "DLL Injection: Foreign Module Remediated"
+                        : "DLL Injection: Foreign Module Containment Incomplete",
+                    Evidence = $"Process '{name}' (PID {processId}) loaded hostile DLL(s): " +
+                               string.Join(", ", result.DetectedDlls) + ". " + result.ContainmentSummary,
+                    Reasoning = "A mapped module failed path+signer identity. " +
+                                "Process-tree termination and disk quarantine were attempted independently; " +
+                                "reported outcomes describe verified effects, not inferred success (T1055 / T1574.001).",
+                    Confidence = 0.95,
+                    Tier = DetectionTier.Tier1Behavioral,
+                    AuthorizedResponse = ResponseAction.LogOnly, // outcome report, not another action request
+                    ProcessName = name!,
+                    ProcessId = processId,
+                    SignalType = SignalType.ProcessInjection,
+                    Metadata = result.CreateContainmentMetadata(imagePath!)
+                });
 
                 return result;
             }
@@ -615,8 +579,16 @@ namespace Sentinel.Core
             string dllPath, string? fileName, string dir, int writerPid, string? writerName)
         {
             bool servicingPlant = ModuleIdentity.IsServicingNameOutsideStore(dllPath);
+            var receipt = new ResponseExecutionResult
+            {
+                ProcessId = writerPid, ProcessName = writerName ?? "unknown",
+                RequestedAction = nameof(ResponseAction.Quarantine), EffectiveAction = nameof(ResponseAction.Quarantine),
+                CompletedAt = DateTimeOffset.UtcNow, Reason = "Disk plant quarantine verified; no process termination was requested."
+            };
+            receipt.Add("DllQuarantine", dllPath, ResponseExecutionStatus.Verified, "Vault file and source removal were verified by the DLL executor.");
             await _detectionEngine.EmitAsync(new DetectionEvent
             {
+                RecordedExecution = receipt,
                 RuleName = servicingPlant
                     ? "Servicing Impersonation: CBS DLL Plant Quarantined"
                     : "DLL Sideloading: Hijack-Name Plant Quarantined",
@@ -721,15 +693,15 @@ namespace Sentinel.Core
         /// (which cannot be deleted in place) survived on disk while Sentinel reported success -
         /// and was re-detected on the next scan / install as if nothing had happened.
         /// </summary>
-        private async Task<bool> RemediateDroppedDll(string dllPath, string processName, int processId)
+        private async Task<DllFileOutcome> RemediateDroppedDll(string dllPath, string processName, int processId)
         {
             try
             {
                 await Task.Delay(150);
-                if (!File.Exists(dllPath))
+                if (IsFileAbsent(dllPath))
                 {
                     // Already gone (e.g. removed by a prior remediation) - nothing to do.
-                    return true;
+                    return DllFileOutcome.AlreadyAbsent;
                 }
 
                 // hardenedRemoval: this engine remediates DLLs that are mapped into a live
@@ -739,14 +711,14 @@ namespace Sentinel.Core
                 var vaultPath = await _quarantineManager.QuarantineFileAtomicAsync(
                     dllPath, forceQuarantineSigned: true, hardenedRemoval: true);
 
-                if (vaultPath == null)
+                if (vaultPath == null || !File.Exists(vaultPath))
                 {
                     // QuarantineManager refused (OS-critical path, size cap, or verification
                     // error). The file is UNTOUCHED - do not pretend it was quarantined.
                     _logger.LogWarning(
                         "[DllUnloadEngine] Quarantine REFUSED for '{Dll}' (host {Name} PID {Pid}) - file left on disk",
                         dllPath, processName, processId);
-                    return false;
+                    return DllFileOutcome.Failed;
                 }
 
                 // No zero-byte Hidden|System stub after quarantine - that pattern scores as
@@ -754,14 +726,15 @@ namespace Sentinel.Core
                 // by FileActivityMonitor; sideload names must not be re-planted either
                 // (search order would bind the stub instead of System32).
 
-                if (_quarantineManager.WasLastQuarantineDeferred)
+                if (!IsFileAbsent(dllPath))
                 {
                     // Vault copy exists and a delete-on-reboot is scheduled, but the original
                     // is still on disk until the next boot because a process still maps it.
                     // Report this honestly instead of claiming it is already gone.
                     _logger.LogWarning(
-                        "[DllUnloadEngine] Quarantined '{Dll}' (host {Name} PID {Pid}) - LOCKED, deletion scheduled for next reboot",
+                        "[DllUnloadEngine] Vault copy created for '{Dll}' (host {Name} PID {Pid}) - source still present; disk containment deferred",
                         dllPath, processName, processId);
+                    return DllFileOutcome.Deferred;
                 }
                 else
                 {
@@ -770,13 +743,21 @@ namespace Sentinel.Core
                         dllPath, processName, processId);
                 }
 
-                return true;
+                return DllFileOutcome.Quarantined;
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[DllUnloadEngine] Failed to quarantine '{Dll}'", dllPath);
-                return false;
+                return DllFileOutcome.Failed;
             }
+        }
+
+        private static bool IsFileAbsent(string path)
+        {
+            try { File.GetAttributes(path); return false; }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
+            // Access/IO failures propagate to the failed outcome, never masquerade as absence.
         }
 
         private bool TryConsumeRateLimit()
@@ -869,11 +850,4 @@ namespace Sentinel.Core
         }
     }
 
-    public sealed class DllUnloadResult
-    {
-        public int ProcessId { get; set; }
-        public string ProcessName { get; set; } = "";
-        public bool Success { get; set; }
-        public List<string> UnloadedDlls { get; set; } = new();
-    }
 }

@@ -39,7 +39,7 @@ compiled types and behavior are unchanged:
   `Rules.AttackTools.cs`, `Rules.CampaignIoc.cs`, `Rules.SupplyChain.cs`, `Rules.VerdictGate.cs`,
   `Rules.PathProvenance.cs` (there is no single `Rules.cs` type - it was always a container).
 - **`AdvancedResponseEngine`** is a `partial class`: the decision layer (`HandleAsync`, Tier1-only
-  branch guards, observe-until-chain gate, pre-action audit) is in `AdvancedResponseEngine.cs`; the
+  branch guards and pre-action audit) is in `AdvancedResponseEngine.cs`; the
   low-level network/certificate P/Invoke executors are in `AdvancedResponseEngine.NetworkActions.cs`.
 - **`BehavioralCorrelationEngine`** is a `partial class`: the per-PID composite cascade and shared
   buffers/locks are in `BehavioralCorrelationEngine.cs`; the host-wide (PID 0) network-tamper /
@@ -306,8 +306,8 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `MlThreatScorer` | Offline FastTree models (`MlModels/pe_model.zip`, `url_model.zip`) for PE static malware prior and lexical URL/host risk. Soft signal only; never sole kill. Trained via `tools/Sentinel.MlTrainer` from C/datasets. |
 | `FileReputationEngine` | Multi-signal file score (hash TI + static PE + optional PE ML + signer + path context). Composite 0-100. |
 | `DetectionEngine` | Runs all `IDetectionRule` instances against incoming telemetry. **Bounded** channel (10k, DropOldest). Tiered deduplication (10s Tier1, 30s Tier2). Consultant signals sticky Tier2/LogOnly. Records metrics via `SentinelMetrics`. |
-| `AdvancedResponseEngine` | Single point of action enforcement. Tier2 always log-only. With `ObserveUntilChain` (default), Tier1 destructive actions only after `ResponsePolicy` chain confirm (C2/exfil/token/shell/cred-dump/BYOVD) or DLL-unload exempt path; then full nuke. Private/LAN IPs never firewall-isolated. |
-| `ResponsePolicy` | Observe-until-chain classifier: terminal outcomes, benign System32 redistributable noise, multi-signal PID buffers, silent-observe gates. |
+| `AdvancedResponseEngine` | Enforces the unconditional Tier2 log-only gate and action-specific Tier1 responses. Authorized Tier1 signals can act immediately. Private/LAN IPs are never firewall-isolated. |
+| `ResponsePolicy` | Tier1 response authorization classifier: terminal outcomes, benign System32 redistributable noise, multi-signal PID buffers, silent-observe gates. |
 | `TelemetryFusionEngine` | Correlates raw telemetry across all sources into per-process event chains. Produces `FusedTelemetryContext` with behavioral metrics. |
 | `EventGraph` | In-memory graph of processes, files, and network endpoints with temporal/causal edges. Supports incident timeline queries. |
 | `MemoryBehaviorAnalyzer` | Scans mapped modules (permanent): startup EnumModules baseline + Kernel-Process ImageLoad. `ModuleIdentity` allow/deny on first sight of a path in that PID. Foreign modules unloaded immediately via DllUnloadEngine; detection stays Tier1. Count growth is not a signal. Missing image path remains Tier2 observe. |
@@ -452,19 +452,56 @@ Emitted as Tier1 `DetectionEvent`s directly via `EmitAsync`. Requires signals fr
 | `RemoveCert` | Removes suspicious root certificates from store |
 | `RemoveCertAndKillAdder` | Removes planted certificate + kills the process that installed it (BYOVD cert-trace) |
 
-### ActiveResponse model (current - observe-until-chain)
+### ActiveResponse model (current)
+
+`AdvancedResponseEngine.HandleAsync` returns a `ResponseExecutionResult`. Each effect
+records its action, target, status and verification detail. `response_result` log records
+carry the final receipt; existing `response` records include it in `Execution`. A normal
+Task return, an action name or traversal completion is not evidence of successful mutation.
+
+The same receipt is passed to automatic evidence generation and included as
+`response_execution.json` under the pack's integrity manifest. Human-readable reports and
+affidavit templates distinguish authorized/requested actions from recorded outcomes;
+absence of a receipt is explicitly unverified. Tray success notifications require a
+verified receipt matching the pending detection PID. Reinfection tracking requires a
+verified process-exit effect for the target, independently of other cleanup outcomes.
+
+`ResponseCoordinator` marks `Verified` only when a completed receipt verifies every
+required effect for the requested action. It caches that exact action for deduplication;
+other action kinds and unsuccessful attempts remain eligible for execution. The orchestrator
+passes the incident ID explicitly, including for host-wide detections without a process PID.
+
+DLL executors attach their already completed receipt through an internal, non-serialized
+field. These report-only outcomes bypass action deduplication/locking and do not execute
+the remediation again. Serialized telemetry and metadata dictionaries cannot supply that
+receipt or acquire response authority from it.
+
+Incidents expose `ResponseStatus`, `LastResponse` and up to 16 recent `ResponseAttempts`.
+`Responded` means the requested response effects were verified, not that the host is clean.
+Failed, refused, attempted and partial responses remain active; a later log-only observation
+does not erase their state. New actionable evidence reopens a previously responded incident.
+
+Read-back verifies process exits, vault/source presence, firewall rule configuration and
+active profile state, registry absence and certificate absence in each inspected store.
+It does not establish end-to-end network isolation or independently validate encrypted
+vault contents. VPN/ISO/container/VM APIs that provide no final-state receipt are explicitly
+reported as attempted, never inferred successful from Task completion. Windows execution
+of these native paths remains a required validation step.
+
+High-confidence, authorized Tier1 detections may act immediately. Tier2 is always LogOnly.
+Correlation remains available for composite detections and explanations; it is not a
+configurable waiting mode. Action-specific checks, protected-process exclusions and response
+budgets continue to apply.
 
 | Source | Behavior |
 |--------|----------|
-| `Sentinel:ActiveResponse` (default **true**) | Master arming switch - destructive actions still require chain confirm when ObserveUntilChain is on |
-| `Sentinel:ObserveUntilChain` (default **true**) | Demote all kill/quarantine/isolate/host mutation to LogOnly until multi-signal proof of terminal attack (C2 beacon, exfil, token theft, reverse shell, cred dump, BYOVD) |
-| `Sentinel:ChainConfirmMinSignals` (default **2**) | Distinct rules on same PID within window + >=1 terminal outcome -> nuke |
-| `Sentinel:ChainConfirmWindowSeconds` (default **300**) | Rolling correlation window |
-| `Sentinel:SilentObserve` (default **true**) | No toasts / auto evidence packs until chain-confirmed; chain-confirmed nukes always pack + critical toast (v1.9.3) |
-| `Sentinel:EnforceActiveResponse` (default **false**) | When true, `AntiTamperGuard` force-re-enables ActiveResponse if flipped off |
-| DLL unload exemption | `DllUnloadEngine` FreeLibrary on mapped identity failure and quarantine of hijack-name disk plants may act immediately (never kill the host on disk plant) |
-| CLI `--active-response` | Optional force-enable at process start (legacy) |
-| Central gate | `ResponsePolicy` + `AdvancedResponseEngine`; composites tagged `ChainConfirmed=true` |
+| `Sentinel:ActiveResponse` | Always armed; the compatibility setter cannot disable response |
+| `Sentinel:ChainConfirmMinSignals` / `ChainConfirmWindowSeconds` | Correlation settings; not a prerequisite for every Tier1 response |
+| `Sentinel:SilentObserve` | Controls existing notification/evidence behavior; does not disable authorized response |
+| DLL remediation | Identity failure on a mapped module can trigger process containment and quarantine; a disk plant alone never authorizes killing its writer |
+| Process containment | Snapshot and rescan descendants, pin native process handles, reject reused parent identities and protect each target individually. Verify observed exits; report incomplete discovery or failures explicitly |
+| DLL containment report | Separate detected, quarantined, already absent, deferred and failed files. Successful process containment requires verified root/descendant outcomes, independently of disk cleanup |
+| Central checks | `ResponsePolicy` classification, `AdvancedResponseEngine` Tier2 gate and action-specific policies |
 
 ---
 
@@ -850,7 +887,7 @@ Honest remediations. Several 2.1.8 "fixes" were not in force until this version.
 | BrowserC2Guard | Per-user LocalAppData extension trees, not SYSTEM profile |
 | GSecurity.inf | Password length 12 + complexity; audit on; FIPS not touched |
 | Worker | `RATE_LIMITER.limit` after HMAC; MB `/report/hash` is lookup+comment |
-| EncryptedConfigStore | `SCFG2` HMAC envelope; leftover JSON cannot set `ObserveUntilChain=false` |
+| EncryptedConfigStore | `SCFG2` HMAC envelope; leftover JSON cannot disable compiled response policy |
 | President's Law | No DnsAnomaly / NetworkAnomaly |
 | Tests | `V220SecurityHardeningTests` |
 

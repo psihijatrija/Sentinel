@@ -319,7 +319,7 @@ namespace Sentinel.Core
                 Reasoning =
                     "Explainable weighted multi-category correlation exceeded the configured threshold. " +
                     "Distinct behavioral categories on the same process within the correlation window " +
-                    "constitute multi-signal proof under ObserveUntilChain. Breakdown: " +
+                    "constitute multi-signal proof under response authorization. Breakdown: " +
                     string.Join(", ", card.ContributingRules),
                 Timestamp = _utcNow(),
                 Metadata = new Dictionary<string, string>

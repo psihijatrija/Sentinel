@@ -7,7 +7,7 @@ This roadmap is deliberately grounded in Sentinel's own documented reality - the
 in `THREAT_MODEL.md`, the known limitations marked in code, and the "intentionally out of scope"
 list in `requirements.md`. It is not a wishlist of features that would break the project's
 constraints. Anything here must still obey `docs/constraints.md` (userland only, no kernel
-driver, Tier2 never acts, observe-until-chain, behavioral kill authority).
+driver, Tier2 never acts, immediate authorized Tier1 response, behavioral kill authority).
 
 Because there is no fixed release schedule, this is organized by **theme and honesty**, not by
 version numbers. Pick from the top of a theme when you want to move the needle.
@@ -22,8 +22,8 @@ version numbers. Pick from the top of a theme when you want to move the needle.
   *entire chain* that leads to kernel compromise, not competing in ring 0.
 - **Detect behavior, not identity.** Kill authority comes from what a process does, never from
   a name/path/hash.
-- **Observe-first.** Weak single signals are LogOnly; only chain-confirmed terminals authorize
-  destructive response.
+- **Observe-first.** Weak signals are LogOnly; high-confidence Tier1 terminal signals and authorized
+  composites can trigger destructive response immediately.
 - **Every gap is documented, not hidden.** If a defense is limited, say so in the threat model.
 
 ---

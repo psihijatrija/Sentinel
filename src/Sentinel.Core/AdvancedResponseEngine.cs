@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -69,6 +70,7 @@ namespace Sentinel.Core
                     actionTaken.StartsWith("LOG", StringComparison.OrdinalIgnoreCase))
                     return;
                 if (reason != null &&
+                    !actionTaken.StartsWith("RESPONSE_", StringComparison.OrdinalIgnoreCase) &&
                     reason.IndexOf("ChainConfirmed", StringComparison.OrdinalIgnoreCase) < 0 &&
                     actionTaken.IndexOf("KILL", StringComparison.OrdinalIgnoreCase) < 0 &&
                     actionTaken.IndexOf("QUARANTINE", StringComparison.OrdinalIgnoreCase) < 0 &&
@@ -87,16 +89,9 @@ namespace Sentinel.Core
         /// <summary>
         /// v1.6.0: Returns false when MaxKillsPerMinute budget is exhausted.
         /// NetworkIsolate is gated separately via TryConsumeIsolateBudget.
-        /// v2.1.7 B5: Chain-confirmed detections bypass the rate limit (separate unlimited budget).
         /// </summary>
-        private bool TryConsumeKillBudget(bool chainConfirmed = false)
+        private bool TryConsumeKillBudget()
         {
-            // v2.1.7: Chain-confirmed multi-signal detections bypass the per-minute rate limit.
-            // Rationale: An attacker cannot forge chain-confirmed events (requires multi-rule convergence
-            // on same PID within the correlation window). Rate-limiting was designed to prevent FP storms,
-            // not to hamper confirmed attack response.
-            if (chainConfirmed) return true;
-
             int limit = _config.MaxKillsPerMinute;
             if (limit <= 0) return true;
 
@@ -260,7 +255,46 @@ namespace Sentinel.Core
                    r.Contains("Data Exfiltration: Cloud Sync");
         }
 
-        public async Task HandleAsync(DetectionEvent detection)
+        public async Task<ResponseExecutionResult> HandleAsync(DetectionEvent detection)
+        {
+            if (detection == null) throw new ArgumentNullException(nameof(detection));
+            if (detection.RecordedExecution != null)
+            {
+                // Report a trusted inline executor's receipt without executing its action again.
+                // External telemetry cannot populate this internal, non-serialized field.
+                await _eventLogger.LogEventAsync("response_result", detection.RecordedExecution).ConfigureAwait(false);
+                return detection.RecordedExecution;
+            }
+            var execution = new ResponseExecutionResult
+            {
+                ProcessId = detection.ProcessId, ProcessName = detection.ProcessName,
+                RequestedAction = detection.AuthorizedResponse.ToString(),
+                EffectiveAction = detection.AuthorizedResponse.ToString()
+            };
+            try { await HandleCoreAsync(detection, execution).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                execution.Add("Executor", detection.ProcessId.ToString(), ResponseExecutionStatus.Failed, ex.Message);
+                execution.Reason = "Response executor failed: " + ex.Message;
+            }
+            execution.CompletedAt = DateTimeOffset.UtcNow;
+            await _eventLogger.LogEventAsync("response_result", execution).ConfigureAwait(false);
+            return execution;
+        }
+
+        private Task LogResponseAsync(ResponseExecutionResult execution, ResponseEvent response)
+        {
+            execution.Reason = response.Reason;
+            execution.CompletedAt = DateTimeOffset.UtcNow;
+            if (response.ActionTaken == "LOG" && execution.Effects.Count == 0)
+                execution.EffectiveAction = nameof(ResponseAction.LogOnly);
+            response.Execution = execution;
+            if (response.ActionTaken != "LOG" && execution.Status != ResponseExecutionStatus.Verified)
+                response.ActionTaken = "RESPONSE_" + execution.Status.ToString().ToUpperInvariant();
+            return _eventLogger.LogEventAsync("response", response);
+        }
+
+        private async Task HandleCoreAsync(DetectionEvent detection, ResponseExecutionResult execution)
         {
             var stopwatch = Stopwatch.StartNew();
 
@@ -311,7 +345,7 @@ namespace Sentinel.Core
                                 Reason = reason,
                                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                             };
-                            await _eventLogger.LogEventAsync("response", selfLog);
+                            await LogResponseAsync(execution, selfLog);
                             return;
                         }
                     }
@@ -319,18 +353,7 @@ namespace Sentinel.Core
                 catch { /* process may have exited - continue with normal handling */ }
             }
 
-            // Standing product default: ObserveUntilChain=true -> enforce tier law here
-            // (Tier1 only for kill-grade terminals / composites). When ObserveUntilChain is
-            // explicitly false (lab / unit tests of response paths), preserve author tier.
-            // Live DetectionEngine always applies ApplyTierLaw before this gate.
-            if (_config.ObserveUntilChain)
-            {
-                double minTier1 = _config.MinTier1Confidence > 0
-                    ? _config.MinTier1Confidence
-                    : ResponsePolicy.DefaultMinTier1Confidence;
-                ResponsePolicy.ApplyTierLaw(detection, minTier1);
-            }
-
+            // Live DetectionEngine classifies tier authority before dispatch.
             var isPresidentsLaw = IsPresidentsLawRule(detection);
             var effectiveTier = detection.Tier;
             var effectiveResponse = detection.AuthorizedResponse;
@@ -365,13 +388,10 @@ namespace Sentinel.Core
                     Reason = reason,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", ideLog);
+                await LogResponseAsync(execution, ideLog);
                 return;
             }
 
-            // v2.3.1 ALWAYS-ON: Game Protection Policy - checked BEFORE allowlist and
-            // observe-until-chain. Game processes NEVER receive destructive actions.
-            // This is a hard product invariant that cannot be overridden by config.
             if (!isPresidentsLaw && detection.ProcessId > 0 &&
                 AlwaysOnPolicies.ApplyGameProtection(detection, imagePath))
             {
@@ -386,7 +406,7 @@ namespace Sentinel.Core
                     Reason = reason,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", gameLog);
+                await LogResponseAsync(execution, gameLog);
                 return;
             }
 
@@ -398,77 +418,21 @@ namespace Sentinel.Core
                 reason = "LogOnly (Suppressed by allowlist)";
             }
 
-            // Global observe-until-chain: every monitor is silent LogOnly until multi-signal
-            // proof points at BYOVD / exfil / token theft / reverse shell / cred dump.
-            // v2.3.1: DLL unload is an ALWAYS-ON policy (AlwaysOnPolicies.IsDllUnloadAlwaysOn).
-            // MitmDefense suite is also exempt: planted cert + ghost process + fake Chromecast /
-            // FCM Send-Tab-to-Self is a confirmed post-incident chain that must act without waiting
-            // for a second unrelated signal.
-            // When chain confirms -> full nuke (quarantine+kill + isolate + chain tracer).
-            bool chainAuthorized = false;
-            bool dllExempt = AlwaysOnPolicies.IsDllUnloadAlwaysOn(detection);
-            bool mitmExempt = ResponsePolicy.IsMitmDefenseAction(detection, _config);
-            if (_config.ObserveUntilChain)
-            {
-                chainAuthorized = ResponsePolicy.MayPerformDestructiveResponse(detection, _config);
-                if (!chainAuthorized && !dllExempt && !mitmExempt)
-                {
-                    effectiveTier = DetectionTier.Tier2Indicator;
-                    effectiveResponse = ResponseAction.LogOnly;
-                    effectiveKillAuthorized = false;
-                    reason = "LogOnly (observe-until-chain: no multi-signal terminal attack yet)";
-                }
-                else if (mitmExempt && !chainAuthorized)
-                {
-                    // Keep author response (RemoveCert / KillProcessTree / NetworkIsolate).
-                    // Do not promote to full QuarantineAndKill - MitM suite is surgical.
-                    effectiveTier = DetectionTier.Tier1Behavioral;
-                    if (detection.AuthorizedResponse is ResponseAction.KillProcess
-                        or ResponseAction.KillProcessTree
-                        or ResponseAction.QuarantineAndKill)
-                        effectiveKillAuthorized = true;
-                    reason = $"MitmDefense action ({detection.AuthorizedResponse})";
-                }
-                else if (chainAuthorized && !dllExempt &&
-                         detection.AuthorizedResponse == ResponseAction.VpnShieldUp)
-                {
-                    // v2.6.0: A chain-confirmed network-tamper incident authored the protective
-                    // VPN-shield action. This is a network-integrity remediation with no malicious
-                    // process to terminate (SYSTEM/PID 0 origin) - do NOT promote it to a process
-                    // nuke. Keep the author action; the VpnShieldUp branch below handles it, still
-                    // Tier1-guarded and still re-checking ProductPosture.AllowsVpnShield.
-                    effectiveTier = DetectionTier.Tier1Behavioral;
-                    reason = "ChainConfirmed network-tamper (VPN shield remediation)";
-                }
-                else if (chainAuthorized && !dllExempt)
-                {
-                    // Nuke with everything once the chain is proven.
-                    // Write authority back onto the detection so AutoIncidentReporter
-                    // (and any post-response consumers) see kill-grade chain-confirmed state.
-                    ResponsePolicy.PromoteChainConfirmedFields(detection);
-                    effectiveTier = DetectionTier.Tier1Behavioral;
-                    effectiveResponse = ResponseAction.QuarantineAndKill;
-                    effectiveKillAuthorized = true;
-                    var outcome = detection.Metadata != null &&
-                                  detection.Metadata.TryGetValue(ResponsePolicy.TerminalOutcomeKey, out var o)
-                        ? o : "chain";
-                    reason = $"ChainConfirmed nuke ({outcome})";
-                }
-            }
-            else if (IsObserveOnlyUserActivityHeuristic(detection.RuleName) &&
+            if (IsObserveOnlyUserActivityHeuristic(detection.RuleName) &&
                      effectiveResponse is ResponseAction.KillProcess or ResponseAction.KillProcessTree
                          or ResponseAction.Quarantine or ResponseAction.QuarantineAndKill
                          or ResponseAction.NetworkIsolate)
             {
-                // Legacy narrow safety net when ObserveUntilChain is explicitly off.
+                // Weak user-activity heuristics never authorize destructive response.
                 effectiveTier = DetectionTier.Tier2Indicator;
                 effectiveResponse = ResponseAction.LogOnly;
                 effectiveKillAuthorized = false;
                 reason = "LogOnly (observe-first: weak user-activity heuristic - no confirmed attack)";
             }
 
-            // MitmDefense: cert remove / kill ghost / isolate rogue Cast without full multi-signal chain.
-            bool ar = _config.ActiveResponse && (!_config.ObserveUntilChain || chainAuthorized || dllExempt || mitmExempt);
+            bool ar = _config.ActiveResponse;
+            execution.EffectiveAction = effectiveTier == DetectionTier.Tier2Indicator
+                ? nameof(ResponseAction.LogOnly) : effectiveResponse.ToString();
 
             // v2.8.4: Isolation-environment upgrade. When a Tier1 kill/quarantine action is already
             // authorized AND the offending process runs from a mounted ISO/disk image, upgrade the
@@ -529,7 +493,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveResponse == ResponseAction.RemoveCertAndKillAdder && effectiveTier == DetectionTier.Tier1Behavioral)
@@ -541,7 +505,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveResponse == ResponseAction.RemoveRegistryEntry && effectiveTier == DetectionTier.Tier1Behavioral)
@@ -553,7 +517,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveResponse == ResponseAction.RemoveCert && effectiveTier == DetectionTier.Tier1Behavioral)
@@ -565,7 +529,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveResponse == ResponseAction.NetworkIsolate && effectiveTier == DetectionTier.Tier1Behavioral)
@@ -577,7 +541,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveResponse == ResponseAction.VpnShieldUp && effectiveTier == DetectionTier.Tier1Behavioral)
@@ -597,16 +561,11 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveResponse == ResponseAction.DismountVolume && effectiveTier == DetectionTier.Tier1Behavioral)
             {
-                // v2.8.4: Isolation-environment containment (mounted ISO / disk image). This is a
-                // destructive host mutation (kill + dismount + delete the .iso), so it only fires
-                // when the response is already chain-authorized (ar) - exactly like every other
-                // destructive branch. Tier2 can never reach here; observe-until-chain keeps it
-                // LogOnly until a multi-signal terminal is proven.
                 if (ar)
                 {
                     shouldDismountVolume = true;
@@ -614,7 +573,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if ((effectiveKillAuthorized ||
@@ -625,11 +584,11 @@ namespace Sentinel.Core
                 {
                     shouldKill = true;
                     if (!reason.StartsWith("MitmDefense") && !reason.StartsWith("ChainConfirmed"))
-                        reason = $"Killed (AuthorizedResponse={effectiveResponse})";
+                        reason = $"Kill requested (AuthorizedResponse={effectiveResponse})";
                 }
                 else
                 {
-                    reason = "LogOnly (observe-until-chain)";
+                    reason = "LogOnly (active response unavailable)";
                 }
             }
             else if (effectiveTier == DetectionTier.Tier1Behavioral)
@@ -643,15 +602,6 @@ namespace Sentinel.Core
                 {
                     reason = "LogOnly (Tier2 Indicator)";
                 }
-            }
-
-            // Chain-confirmed: also isolate if we have a target IP (nuke with everything).
-            if (ar && chainAuthorized && !shouldIsolateNetwork &&
-                detection.Metadata != null &&
-                detection.Metadata.TryGetValue("TargetIP", out var tip) &&
-                !string.IsNullOrEmpty(tip))
-            {
-                shouldIsolateNetwork = true;
             }
 
             // MANDATORY pre-action audit (constraints: the tamper-resistant audit trail MUST be
@@ -695,14 +645,14 @@ namespace Sentinel.Core
 
                 if (!string.IsNullOrEmpty(certThumb) && certThumb != "Unknown" && isMitmCert)
                 {
-                    RemoveCertificateFromStore(certThumb);
+                    execution.Effects.AddRange(RemoveCertificateFromStore(certThumb));
                 }
                 else if (!isMitmCert)
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
 
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await LogResponseAsync(execution, new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
@@ -716,10 +666,15 @@ namespace Sentinel.Core
                 if (int.TryParse(adderPidStr, out int adderPid) && adderPid > 4 && isMitmCert)
                 {
                     if (TryConsumeKillBudget())
-                        HardeningModule.SafeKillProcessTree(adderPid);
+                        execution.AddProcessTree(HardeningModule.SafeKillProcessTree(adderPid));
                     else
-                        reason += " [kill rate-limited]";
+                        execution.Add("ProcessTree", adderPidStr, ResponseExecutionStatus.Refused, "Kill budget exhausted.");
                 }
+
+                if (!int.TryParse(adderPidStr, out int verifiedAdder) || verifiedAdder <= 4)
+                    execution.Add("ProcessTree", adderPidStr, ResponseExecutionStatus.Refused, "Valid certificate-adder PID was not supplied.");
+                if (string.IsNullOrEmpty(certThumb) || certThumb == "Unknown")
+                    execution.Add("CertificateRemoval", certThumb, ResponseExecutionStatus.Refused, "Certificate thumbprint missing.");
 
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
@@ -732,7 +687,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. CertThumbprint={certThumb}. AdderPID={adderPidStr}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
             }
             else if (shouldRemoveCert)
             {
@@ -743,7 +698,7 @@ namespace Sentinel.Core
 
                 if (!string.IsNullOrEmpty(certThumb) && certThumb != "Unknown" && isMitmCert)
                 {
-                    RemoveCertificateFromStore(certThumb);
+                    execution.Effects.AddRange(RemoveCertificateFromStore(certThumb));
                 }
 
                 stopwatch.Stop();
@@ -759,17 +714,16 @@ namespace Sentinel.Core
                         : $"Triggered by rule: {detection.RuleName}. Cert removal skipped - not MITM-related. CertThumbprint={certThumb}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
             }
             else if (shouldQuarantineAndKill)
             {
                 // v1.6.0: rate-limit destructive responses
-                // v2.1.7 B5: Chain-confirmed detections bypass rate limit
-                if (!TryConsumeKillBudget(chainAuthorized))
+                if (!TryConsumeKillBudget())
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await LogResponseAsync(execution, new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
@@ -785,12 +739,22 @@ namespace Sentinel.Core
                 int.TryParse(targetPidStr, out int targetPid);
                 
                 string quarantinedInfo = "None";
+                string dllContainmentInfo = "Not attempted";
                 if (targetPid > 0 && _dllUnloadEngine != null)
                 {
                     var remediateResult = await _dllUnloadEngine.UnloadInjectedDllAsync(targetPid);
-                    if (remediateResult.Success && remediateResult.UnloadedDlls.Count > 0)
+                    dllContainmentInfo = remediateResult.ContainmentSummary;
+                    if (remediateResult.Containment != null) execution.AddProcessTree(remediateResult.Containment);
+                    foreach (var file in remediateResult.FileOutcomes)
+                        execution.Add("DllQuarantine", file.Key,
+                            file.Value == DllFileOutcome.Quarantined || file.Value == DllFileOutcome.AlreadyAbsent
+                                ? ResponseExecutionStatus.Verified : file.Value == DllFileOutcome.Deferred
+                                    ? ResponseExecutionStatus.Attempted : ResponseExecutionStatus.Failed, file.Value.ToString());
+                    if (remediateResult.Containment == null)
+                        execution.Add("DllContainment", targetPid.ToString(), ResponseExecutionStatus.Refused, "No eligible mapped-module containment was performed.");
+                    if (remediateResult.QuarantinedDlls.Count > 0)
                     {
-                        quarantinedInfo = string.Join(", ", remediateResult.UnloadedDlls);
+                        quarantinedInfo = string.Join(", ", remediateResult.QuarantinedDlls);
                     }
                 }
 
@@ -813,17 +777,22 @@ namespace Sentinel.Core
                     {
                         // QuarantineManager refuses signed binaries by default (returns null).
                         var qPath = await _quarantineManager.QuarantineFileAtomicAsync(quarantinePath!);
-                        injectorQuarantined = qPath != null;
+                        var quarantineEffect = ResponseVerification.Quarantine(quarantinePath!, qPath);
+                        execution.Effects.Add(quarantineEffect);
+                        injectorQuarantined = quarantineEffect.Status == ResponseExecutionStatus.Verified;
                         // signed binary - kill process tree but preserve the file on disk
                     }
                 }
-                catch { }
-
-                // Terminate injecting process tree
-                if (detection.ProcessId > 4)
+                catch (Exception ex)
                 {
-                    HardeningModule.SafeKillProcessTree(detection.ProcessId);
+                    execution.Add("Quarantine", detection.ProcessId.ToString(), ResponseExecutionStatus.Failed, ex.Message);
                 }
+                if (!execution.Effects.Any(e => e.Action == "Quarantine"))
+                    execution.Add("Quarantine", detection.ProcessId.ToString(), ResponseExecutionStatus.Refused, "Injector file was not eligible or could not be resolved.");
+
+                // Report the injector tree separately from the process hosting the DLL.
+                var injectorContainment = HardeningModule.SafeKillProcessTree(detection.ProcessId);
+                execution.AddProcessTree(injectorContainment);
 
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
@@ -832,13 +801,15 @@ namespace Sentinel.Core
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
-                    ActionTaken = injectorQuarantined ? "QUARANTINE_AND_KILL" : "KILL_ONLY (signed injector preserved)",
-                    Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Quarantined={quarantinedInfo}. InjectorQuarantined={injectorQuarantined}. TargetPID={targetPid}",
+                    ActionTaken = injectorContainment.Success
+                        ? (injectorQuarantined ? "QUARANTINE_AND_KILL" : "KILL_ONLY (injector file preserved)")
+                        : "CONTAINMENT_INCOMPLETE",
+                    Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Quarantined={quarantinedInfo}. InjectorQuarantined={injectorQuarantined}. TargetPID={targetPid}. DllContainment={dllContainmentInfo}. InjectorContainment={JsonSerializer.Serialize(injectorContainment)}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
-                NotifyReinfectionCorrelator(detection);
+                NotifyReinfectionCorrelator(detection, execution);
             }
             else if (shouldRaiseVpnShield)
             {
@@ -853,8 +824,12 @@ namespace Sentinel.Core
                 {
                     var shieldDetection = detection;
                     _ = _vpnShieldEngine.RaiseShieldAsync(shieldDetection, CancellationToken.None);
+                    execution.Add("VpnShield", "network", ResponseExecutionStatus.Attempted,
+                        "Shield remediation scheduled; final tunnel/network state is not verified by this response.");
                 }
 
+                if (_vpnShieldEngine == null)
+                    execution.Add("VpnShield", "network", ResponseExecutionStatus.Refused, "VPN shield executor is unavailable.");
                 var shieldLog = new ResponseEvent
                 {
                     ProcessId = detection.ProcessId,
@@ -863,7 +838,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", shieldLog);
+                await LogResponseAsync(execution, shieldLog);
                 TryWriteWindowsEventLog(detection, shieldLog.ActionTaken, shieldLog.Reason);
             }
             else if (shouldIsolateNetwork)
@@ -873,7 +848,7 @@ namespace Sentinel.Core
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await LogResponseAsync(execution, new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
@@ -901,15 +876,16 @@ namespace Sentinel.Core
                     }
                     else
                     {
-                        IsolateNetworkTarget(targetIp, detection.RuleName);
+                        execution.Effects.Add(IsolateNetworkTarget(targetIp, detection.RuleName));
                         // v1.8.1: restore ARP entry purge (lost in LOLBin-free rewrite).
                         // Was `arp -d` shell-out (v5.9.0); now DeleteIpNetEntry P/Invoke only.
-                        FlushArpEntry(targetIp);
+                        execution.Effects.Add(FlushArpEntry(targetIp));
+                        execution.Effects.Add(FlushDnsCache());
                     }
                 }
 
-                // Also flush DNS cache to clear poisoned entries
-                FlushDnsCache();
+                if (!execution.Effects.Any(e => e.Action == "FirewallRules"))
+                    execution.Add("FirewallRules", targetIp, ResponseExecutionStatus.Refused, "Target is absent, invalid or protected from isolation.");
 
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
@@ -922,7 +898,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. Target={targetIp}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
             }
             else if (shouldRemoveRegistryEntry)
@@ -943,14 +919,15 @@ namespace Sentinel.Core
                         {
                             "HKCU" => Microsoft.Win32.Registry.CurrentUser,
                             "HKCR" => Microsoft.Win32.Registry.ClassesRoot,
-                            _ => Microsoft.Win32.Registry.LocalMachine
+                            "HKLM" => Microsoft.Win32.Registry.LocalMachine,
+                            _ => throw new ArgumentException("Unsupported registry hive.")
                         };
                         using var key = regHive.OpenSubKey(keyPath, writable: true);
                         if (key != null)
                         {
                             key.DeleteValue(valueName, throwOnMissingValue: false);
-                            removed = true;
-                            removalLog = $"Removed value '{valueName}' from {hive}\\{keyPath}";
+                            removed = !key.GetValueNames().Contains(valueName, StringComparer.OrdinalIgnoreCase);
+                            removalLog = $"Verified absent value '{valueName}' from {hive}\\{keyPath}";
                         }
                     }
                     else if (!string.IsNullOrEmpty(subKey) && keyPath.Contains("Services"))
@@ -960,8 +937,9 @@ namespace Sentinel.Core
                         if (servicesKey != null)
                         {
                             servicesKey.DeleteSubKeyTree(subKey, throwOnMissingSubKey: false);
-                            removed = true;
-                            removalLog = $"Removed service subkey '{subKey}' from {hive}\\{keyPath}";
+                            using var remaining = servicesKey.OpenSubKey(subKey);
+                            removed = remaining == null;
+                            removalLog = $"Verified absent service subkey '{subKey}' from {hive}\\{keyPath}";
                         }
                     }
                     else if (!string.IsNullOrEmpty(keyPath) && keyPath.Contains("CLSID"))
@@ -970,15 +948,16 @@ namespace Sentinel.Core
                         using var clsidKey = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey(keyPath, writable: true);
                         if (clsidKey != null)
                         {
-                            var parent = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey("CLSID", writable: true);
+                            using var parent = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey("CLSID", writable: true);
                             if (parent != null)
                             {
                                 var clsid = detection.Metadata!.GetValueOrDefault("CLSID", "");
                                 if (!string.IsNullOrEmpty(clsid))
                                 {
                                     parent.DeleteSubKeyTree(clsid, throwOnMissingSubKey: false);
-                                    removed = true;
-                                    removalLog = $"Removed CLSID '{clsid}' from HKCR\\CLSID";
+                                    using var remaining = parent.OpenSubKey(clsid);
+                                    removed = remaining == null;
+                                    removalLog = $"Verified absent CLSID '{clsid}' from HKCR\\CLSID";
                                 }
                             }
                         }
@@ -988,6 +967,10 @@ namespace Sentinel.Core
                 {
                     removalLog = $"Failed to remove registry entry: {ex.Message}";
                 }
+
+                execution.Add("RegistryRemoval", hive + "\\" + keyPath,
+                    removed ? ResponseExecutionStatus.Verified : ResponseExecutionStatus.Failed,
+                    string.IsNullOrEmpty(removalLog) ? "Registry target was not removed or could not be verified." : removalLog);
 
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
@@ -1000,7 +983,7 @@ namespace Sentinel.Core
                     Reason = $"Triggered by rule: {detection.RuleName}. {reason}. {removalLog}",
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
             }
             else if (shouldKill && detection.ProcessId > 4)
@@ -1014,7 +997,12 @@ namespace Sentinel.Core
                     detection.Metadata != null &&
                     detection.Metadata.TryGetValue("ContainerId", out var cid))
                 {
-                    try { await _isolationResponse.HandleDockerThreatAsync(cid); } catch { }
+                    try
+                    {
+                        await _isolationResponse.HandleDockerThreatAsync(cid);
+                        execution.Add("DockerContainment", cid, ResponseExecutionStatus.Attempted, "Legacy executor returned without a verifiable container-state receipt.");
+                    }
+                    catch (Exception ex) { execution.Add("DockerContainment", cid, ResponseExecutionStatus.Failed, ex.Message); }
                     isolationContainmentNote = $". Docker containment (container={cid})";
                 }
                 else if (shouldContainVm && _isolationResponse != null &&
@@ -1023,17 +1011,24 @@ namespace Sentinel.Core
                          int.TryParse(vp, out var vmPid) && vmPid > 4)
                 {
                     var vmName = detection.Metadata.TryGetValue("VmName", out var vn) ? vn : "";
-                    try { await _isolationResponse.HandleVmThreatAsync(vmPid, vmName); } catch { }
+                    try
+                    {
+                        await _isolationResponse.HandleVmThreatAsync(vmPid, vmName);
+                        execution.Add("VmContainment", vmPid.ToString(), ResponseExecutionStatus.Attempted, "Legacy executor returned without a verifiable VM-state receipt.");
+                    }
+                    catch (Exception ex) { execution.Add("VmContainment", vmPid.ToString(), ResponseExecutionStatus.Failed, ex.Message); }
                     isolationContainmentNote = $". VM containment (vmHostPid={vmPid})";
                 }
 
+                if ((shouldContainDocker || shouldContainVm) && _isolationResponse == null)
+                    execution.Add("EnvironmentContainment", "isolation", ResponseExecutionStatus.Refused, "Isolation executor unavailable.");
+
                 // v1.6.0: rate-limit kill storms
-                // v2.1.7 B5: Chain-confirmed detections bypass rate limit
-                if (!TryConsumeKillBudget(chainAuthorized))
+                if (!TryConsumeKillBudget())
                 {
                     stopwatch.Stop();
                     _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                    await _eventLogger.LogEventAsync("response", new ResponseEvent
+                    await LogResponseAsync(execution, new ResponseEvent
                     {
                         ProcessId = detection.ProcessId,
                         ProcessName = detection.ProcessName,
@@ -1051,7 +1046,14 @@ namespace Sentinel.Core
                 if (_chainTracer != null)
                 {
                     var traceResult = await _chainTracer.TraceAndRespondAsync(detection);
-                    if (traceResult != null && traceResult.Success)
+                    foreach (var tree in traceResult.ProcessContainments) execution.AddProcessTree(tree);
+                    execution.Effects.AddRange(traceResult.AdditionalEffects);
+                    if (!traceResult.Success)
+                        execution.Add("ChainTrace", detection.ProcessId.ToString(), ResponseExecutionStatus.Failed,
+                            traceResult.ErrorMessage ?? "Chain tracing did not complete.");
+                    if (traceResult.ProcessContainments.Count == 0)
+                        execution.Add("ProcessTree", detection.ProcessId.ToString(), ResponseExecutionStatus.Refused, "Chain tracing did not verify process containment.");
+                    if (traceResult.Success)
                     {
                         if (traceResult.AttackRoot != null)
                         {
@@ -1066,7 +1068,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    HardeningModule.SafeKillProcessTree(detection.ProcessId);
+                    execution.AddProcessTree(HardeningModule.SafeKillProcessTree(detection.ProcessId));
                 }
 
                 stopwatch.Stop();
@@ -1080,9 +1082,9 @@ namespace Sentinel.Core
                     Reason = reasonText,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
                 TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
-                NotifyReinfectionCorrelator(detection);
+                NotifyReinfectionCorrelator(detection, execution);
             }
             else if (shouldDismountVolume)
             {
@@ -1091,8 +1093,8 @@ namespace Sentinel.Core
                 // dismount the image, and delete the backing .iso. Delegated to the (now wired)
                 // IsolationResponseEngine so the injection-safe Dismount-DiskImage path is reused.
                 // Rate-limited on the same kill budget as any other kill (chain-confirmed bypasses).
-                await HandleIsoDismountAsync(detection, reason, chainAuthorized, stopwatch);
-                NotifyReinfectionCorrelator(detection);
+                await HandleIsoDismountAsync(detection, reason, stopwatch, execution);
+                NotifyReinfectionCorrelator(detection, execution);
             }
             else
             {
@@ -1106,7 +1108,7 @@ namespace Sentinel.Core
                     Reason = reason,
                     ExecutionTimeMs = stopwatch.ElapsedMilliseconds
                 };
-                await _eventLogger.LogEventAsync("response", responseLog);
+                await LogResponseAsync(execution, responseLog);
                 // LogOnly never writes Windows Event Log (CriticalOnly trail)
             }
         }
@@ -1119,13 +1121,13 @@ namespace Sentinel.Core
         /// A missing IsolationResponseEngine (e.g. Agent-side) also degrades to kill-only.
         /// </summary>
         private async Task HandleIsoDismountAsync(
-            DetectionEvent detection, string reason, bool chainAuthorized, Stopwatch stopwatch)
+            DetectionEvent detection, string reason, Stopwatch stopwatch, ResponseExecutionResult execution)
         {
-            if (!TryConsumeKillBudget(chainAuthorized))
+            if (!TryConsumeKillBudget())
             {
                 stopwatch.Stop();
                 _metrics.RecordResponse(stopwatch.ElapsedMilliseconds);
-                await _eventLogger.LogEventAsync("response", new ResponseEvent
+                await LogResponseAsync(execution, new ResponseEvent
                 {
                     ProcessId = detection.ProcessId,
                     ProcessName = detection.ProcessName,
@@ -1149,18 +1151,22 @@ namespace Sentinel.Core
             {
                 await _isolationResponse.HandleIsoThreatAsync(detection.ProcessId, isoPath!);
                 actionTaken = "ISO_KILL_DISMOUNT_DELETE";
-                reason += $". ISO containment: killed PID {detection.ProcessId}, dismounted+deleted '{isoPath}'";
+                execution.Add("IsoContainment", isoPath!, ResponseExecutionStatus.Attempted,
+                    "Legacy executor returned; dismount and complete process-tree exit were not independently verified.");
+                reason += ". ISO containment attempted; verification remains outstanding";
             }
             else
             {
                 // Could not confirm an ISO origin - do NOT dismount/delete anything. Fall back to
                 // a plain process-tree kill so the confirmed terminal is still contained.
                 if (detection.ProcessId > 4)
-                    HardeningModule.SafeKillProcessTree(detection.ProcessId);
+                    execution.AddProcessTree(HardeningModule.SafeKillProcessTree(detection.ProcessId));
+                execution.Add("IsoContainment", isoPath ?? "unresolved", ResponseExecutionStatus.Refused,
+                    "ISO origin or executor unavailable; only process containment was attempted.");
                 actionTaken = "KILL";
                 reason += string.IsNullOrEmpty(isoPath)
-                    ? ". ISO origin unresolved - killed process tree only (no volume mutation)"
-                    : ". IsolationResponseEngine unavailable - killed process tree only";
+                    ? ". ISO origin unresolved; process containment attempted, no volume mutation"
+                    : ". IsolationResponseEngine unavailable; process containment attempted";
             }
 
             stopwatch.Stop();
@@ -1174,15 +1180,15 @@ namespace Sentinel.Core
                 Reason = $"Triggered by rule: {detection.RuleName}. {reason}",
                 ExecutionTimeMs = stopwatch.ElapsedMilliseconds
             };
-            await _eventLogger.LogEventAsync("response", responseLog);
+            await LogResponseAsync(execution, responseLog);
             TryWriteWindowsEventLog(detection, responseLog.ActionTaken, responseLog.Reason);
         }
 
-        private void NotifyReinfectionCorrelator(DetectionEvent detection)
+        private void NotifyReinfectionCorrelator(DetectionEvent detection, ResponseExecutionResult execution)
         {
             try
             {
-                if (_reinfectionCorrelator == null) return;
+                if (_reinfectionCorrelator == null || !execution.HasVerifiedProcessExit(detection.ProcessId)) return;
                 var hash = detection.Metadata?.GetValueOrDefault("SHA256", "");
                 if (string.IsNullOrEmpty(hash))
                 {

@@ -38,7 +38,7 @@ namespace Sentinel.Tests
             _metrics = new SentinelMetrics();
             _logger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
             _allowlist = new AllowlistService(_cache, NullLogger<AllowlistService>.Instance);
-            var config = new SentinelConfig { ActiveResponse = true, ObserveUntilChain = false };
+            var config = new SentinelConfig { ActiveResponse = true };
             _responseEngine = new AdvancedResponseEngine(config, _metrics, _logger, new QuarantineManager(_tempDir), _allowlist);
             _iocScanner = new IoCScanner(_cache);
             _reputationService = new HashReputationService(_cache, new ThreatReportingConfig(), NullLogger<HashReputationService>.Instance);
