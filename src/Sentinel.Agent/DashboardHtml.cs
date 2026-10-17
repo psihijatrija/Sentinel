@@ -420,12 +420,12 @@ select.rp-input {{ font-family: 'Segoe UI', sans-serif; }}
                         <div class=""panel-header""><h3 style=""color:#81c995"">Hardening Status</h3></div>
                         <div class=""panel-body"">
                             <p style=""font-size:12px;color:#9aa0a6;margin-bottom:10px"">
-                                <strong style=""color:#81c995"">&#x2713; Always active</strong> - IPSec port lockdown, ASR Block rules,
+                                <strong style=""color:#81c995"">Service-managed policies</strong> - IPSec port lockdown, ASR Block rules,
                                 RPC/DCOM firewall, credential hardening (LSASS PPL, WDigest off), registry hardening,
-                                and browser hardening are enforced on every startup with no config gate.
+                                and browser hardening are requested by the privileged service. Effective firewall policy is verified separately.
                             </p>
                             <p style=""font-size:10px;color:#9aa0a6;margin-top:6px"">
-                                Hardening cannot be disabled. It is always active as of Sentinel v2.5.5.
+                                The status badge reports unverified firewall state and policy conflicts. Domain policy may prevent local enforcement.
                             </p>
                         </div>
                     </div>
@@ -667,11 +667,16 @@ function loadStatus() {{
             document.getElementById('version').textContent = 'v' + data.version;
             var badge = document.getElementById('status-badge');
             var text = document.getElementById('status-text');
-            if (data.serviceRunning) {{
+            if (data.serviceRunning && data.firewallPolicyCompliant) {{
                 badge.className = 'status-badge active';
-                text.textContent = 'Protection Active';
+                text.textContent = 'Offline Protection Active';
                 document.getElementById('ov-status').textContent = 'Active';
                 document.getElementById('ov-status').className = 'card-value success';
+            }} else if (data.serviceRunning) {{
+                badge.className = 'status-badge inactive';
+                text.textContent = 'Firewall policy needs attention';
+                document.getElementById('ov-status').textContent = 'Needs attention';
+                document.getElementById('ov-status').className = 'card-value warning';
             }} else {{
                 badge.className = 'status-badge inactive';
                 text.textContent = 'Service Stopped';
@@ -1254,7 +1259,7 @@ function filterModuleTable() {{
             : '<span style=""display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;background:rgba(242,139,130,0.15);color:#f28b82;font-weight:600"">Flagged: ' + esc(m.VerdictReason) + '</span>';
 
         var actionBtn = (!m.Allowed && m.Path)
-            ? '<button class=""btn btn-danger"" style=""padding:3px 8px;font-size:10px"" onclick=""remediateModule(' + currentAuditPid + ', \'' + esc(m.Path).replace(/\\/g, '\\\\') + '\')"">Quarantine</button>'
+            ? '<button class=""btn btn-danger"" style=""padding:3px 8px;font-size:10px"" onclick=""remediateModule(' + currentAuditPid + ', \'' + esc(m.Path).replace(/\\/g, '\\\\') + '\')"">Request inspection</button>'
             : '<span style=""color:#5f6368"">&mdash;</span>';
 
         rows.push('<tr style=""border-bottom:1px solid #35363a"">' +
@@ -1278,7 +1283,7 @@ function filterModuleTable() {{
 }}
 
 function remediateModule(pid, path) {{
-    if (!confirm('Contain and quarantine hostile module: ' + path + '?')) return;
+    if (!confirm('Request service inspection? Any remediation follows Sentinel detection policy.')) return;
     ensureCsrf(function(csrf) {{
         var body = JSON.stringify({{ pid: pid, path: path }});
         apiCall('/api/modules/remediate', {{
@@ -1287,7 +1292,7 @@ function remediateModule(pid, path) {{
             body: body
         }}, function(res) {{
             if (res && res.ok) {{
-                alert('Success: ' + (res.message || 'Module quarantined'));
+                alert(res.message || 'Service inspection requested.');
                 auditSelectedProcess();
             }} else {{
                 alert('Remediation failed: ' + ((res && res.error) || 'error'));

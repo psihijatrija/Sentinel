@@ -15,8 +15,10 @@ living-off-the-land binaries, WMI persistence, and local-network man-in-the-midd
 correlation engine is explainable: every composite emits the score breakdown and the
 ATT&CK techniques that fired.
 
+Sentinel operates offline: online reputation, live intelligence feeds, connectivity probes, and automatic outbound reporting have been removed. The service maintains firewall blocks for Sentinel's non-loopback traffic, mirrors them into supported local Group Policy, and monitors unapproved inbound exceptions for re-enables. Outbound connectivity and narrow DHCP/IPv6 control traffic are preserved; domain conflicts are reported. The authenticated local dashboard remains available. The Agent runs without elevation and delegates required administrator operations to the installed service. The service still hosts system sensors and response; it is not a minimal privilege broker. See [offline operation and validation](docs/OFFLINE_VALIDATION.md).
+
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.2.2 (single source of truth: `version.txt`)
+**Version:** 3.2.3 (single source of truth: `version.txt`)
 
 Engineering assessment, provisional subsystem ratings and remaining validation:
 [quality review](docs/QUALITY_REVIEW.md). Offline replay, evidence verification,

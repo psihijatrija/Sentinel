@@ -27,7 +27,7 @@
 | Graceful degradation on barebone Windows (v1.9.5) | Optional features (Windows Event Log, ETW, toast, TI proxy, custom channels) MUST fail soft: disable permanently for the process after hard failure, keep JSONL + core detection, never throw out of response/pack/service paths. Prefer Application log over custom Event Log channels. |
 | Windows Event Log = critical only (v1.9.5) | When Event Log is available, write lifecycle + chain response + pack + heartbeat only. Never flood with Tier2 observe. Rate-limit writes. |
 | Never ASR-block our own installer (v1.9.6) | Do not enforce Defender ASR `c1db55ab` (advanced ransomware protection) in Block - it breaks Inno TEMP extract and is not "Sentinel is ransomware". Delete if present; keep ASROnlyExclusions for install dir. |
-| **HARDENING IS ALWAYS-ON (v2.5.5)** | IPSec port lockdown, ASR Block rules, RPC/DCOM firewall, remote session guard, registry hardening, credential hardening (LSASS PPL, WDigest off), browser hardening, and LGPO security policy run on every Sentinel startup. `RestrictivePortHardening` is always `true`; the setter is a no-op. `ProductPosture.AllowsProactiveHostLockdown` always returns `true`. There is no work-first mode. **`IsAttackClassTerminal` exceptions:** Campaign-IOC filename carve-out  `SecurityPDF.exe` / `Afd4Eop12_x64.dll` are excluded from skip lists. |
+| **HARDENING IS ALWAYS-ON (v2.5.5)** | IPSec port lockdown, ASR Block rules, RPC/DCOM firewall, remote session guard, registry hardening, credential hardening (LSASS PPL, WDigest off), browser hardening, and LGPO security policy run on every privileged Service startup; the unprivileged Agent applies self-only process mitigations. `RestrictivePortHardening` is always `true`; the setter is a no-op. `ProductPosture.AllowsProactiveHostLockdown` always returns `true`. There is no work-first mode. **`IsAttackClassTerminal` exceptions:** Campaign-IOC filename carve-out  `SecurityPDF.exe` / `Afd4Eop12_x64.dll` are excluded from skip lists. |
 | Never FreeLibrary OS servicing (v1.9.8) | `DllUnloadEngine` must not unload/quarantine DismHost, TrustedInstaller, TiWorker, NTLite, or modules under NLTmpScratch/WinSxS/CBS. Temp load is only hostile for classic sideload **target names** (version.dll, ...), not every Temp DLL. |
 | DLL containment | `DllUnloadEngine` remediates immediately on **identity failure** (foreign path, user-writable drop, unsigned sideload plant) and on proven sideload load. Module *count* is not a signal. Other monitors retain Tier1 and action-specific authorization checks. |
 | Module identity unload is permanent (v2.2.7 / v2.4.6) | `MemoryBehaviorAnalyzer` + `ModuleIdentity` + `DllUnloadEngine` scan **every mapped PE** (startup `EnumModules` baseline + Kernel-Process ImageLoad). Authenticode/`Evaluate` is first-sight per `(pid, path)` - not a 5s re-hash of every image. Foreign mapped PEs are FreeLibrary-APC unloaded immediately. Hijack-name plants (`dbghelp`/`version`/...) outside the OS tree are **quarantined on drop** (file only, no process kill, no same-name stub). `DLL Injection: Foreign Module Unloaded` and `DLL Sideloading: Hijack-Name Plant Quarantined` are **permanent Tier1**. **No config flag** may disable this. Games/anti-cheat skip is **handle safety only** (no VM_READ) - disk plants in steamapps are still quarantined. Never FreeLibrary lsass/csrss/wininit/DISM/NTLite. |
@@ -48,7 +48,7 @@
 | Minimum-privilege process handles | `OpenProcess` calls MUST request only the access rights actually used. Never open with `PROCESS_ALL_ACCESS` unless every right is exercised. |
 | Signed threat report requests | All outbound threat intelligence reports MUST be HMAC-signed with the installation entropy key. Unsigned requests to the proxy are forbidden. |
 | Validate all external process output | Data from `Process.Start` stdout (docker inspect, netsh, sc.exe, etc.) is untrusted. MUST be validated before use in subsequent commands or logic. |
-| Compiled config only | Operational defaults and the threat-proxy HMAC live in the binary. Disk JSON is not loaded. Uninstall is the off switch. |
+| Compiled config only | Operational defaults live in the binary. Disk JSON is not loaded. Online transports and their embedded credential were removed in 3.2.3; legacy overrides cannot restore them. |
 
 ---
 
@@ -59,7 +59,7 @@
 | No placeholder/fake data in detection rules | If a hash list, IOC set, or signature database isn't real, remove it. False confidence is worse than no feature. |
 | No filename-based primary detection | Process names are trivially spoofed. Filename lists are metadata enrichment / observe fuel only, never a President's Law kill (v2.2.0: `EdrKillerDetectionMonitor` is LogOnly). |
 | No security theater features | If a feature doesn't work against an attacker who reads the source code, it must be removed or honestly documented as limited. |
-| Settings is native (v2.2.2) | Tray Settings opens `AgentDashboardForm`. Do not ShellExecute `http://` for Settings. The localhost web dashboard is not started. |
+| Settings is native (v2.2.2) | Tray Settings opens `AgentDashboardForm`. Do not ShellExecute `http://` for Settings. The authenticated loopback dashboard is hosted inside the unprivileged Agent for the native shell. |
 | Kernel CVEs are OS patches (v2.2.3) | Do not claim to patch `afd.sys` / Cloud Files Mini Filter / User Profile Service. Hunt the userland campaign and toast KEV posture. Do not disable OneDrive or WinSock. |
 | Generic CVE-class, not one detector per CVE (v2.2.4) | New Patch Tuesday bugs are covered by exploit-host / MOTW / installer / KEV-match sensors. Do not add a named campaign pack as the only coverage for a kernel EoP. |
 | Monitor types live in `Sentinel.Core` (v2.2.4) | The `Monitors/` folder is layout. Do not put runtime monitor classes in `Sentinel.Core.Monitors` (that hid V217 types behind a second using). |
@@ -68,7 +68,7 @@
 | Game reputation skip is not a trust grant (v2.2.0) | `ShouldSkipReputationForGamePath` refuses user-profile / Temp / Downloads / Desktop trees. Memory-inspect skip (`IsGameOrAntiCheatPath`) is separate and is not a reputation skip. |
 | Kiosk LGPO must not weaken the host (v2.2.0) | `GSecurity.inf` must not set password length 0, complexity off, all audit off, or force FIPS off. |
 | Behavioral signals only for kill authority | President's Law rules must detect what processes DO (API calls, file operations, network behavior), not what they ARE (name, path, hash). |
-| Hash reputation via live API only | Static hash lists in source code are immediately visible to attackers and impossible to keep current. Use HashReputationService (3-API lookup) instead. |
+| Offline reputation (3.2.3) | No online hash/DNS reputation queries. Return Unknown without remote or legacy online-cache trust; retain local behavioral/static/ML signals. |
 
 ---
 

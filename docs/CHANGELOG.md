@@ -1,4 +1,16 @@
 # Changelog
+## [3.2.3] - 2026-10-17
+### Security
+- Removed online hash/DNS reputation queries, live ThreatFox/IP-blocklist/CISA downloads, public-IP and cloud-connectivity checks, active DNS validation, and automatic threat/evidence uploads. Legacy settings cannot re-enable transport; the compiled proxy credential is removed. Offline reputation is Unknown; old online composite caches are no longer reused.
+- Added persistent, reconciled inbound/outbound firewall self-blocks for Service, Agent, and AutoRotate on all profiles, excluding loopback to preserve the local dashboard. Upgrade rules repair their executable paths; uninstall removes owned identifiers. Disabled firewall profiles and enforcement failures remain visible rather than being reported as protected.
+- Enforced standard-user Agent execution through an asInvoker manifest, startup guard, and watchdog token checks. The Agent applies only self mitigations and requests service inspection instead of directly quarantining arbitrary dashboard paths. The privileged service retains system sensors/response; a minimal broker split is not claimed.
+- Bounded unauthenticated privileged IPC input to 16 Ki characters, timed out stalled request readers after five seconds, and denied network-logon pipe access. Existing authentication, replay checks, operation allowlist, and response policy remain enforced.
+- Restricted Authenticode URL retrieval to cached data. Preserved local behavioral/static/ML detection, local indicator/catalog support, and evidence packs. Removed active LAN port probes that conflict with isolation; passive LAN telemetry remains.
+- Added continuous reconciliation of local and supported local-GPO inbound allow rules, retaining disabled rules, preserving outbound policy and narrow DHCP/essential IPv6 control exceptions, and recording original states for rollback. Exact-filter administrator approvals persist; Windows re-enables/new exceptions are disabled again. Domain GPOs are reported, never edited. ActiveStore/service verification and stale/conflict dashboard status prevent local-write success being mistaken for effective protection.
+- Added passive exploit-context correlation across Defender/security software, browsers, games, and other processes; removed identity skips in post-connection behavior tracking, required real parentage for child-spawn observations, and made port-only observations universally Tier2 LogOnly. Game/anti-cheat memory safety remains intact. Offline self-blocks no longer trigger the WFP monitor's EDRSilencer self-response path.
+### Validation
+- Full Release solution build with warnings as errors; focused offline/isolation and IPC regression checks. Windows firewall/token enforcement and full .NET Framework test execution require the Windows validation checklist.
+
 ## [3.2.2] - 2026-10-17
 ### Fixed
 - Release publication now follows a successful trusted Build & Test push on main/master and pins checkout and release tagging to that tested commit. Successful fixes no longer miss publication because version.txt was unchanged; existing versions remain protected from republishing.

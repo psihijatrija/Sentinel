@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,25 +12,8 @@ using Sentinel.Core.Ml;
 namespace Sentinel.Core
 {
     /// <summary>
-    /// Multi-signal file reputation engine - produces a composite trust score (0-100)
-    /// by aggregating independent signals:
-    ///
-    ///   1. Hash reputation (CIRCL, MalwareBazaar, VirusTotal) - weighted consensus
-    ///   2. Static PE analysis (entropy, suspicious imports, packer indicators)
-    ///   3. Offline PE ML model (FastTree) - soft prior when models are present
-    ///   4. Signer trust (Authenticode verification + publisher reputation)
-    ///   5. Contextual risk (file origin path, age on disk, prevalence)
-    ///
-    /// Scoring: 0 = maximally trusted, 100 = confirmed malicious.
-    ///   0-20:  Trusted (signed, known-good hash, established)
-    ///   21-40: Low risk (some trust signals missing but no red flags)
-    ///   41-60: Suspicious (unknown hash, unusual characteristics)
-    ///   61-80: High risk (flagged by 1+ sources, suspicious static properties)
-    ///   81-100: Malicious (confirmed by multiple sources or critical indicators)
-    ///
-    /// Rate limiting: 4 req/s to CIRCL, 2 req/s to MalwareBazaar, 4 req/min to VT.
-    /// Caching: Results persisted via SecureCacheStore with 7-day TTL for Safe,
-    ///          24h TTL for Unknown (retry), permanent for Unsafe.
+    /// Offline file analysis combining static structure, signer trust, and local context.
+    /// Online reputation remains Unknown with a neutral prior; no remote lookup is attempted.
     /// </summary>
     public sealed class FileReputationEngine
     {
@@ -42,31 +24,11 @@ namespace Sentinel.Core
         private readonly ContextBus? _contextBus;
         private readonly ThreatReportingConfig? _reportingConfig;
 
-        // SECURITY v1.4.4: Shared static HttpClient instances to prevent socket exhaustion.
-        // Each has appropriate timeout for its target API. Thread-safe, reuses connections.
-        // v2.3.8: CIRCL / MalwareBazaar use the same SPKI pin helper as VirusTotal/report.
-        // Pin mismatch or TLS failure -> Error (never Safe).
-        private static readonly HttpClient _circlHttpClient = ProxyAuthHelper.CreatePinnedHttpClient(4, ProxyAuthHelper.CirclHashlookupPins);
-        private static readonly HttpClient _mbHttpClient = ProxyAuthHelper.CreatePinnedHttpClient(3, ProxyAuthHelper.MalwareBazaarPins);
-        // v2.0.4 HIGH-3: VT proxy uses certificate-pinned HttpClient
-        private static readonly HttpClient _vtProxyHttpClient = ProxyAuthHelper.CreatePinnedHttpClient(5);
-
-        // v2.0.4 LOW-1: Proxy health monitoring - track consecutive failures to alert on degradation
-#pragma warning disable CS0169
-        private int _proxyConsecutiveFailures;
-#pragma warning restore CS0169
-        private DateTimeOffset _lastProxyHealthAlert = DateTimeOffset.MinValue;
-        private const int ProxyHealthAlertThreshold = 10; // Alert after 10 consecutive failures
-
         // Composite score cache: SHA256 -> (score, timestamp)
         private readonly ConcurrentDictionary<string, (FileReputationResult Result, DateTimeOffset CachedAt)> _resultCache = new();
 
         // Prevalence tracking: SHA256 -> number of distinct paths seen
         private readonly ConcurrentDictionary<string, HashSet<string>> _prevalenceMap = new();
-
-        // Rate limiters per API source
-        private readonly SemaphoreSlim _circlThrottle = new(4, 4);      // 4 concurrent
-        private readonly SemaphoreSlim _malwareBazaarThrottle = new(2, 2); // 2 concurrent
 
         // Deduplication: track in-flight lookups to avoid duplicate API calls
         private readonly ConcurrentDictionary<string, Task<FileReputationResult>> _inFlight = new();
@@ -125,7 +87,7 @@ namespace Sentinel.Core
 
         /// <summary>
         /// Evaluates a file and returns a composite reputation result.
-        /// Uses deduplication to prevent redundant API calls for the same hash.
+        /// Uses deduplication to prevent redundant local analysis of the same hash.
         /// </summary>
         public async Task<FileReputationResult> EvaluateFileAsync(string filePath, CancellationToken ct = default)
         {
@@ -226,155 +188,11 @@ namespace Sentinel.Core
             return result;
         }
 
-        private async Task<HashReputationResult> QueryHashReputationAsync(string hash, CancellationToken ct)
+        private Task<HashReputationResult> QueryHashReputationAsync(string hash, CancellationToken ct)
         {
-            var result = new HashReputationResult();
-            var circlTask = QueryCirclAsync(hash, ct);
-            var mbTask = QueryMalwareBazaarAsync(hash, ct);
-            var vtTask = QueryVirusTotalAsync(hash, ct);
-            await Task.WhenAll(circlTask, mbTask, vtTask);
-            result.CirclVerdict = circlTask.Result;
-            result.MalwareBazaarVerdict = mbTask.Result;
-            result.VirusTotalVerdict = vtTask.Result;
-            result.ConsensusScore = CalculateHashConsensus(result);
-            return result;
-        }
-
-        private async Task<ApiVerdict> QueryCirclAsync(string hash, CancellationToken ct)
-        {
-            await _circlThrottle.WaitAsync(ct);
-            try
-            {
-                var response = await _circlHttpClient.GetAsync(
-                    $"https://hashlookup.circl.lu/lookup/sha256/{hash}", ct);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var json = await response.Content.ReadAsStringAsync();
-                    var trustMatch = System.Text.RegularExpressions.Regex.Match(
-                        json, @"""hashlookup:trust""\s*:\s*(\d+)");
-                    if (trustMatch.Success && int.TryParse(trustMatch.Groups[1].Value, out int trust))
-                    {
-                        return new ApiVerdict { Source = "CIRCL", Status = trust > 60 ? VerdictStatus.Safe : VerdictStatus.Unknown, TrustScore = trust };
-                    }
-                    return new ApiVerdict { Source = "CIRCL", Status = VerdictStatus.Unknown };
-                }
-                if ((int)response.StatusCode == 404)
-                    return new ApiVerdict { Source = "CIRCL", Status = VerdictStatus.NotFound };
-
-                return new ApiVerdict { Source = "CIRCL", Status = VerdictStatus.Error };
-            }
-            catch
-            {
-                return new ApiVerdict { Source = "CIRCL", Status = VerdictStatus.Error };
-            }
-            finally { _circlThrottle.Release(); }
-        }
-
-        private async Task<ApiVerdict> QueryMalwareBazaarAsync(string hash, CancellationToken ct)
-        {
-            await _malwareBazaarThrottle.WaitAsync(ct);
-            try
-            {
-                using var client = _mbHttpClient;
-                var values = new Dictionary<string, string> { { "query", "get_info" }, { "hash", hash } };
-                var content = new FormUrlEncodedContent(values);
-                var response = await _mbHttpClient.PostAsync("https://mb-api.abuse.ch/api/v1/", content, ct);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var json = await response.Content.ReadAsStringAsync();
-                    if (json.Contains("\"query_status\":\"ok\"") || json.Contains("\"query_status\": \"ok\""))
-                        return new ApiVerdict { Source = "MalwareBazaar", Status = VerdictStatus.Malicious };
-                    if (json.Contains("\"query_status\":\"hash_not_found\"") || json.Contains("\"query_status\": \"hash_not_found\""))
-                        return new ApiVerdict { Source = "MalwareBazaar", Status = VerdictStatus.NotFound };
-                }
-                return new ApiVerdict { Source = "MalwareBazaar", Status = VerdictStatus.Error };
-            }
-            catch
-            {
-                return new ApiVerdict { Source = "MalwareBazaar", Status = VerdictStatus.Error };
-            }
-            finally { _malwareBazaarThrottle.Release(); }
-        }
-
-        private async Task<ApiVerdict> QueryVirusTotalAsync(string hash, CancellationToken ct)
-        {
-            if (_reportingConfig == null || string.IsNullOrWhiteSpace(_reportingConfig.ProxyEndpoint))
-            {
-                return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.NotFound };
-            }
-
-            if (!ProxyAuthHelper.HasSharedSecret(_reportingConfig))
-            {
-                return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.NotFound };
-            }
-
-            try
-            {
-                const string path = "/lookup/vt";
-                var payload = System.Text.Json.JsonSerializer.Serialize(new { type = "hash", value = hash });
-                var (request, error) = ProxyAuthHelper.CreateAuthenticatedPost(
-                    _reportingConfig.ProxyEndpoint!, path, payload, _reportingConfig);
-                if (request == null)
-                {
-                    _logger.LogDebug("[FileReputationEngine] VT proxy auth skipped: {Error}", error);
-                    return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.NotFound };
-                }
-
-                using (request)
-                {
-                    var response = await _vtProxyHttpClient.SendAsync(request, ct);
-
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        _logger.LogDebug("[FileReputationEngine] VT proxy returned {Status}", response.StatusCode);
-                        return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.Error };
-                    }
-
-                    var json = await response.Content.ReadAsStringAsync();
-
-                    using var doc = System.Text.Json.JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-
-                    if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
-                    {
-                        return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.Error };
-                    }
-
-                    var verdictStr = root.TryGetProperty("verdict", out var vProp) ? vProp.GetString() : "not_found";
-                    int detections = root.TryGetProperty("detections", out var dProp) ? dProp.GetInt32() : 0;
-                    int engines = root.TryGetProperty("engines", out var eProp) ? eProp.GetInt32() : 0;
-                    double detectionRate = root.TryGetProperty("detectionRate", out var drProp) ? drProp.GetDouble() : 0;
-
-                    var status = verdictStr switch
-                    {
-                        "malicious" => VerdictStatus.Malicious,
-                        "suspicious" => VerdictStatus.Suspicious,
-                        "safe" => VerdictStatus.Safe,
-                        "not_found" => VerdictStatus.NotFound,
-                        _ => VerdictStatus.Unknown
-                    };
-
-                    return new ApiVerdict
-                    {
-                        Source = "VirusTotal",
-                        Status = status,
-                        DetectionCount = detections,
-                        EngineCount = engines,
-                        DetectionRate = detectionRate
-                    };
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.Error };
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[FileReputationEngine] VT proxy lookup failed for {Hash}", hash[..12]);
-                return new ApiVerdict { Source = "VirusTotal", Status = VerdictStatus.Error };
-            }
+            ct.ThrowIfCancellationRequested();
+            // Unknown contributes a neutral prior. Offline absence must never mean Safe/NotFound.
+            return Task.FromResult(new HashReputationResult { ConsensusScore = 50 });
         }
 
         private StaticAnalysisResult AnalyzeStaticProperties(string filePath, long fileSize)
@@ -782,7 +600,7 @@ namespace Sentinel.Core
             try
             {
                 var data = $"{result.CompositeScore}|{(int)result.Verdict}|{result.EvaluatedAt.Ticks}";
-                _cacheStore.Save("filerepo", hash, data);
+                _cacheStore.Save("filerepo-offline-v1", hash, data);
             }
             catch { }
         }
@@ -791,7 +609,7 @@ namespace Sentinel.Core
         {
             try
             {
-                var data = _cacheStore.Load("filerepo", hash);
+                var data = _cacheStore.Load("filerepo-offline-v1", hash);
                 if (string.IsNullOrEmpty(data)) return null;
                 var parts = data!.Split('|');
                 if (parts.Length != 3) return null;

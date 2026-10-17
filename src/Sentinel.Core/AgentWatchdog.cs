@@ -328,6 +328,8 @@ namespace Sentinel.Core
                     return false;
                 }
 
+                UserSessionPrivilege.RequireLimitedToken(ref userToken);
+
                 // Build the environment block for the user (inherits their PATH, APPDATA, etc.)
                 if (!CreateEnvironmentBlock(out envBlock, userToken, false))
                     envBlock = IntPtr.Zero; // Non-fatal; proceed without custom env block

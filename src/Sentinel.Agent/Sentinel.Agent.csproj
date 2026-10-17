@@ -1,12 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <TargetFramework>net48-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
-    <Version>3.2.2</Version>
+    <Version>3.2.3</Version>
     <Company>Sentinel Security</Company>
     <Product>Sentinel Endpoint Detection and Response</Product>
     <Description>Sentinel EDR User-Session Agent and Web Dashboard</Description>

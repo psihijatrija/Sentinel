@@ -522,7 +522,7 @@ namespace Sentinel.Core
                     dwUnionChoice = WTD_CHOICE_FILE,
                     pFile = fileInfoPtr,
                     dwStateAction = WTD_STATEACTION_VERIFY,
-                    dwProvFlags = WTD_REVOCATION_CHECK_NONE | WTD_LIFETIME_SIGNING_FLAG
+                    dwProvFlags = WTD_REVOCATION_CHECK_NONE | WTD_LIFETIME_SIGNING_FLAG | 0x1000 /* WTD_CACHE_ONLY_URL_RETRIEVAL */
                 };
 
                 var actionId = WINTRUST_ACTION_GENERIC_VERIFY_V2;
@@ -710,7 +710,7 @@ namespace Sentinel.Core
                     dwUnionChoice = WTD_CHOICE_CATALOG,
                     pFile = catInfoPtr, // pCatalog shares the union offset with pFile
                     dwStateAction = WTD_STATEACTION_VERIFY,
-                    dwProvFlags = WTD_REVOCATION_CHECK_NONE | WTD_LIFETIME_SIGNING_FLAG
+                    dwProvFlags = WTD_REVOCATION_CHECK_NONE | WTD_LIFETIME_SIGNING_FLAG | 0x1000 /* WTD_CACHE_ONLY_URL_RETRIEVAL */
                 };
 
                 var actionId = WINTRUST_ACTION_GENERIC_VERIFY_V2;

@@ -285,6 +285,7 @@ namespace Sentinel.Core
         private readonly JsonlEventLogger? _eventLogger;
         private readonly DetectionEngine? _detectionEngine;
         private readonly UnifiedEtwSession? _etw;
+        private readonly FirewallPolicyStatus? _firewallPolicy;
         private byte[] _token = Array.Empty<byte>();
 
         // v2.0.4 CRIT-1: Server-side nonce tracking to prevent replay attacks within the 60s window.
@@ -304,7 +305,7 @@ namespace Sentinel.Core
             ILogger<ServiceAgentIpcHost> logger,
             MonitorRegistry? registry = null,
             CertRemediator? certRemediator = null,
-            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null)
+            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null, FirewallPolicyStatus? firewallPolicy = null)
         {
             _metrics = metrics;
             _weighted = weighted;
@@ -315,6 +316,7 @@ namespace Sentinel.Core
             _eventLogger = eventLogger;
             _detectionEngine = detectionEngine;
             _etw = etw;
+            _firewallPolicy = firewallPolicy;
             _certRemediator = certRemediator;
         }
 
@@ -361,6 +363,8 @@ namespace Sentinel.Core
             var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
             security.AddAccessRule(new PipeAccessRule(
                 system, PipeAccessRights.FullControl, AccessControlType.Allow));
+            var network = new SecurityIdentifier(WellKnownSidType.NetworkSid, null);
+            security.AddAccessRule(new PipeAccessRule(network, PipeAccessRights.ReadWrite, AccessControlType.Deny));
             var interactive = new SecurityIdentifier(WellKnownSidType.InteractiveSid, null);
             security.AddAccessRule(new PipeAccessRule(
                 interactive, PipeAccessRights.ReadWrite, AccessControlType.Allow));
@@ -385,7 +389,7 @@ namespace Sentinel.Core
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
 
             // One request per connection (simple + avoids session fixation).
-            var line = await reader.ReadLineAsync().ConfigureAwait(false);
+            var line = await BoundedIpcRequest.ReadAsync(reader, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(line))
             {
                 await writer.WriteLineAsync("{\"ok\":false,\"error\":\"empty\"}").ConfigureAwait(false);
@@ -463,7 +467,8 @@ namespace Sentinel.Core
                             monitorsRegistered = stats?.TotalRegistered ?? 0,
                             monitorsRunning = stats?.Running ?? 0,
                             monitorsFailed = stats?.Failed ?? 0,
-                            plugins = _plugins.TotalCount
+                            plugins = _plugins.TotalCount,
+                            firewallPolicy = _firewallPolicy?.Json
                         });
                         break;
                     case "scan":

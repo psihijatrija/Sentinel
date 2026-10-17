@@ -51,7 +51,7 @@ namespace Sentinel.Core
     public class CveShieldConfig
     {
         public bool Enabled { get; set; } = true;
-        public string FeedUrl { get; set; } = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
+        public string FeedUrl { get => string.Empty; set { } } // Legacy setting: online feeds removed.
         public int PollIntervalHours { get; set; } = 4;
         public string? CustomFeedPath { get; set; } // Local fallback JSON for offline testing
     }
@@ -469,32 +469,16 @@ namespace Sentinel.Core
 
     public class ThreatReportingConfig
     {
-        public bool Enabled { get; set; } = true;
+        // Compatibility for old encrypted settings. No setting can re-enable online transport.
+        public bool Enabled { get => false; set { } }
         public string? AbuseIpDbApiKey { get; set; }
         public string? UrlhausAuthToken { get; set; }
         public string? MalwareBazaarApiKey { get; set; }
-        public bool ReportToMalwareBazaar { get; set; } = true;
-        public bool ReportToUrlhaus { get; set; } = true;
-
-        /// <summary>
-        /// URL of the Cloudflare Worker proxy that holds API keys server-side.
-        /// When set, reports go to this endpoint instead of directly to abuse.ch.
-        /// This allows open-source distribution without leaking API keys.
-        /// Default endpoint compiled into the binary.
-        /// </summary>
-        public string? ProxyEndpoint { get; set; } = "https://sentinel-threat-proxy.znastidobrostoje-6ee.workers.dev";
-
-        /// <summary>
-        /// HMAC key for the threat-proxy Worker. Compiled into the binary.
-        /// Must match Worker env SENTINEL_SHARED_SECRET. Split concat so a PE
-        /// dump is not one line. Admin --set-config can rotate via DPAPI
-        /// config.enc (length >= 16). Short plants are ignored.
-        /// </summary>
-        public string? ProxySharedSecret { get; set; } = CompiledProxySharedSecret;
-
-        /// <summary>Built-in Worker HMAC. Not disk config.</summary>
-        public static string CompiledProxySharedSecret =>
-            string.Concat("SntlHmac/", "CroatiaSecurity/", "v254/", "e7a91c4b2f6d80e3", "15c8a0d47b9e2f63");
+        public bool ReportToMalwareBazaar { get => false; set { } }
+        public bool ReportToUrlhaus { get => false; set { } }
+        public string? ProxyEndpoint { get => null; set { } }
+        public string? ProxySharedSecret { get => null; set { } }
+        public static string CompiledProxySharedSecret => string.Empty;
     }
 
     /// <summary>
@@ -512,20 +496,12 @@ namespace Sentinel.Core
         public bool GenerateLocalEvidencePack { get; set; } = true;
 
         /// <summary>
-        /// B1 (durable evidence survival): when true, a signed <b>summary</b> of each
-        /// chain-confirmed evidence pack is mirrored off-host via the existing HMAC-signed
-        /// ThreatReporting proxy so a local admin who suppresses Sentinel cannot also erase the
-        /// proof. Default <b>false</b> (opt-in) - matches the honest, no-covert-exfil posture.
-        /// Requires a configured ThreatReporting ProxyEndpoint + shared secret; fails closed
-        /// (skips silently) when the secret is missing. Never uploads file contents or secrets.
+        /// Offline policy: evidence summaries never leave this device.
         /// </summary>
-        public bool MirrorEvidenceOffHost { get; set; } = false;
+        public bool MirrorEvidenceOffHost { get => false; set { } }
 
-        /// <summary>
-        /// Submit hashes/URLs/IPs via ThreatReportService (MalwareBazaar/URLhaus/AbuseIPDB).
-        /// Requires ThreatReporting proxy secret. Community intel - not law enforcement.
-        /// </summary>
-        public bool ReportThreatIntel { get; set; } = true;
+        /// <summary>Legacy setting retained for migration; online indicator sharing was removed.</summary>
+        public bool ReportThreatIntel { get => false; set { } }
 
         /// <summary>Show a critical toast when a pack is written.</summary>
         public bool NotifyUser { get; set; } = true;

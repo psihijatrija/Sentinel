@@ -1,20 +1,9 @@
-// ThreatIntelFeedBlocker - Threat intelligence feed observation + optional proactive block
-//
-// Default (v1.8.3+): OBSERVE ONLY
-//   - Loads Spamhaus DROP, Feodo Tracker, EmergingThreats into memory
-//   - Watches established TCP connections against the list
-//   - Emits detections on hits; NetworkIsolate only when ActiveResponse is on
-//   - Does NOT pre-install thousands of firewall rules (that meddles with legitimate traffic)
-//
-// Optional: Sentinel:ThreatIntelProactiveFirewall=true re-enables legacy pre-block mode
-// for high-security air-gapped style deployments that accept collateral risk.
-
+// Legacy feed parser and upgrade cleanup. Online feed transport has been removed.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -43,13 +32,6 @@ namespace Sentinel.Core
         private static readonly TimeSpan ConnectionCheckInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan AlertCooldown = TimeSpan.FromMinutes(10);
 
-        private static readonly (string Url, string Name)[] Feeds = new[]
-        {
-            ("https://www.spamhaus.org/drop/drop.txt", "Spamhaus-DROP"),
-            ("https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt", "Feodo-Tracker"),
-            ("https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt", "EmergingThreats"),
-        };
-
         // Windows Firewall COM constants
         private const int NET_FW_RULE_DIR_IN = 1;
         private const int NET_FW_RULE_DIR_OUT = 2;
@@ -77,148 +59,15 @@ namespace Sentinel.Core
             _logger = logger;
         }
 
-        protected override async Task ExecuteAsync(CancellationToken ct)
+        protected override Task ExecuteAsync(CancellationToken ct)
         {
-            bool proactive = _config.ThreatIntelProactiveFirewall && _config.ActiveResponse;
-            _logger.LogInformation(
-                "[ThreatIntelFeedBlocker] Starting - mode={Mode} (ProactiveFirewall={Proactive}, ActiveResponse={AR}), initial delay {Delay}s",
-                proactive ? "PROACTIVE-FIREWALL" : "OBSERVE-ONLY",
-                _config.ThreatIntelProactiveFirewall,
-                _config.ActiveResponse,
-                InitialDelay.TotalSeconds);
-
-            // Always scrub leftover proactive rules when not in proactive mode so
-            // upgrades leave the host without thousands of residual block rules.
-            if (!proactive)
-            {
-                try
-                {
-                    int removed = RemoveProactiveFirewallRules();
-                    if (removed > 0)
-                    {
-                        _logger.LogWarning(
-                            "[ThreatIntelFeedBlocker] Removed {Count} leftover proactive ThreatIntel firewall rules (observe-only mode)",
-                            removed);
-                        await _eventLogger.LogEventAsync("threat_intel_firewall_cleanup", new
-                        {
-                            RulesRemoved = removed,
-                            Mode = "observe-only",
-                            Timestamp = DateTime.UtcNow
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[ThreatIntelFeedBlocker] Failed to clean leftover ThreatIntel firewall rules");
-                }
-            }
-
-            try { await Task.Delay(InitialDelay, ct); }
-            catch (OperationCanceledException) { return; }
-
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await RefreshFeedsAsync(ct);
-                }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[ThreatIntelFeedBlocker] Feed refresh failed");
-                }
-
-                // Between refreshes, periodically check active connections against blocklist
-                var nextRefresh = DateTime.UtcNow.Add(RefreshInterval);
-                while (DateTime.UtcNow < nextRefresh && !ct.IsCancellationRequested)
-                {
-                    try
-                    {
-                        CheckActiveConnections();
-                        PruneAlertCache();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "[ThreatIntelFeedBlocker] Connection check error");
-                    }
-
-                    try { await Task.Delay(ConnectionCheckInterval, ct); }
-                    catch (OperationCanceledException) { break; }
-                }
-            }
+            ct.ThrowIfCancellationRequested();
+            var removed = RemoveProactiveFirewallRules();
+            _logger.LogInformation("[ThreatIntelFeedBlocker] Online feeds removed; cleaned {Count} legacy feed rules", removed);
+            return Task.CompletedTask;
         }
 
-        private async Task RefreshFeedsAsync(CancellationToken ct)
-        {
-            _logger.LogInformation("[ThreatIntelFeedBlocker] Refreshing threat intelligence feeds...");
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("Sentinel-EDR/1.8 (ThreatIntelFeedBlocker)");
-
-            int totalNewIps = 0;
-
-            foreach (var (url, name) in Feeds)
-            {
-                if (ct.IsCancellationRequested) break;
-
-                try
-                {
-                    var response = await http.GetStringAsync(url, ct);
-                    var ips = ParseFeed(response, name);
-
-                    int added = 0;
-                    foreach (var ip in ips.Take(MaxIpsPerFeed))
-                    {
-                        if (_blockedIps.TryAdd(ip, name))
-                        {
-                            added++;
-                        }
-                    }
-
-                    if (added > 0)
-                    {
-                        _logger.LogInformation("[ThreatIntelFeedBlocker] {Feed}: added {Count} new IPs/CIDRs", name, added);
-                        totalNewIps += added;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning("[ThreatIntelFeedBlocker] Failed to fetch {Feed}: {Error}", name, ex.Message);
-                }
-            }
-
-            bool proactive = _config.ThreatIntelProactiveFirewall && _config.ActiveResponse;
-
-            // Create firewall rules for new IPs ONLY in explicit proactive mode
-            if (proactive && totalNewIps > 0)
-            {
-                CreateFirewallRules();
-
-                await _eventLogger.LogEventAsync("threat_intel_feed_refresh", new
-                {
-                    TotalBlockedIps = _blockedIps.Count,
-                    NewIpsAdded = totalNewIps,
-                    FirewallRulesCreated = _rulesCreated.Count,
-                    Mode = "proactive",
-                    Timestamp = DateTime.UtcNow
-                });
-            }
-            else if (totalNewIps > 0)
-            {
-                await _eventLogger.LogEventAsync("threat_intel_feed_refresh", new
-                {
-                    TotalBlockedIps = _blockedIps.Count,
-                    NewIpsAdded = totalNewIps,
-                    FirewallRulesCreated = 0,
-                    Mode = "observe-only",
-                    Timestamp = DateTime.UtcNow
-                });
-            }
-
-            _logger.LogInformation(
-                "[ThreatIntelFeedBlocker] Feed refresh complete - {Total} IPs/CIDRs tracked, proactiveRules={Rules}, mode={Mode}",
-                _blockedIps.Count, _rulesCreated.Count, proactive ? "proactive" : "observe-only");
-        }
 
         /// <summary>Parse a threat-intel feed body. Internal for unit tests.</summary>
         internal static List<string> ParseFeed(string content, string feedName)

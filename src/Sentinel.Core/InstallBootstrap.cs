@@ -164,9 +164,12 @@ namespace Sentinel.Core
             try
             {
                 TryStopNamedService(WatchdogServiceName, waitMs: 4000);
-                TryDeleteNamedService(WatchdogServiceName);
                 TryStopService(waitMs: 8000);
+                RequireFirewallServicesStopped();
+                new WindowsFirewallPolicyBridge().RunAsync("Restore", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                TryDeleteNamedService(WatchdogServiceName);
                 TryDeleteService();
+                new SelfNetworkIsolation(new WindowsSelfNetworkFirewall(), AppDomain.CurrentDomain.BaseDirectory).Remove();
                 TryDeleteAgentRunKey();
                 TryDeleteSafeBootKeys();
                 return 0;
@@ -174,6 +177,23 @@ namespace Sentinel.Core
             catch
             {
                 return 1;
+            }
+        }
+
+        public static void RequireFirewallServicesStopped()
+        {
+            foreach (var name in new[] { ServiceName, WatchdogServiceName })
+            {
+                try
+                {
+                    using var controller = new System.ServiceProcess.ServiceController(name);
+                    if (controller.Status != System.ServiceProcess.ServiceControllerStatus.Stopped)
+                        throw new InvalidOperationException("Cannot restore firewall policy while Sentinel service is still running: " + name);
+                }
+                catch (InvalidOperationException ex) when (ex.InnerException is System.ComponentModel.Win32Exception native && native.NativeErrorCode == 1060)
+                {
+                    // The service is already unregistered.
+                }
             }
         }
 
@@ -291,6 +311,9 @@ namespace Sentinel.Core
 
         public static void TryLaunchAgent(string agentExePath)
         {
+            // Elevated installers must not leak their token into the interactive UI.
+            // The service watchdog starts the Agent with the verified limited session token.
+            if (!UserSessionPrivilege.IsCurrentProcessUnprivileged()) return;
             if (string.IsNullOrWhiteSpace(agentExePath) || !File.Exists(agentExePath))
                 return;
             try

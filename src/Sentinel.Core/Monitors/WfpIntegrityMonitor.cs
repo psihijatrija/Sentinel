@@ -46,16 +46,6 @@ namespace Sentinel.Core
         private bool _baselineEstablished;
         private readonly HashSet<string> _alertedFilters = new(StringComparer.OrdinalIgnoreCase);
 
-        // Sentinel executable names that attackers target
-        private static readonly string[] SentinelBinaries = new[]
-        {
-            "Sentinel.Service",
-            "Sentinel.Agent",
-            "Sentinel",
-            "Sentinel.Service",
-            "Sentinel.Agent",
-        };
-
         // Known EDR/security process names commonly targeted by EDRSilencer/EDRKillShifter
         private static readonly string[] KnownEdRTargets = new[]
         {
@@ -76,10 +66,6 @@ namespace Sentinel.Core
 
         private static readonly Regex FilterActionRegex = new(
             @"<action[^>]*>\s*<type>(FWP_ACTION_BLOCK|BLOCK)</type>",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-        private static readonly Regex FilterIdRegex = new(
-            @"<filterId>(\d+)</filterId>",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         public WfpIntegrityMonitor(DetectionEngine detectionEngine, ILogger<WfpIntegrityMonitor> logger)
@@ -169,7 +155,6 @@ namespace Sentinel.Core
             var filterBlocks = filterXml.Split(new[] { "<item>" }, StringSplitOptions.RemoveEmptyEntries);
 
             int currentBlockFilters = 0;
-            var sentinelTargetingFilters = new List<string>();
             var edrTargetingFilters = new List<string>();
 
             foreach (var block in filterBlocks)
@@ -185,16 +170,6 @@ namespace Sentinel.Core
 
                 var appPath = appIdMatch.Groups[1].Value;
                 if (string.IsNullOrEmpty(appPath)) continue;
-
-                // Check if this filter targets Sentinel
-                bool targetsSentinel = SentinelBinaries.Any(name =>
-                    appPath.Contains(name));
-
-                if (targetsSentinel)
-                {
-                    var filterId = FilterIdRegex.Match(block).Groups[1].Value;
-                    sentinelTargetingFilters.Add($"FilterId={filterId}, AppPath={appPath}");
-                }
 
                 // Check if this filter targets known EDR processes (broader EDRSilencer detection)
                 bool targetsEdr = KnownEdRTargets.Any(name =>
@@ -215,43 +190,8 @@ namespace Sentinel.Core
                 return;
             }
 
-            //  Detection 1: Filter directly targeting Sentinel 
-            if (sentinelTargetingFilters.Count > 0)
-            {
-                var alertKey = $"WFP_Sentinel:{string.Join(",", sentinelTargetingFilters.Take(3))}";
-                if (!_alertedFilters.Contains(alertKey))
-                {
-                    _alertedFilters.Add(alertKey);
-
-                    await _detectionEngine.EmitAsync(new DetectionEvent
-                    {
-                        RuleName = "Anti-Tamper: WFP Filter Blocking Sentinel Network (EDRSilencer)",
-                        Evidence = $"WFP BLOCK filter(s) targeting Sentinel binaries detected: " +
-                                   $"[{string.Join("; ", sentinelTargetingFilters)}]. " +
-                                   $"This silences all Sentinel outbound network traffic.",
-                        Reasoning = "A Windows Filtering Platform BLOCK filter is actively preventing Sentinel " +
-                                    "from making outbound network connections. This is the exact technique used by " +
-                                    "EDRSilencer (open-source tool) to blind EDR products without terminating them. " +
-                                    "The EDR continues running but cannot reach any threat intelligence API. " +
-                                    "This is a critical self-protection tampering event - investigate immediately.",
-                        Confidence = 0.97,
-                        Tier = DetectionTier.Tier1Behavioral,
-                        AuthorizedResponse = ResponseAction.KillProcessTree,
-                        ProcessName = "EDRSilencer",
-                        ProcessId = 0,
-                        SignalType = SignalType.AntiTamper,
-                        Metadata = new Dictionary<string, string>
-                        {
-                            ["TargetedFilters"] = string.Join(";", sentinelTargetingFilters),
-                            ["TotalBlockFilters"] = currentBlockFilters.ToString(),
-                            ["Technique"] = "EDRSilencer/WFP Manipulation"
-                        }
-                    });
-
-                    // Attempt to remove the malicious filters
-                    await AttemptFilterRemovalAsync(sentinelTargetingFilters, ct);
-                }
-            }
+            // Offline Sentinel intentionally blocks its own external traffic. A network block
+            // against Sentinel is no longer a tampering signal or authority to remove a filter.
 
             //  Detection 2: Bulk BLOCK filter addition (EDRKillShifter targeting many tools) 
             if (currentBlockFilters > _baselineBlockFilterCount + 10)
@@ -291,7 +231,7 @@ namespace Sentinel.Core
             }
 
             //  Detection 3: EDR processes being blocked (even if not Sentinel) 
-            if (edrTargetingFilters.Count >= 3 && sentinelTargetingFilters.Count == 0)
+            if (edrTargetingFilters.Count >= 3)
             {
                 var alertKey = $"WFP_EDR:{edrTargetingFilters.Count}";
                 if (!_alertedFilters.Contains(alertKey))
@@ -329,53 +269,5 @@ namespace Sentinel.Core
             }
         }
 
-        /// <summary>
-        /// Attempts to remove WFP filters targeting Sentinel by resetting the WFP engine.
-        /// This is a defensive action - if an attacker adds filters, we try to remove them.
-        /// </summary>
-        private async Task AttemptFilterRemovalAsync(List<string> targetingFilters, CancellationToken ct)
-        {
-            try
-            {
-                _logger.LogWarning("[WfpIntegrityMonitor] Attempting to reset WFP filters blocking Sentinel...");
-
-                // Re-enable WFP net-event auditing so subsequent tamper is observable. NOTE: this
-                // command only turns WFP net events back on - it does NOT itself delete the hostile
-                // filters (a blanket filter purge / BFE restart would tear down the host firewall,
-                // an unacceptable blast radius for a userland EDR). Actual filter removal by GUID is
-                // handled by the targeted removal path; the operator recommendation is logged below.
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "netsh",
-                    Arguments = "wfp set options netevents = on",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                };
-
-                using var process = Process.Start(psi);
-                if (process != null)
-                {
-                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    cts.CancelAfter(5000);
-                    try { await process.WaitForExitAsync(cts.Token); }
-                    catch { try { process.Kill(); } catch { } }
-                }
-
-                // Restarting the BFE (Base Filtering Engine) would flush EDRSilencer's transient
-                // filters, but stopping BFE tears down all WFP-based filtering (including the host
-                // firewall) for the restart window - too aggressive to perform automatically. We
-                // surface it as an operator recommendation rather than executing it here.
-                _logger.LogWarning(
-                    "[WfpIntegrityMonitor] To remove EDRSilencer filters, restart the BFE service: " +
-                    "'net stop bfe /y && net start bfe'. " +
-                    "Filters targeting Sentinel: {Filters}",
-                    string.Join("; ", targetingFilters));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[WfpIntegrityMonitor] Filter removal attempt failed");
-            }
-        }
     }
 }

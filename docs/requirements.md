@@ -231,12 +231,17 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 - `DetectionEngine` must suppress identical `(RuleName, ProcessId)` detections within **10s (Tier1)** / **30s (Tier2)**
 - Network / monitor-level secondary cooldowns may apply per monitor
 
-### FR-11: Threat proxy authentication (v1.6.0 / v1.8.1)
+### FR-11: Offline execution and least privilege (3.2.3)
 
-- Outbound threat report / VT proxy calls must HMAC-sign `{timestamp}.{path}.{body}` with `ThreatReporting:ProxySharedSecret`
-- Headers: `X-Sentinel-Timestamp`, `X-Sentinel-Signature` only
-- Must **not** transmit the shared secret in any header
-- Fail closed (skip reporting) if secret missing or shorter than 16 characters
+- Product processes must not initiate external reputation, feed, public-IP, connectivity, DNS-validation, or report requests. Legacy settings cannot restore removed transports.
+- Unavailable reputation is Unknown, never Safe/NotFound; local-only analysis must not reuse previous online composite results.
+- The privileged service maintains program-scoped inbound/outbound non-loopback firewall blocks for all installed Sentinel executables on all profiles, preserving localhost UI and local IPC. Failures must be visible and retried; uninstall removes only owned rules.
+- The Agent runs without SYSTEM/admin authority, applies self-only mitigations, and requests privileged operations through the authenticated operation allowlist. An unavailable helper must not trigger automatic elevation or arbitrary-path remediation.
+- Privileged IPC denies network logons, caps unauthenticated request input, and times out stalled readers. Privileged response decisions continue to enforce Tier1/Tier2 and action-specific policy.
+- Monitor both local firewall and local computer GPO when supported, retain disabled inbound allow rules, and preserve outbound policy plus narrowly identified DHCP/essential IPv6 control rules. Re-disable new/re-enabled unapproved inbound exceptions; persistent approval requires an elevated administrator and is bound to the exact filter definition.
+- Verify ActiveStore and firewall services; report domain-policy conflicts without writing domain GPOs. Journal before mutation and support guarded rollback. Registry notifications and 15-second fallback checks do not claim zero exposure between changes and reconciliation.
+- Runtime exploit context must cover trusted/security/game process identities; weak port/network/script context remains Tier2 LogOnly and never alone grants response authority. Protected-process/game handle safety and sensor visibility limits remain explicit.
+- The SYSTEM service still hosts privileged telemetry/response; a minimal broker split is not claimed in this release.
 
 ### FR-12: Evidence packs (v1.7.7-1.7.8 / v1.9.3-1.9.4)
 

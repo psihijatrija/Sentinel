@@ -87,6 +87,36 @@ namespace Sentinel.Service
                 ServiceBase.Run(new SentinelGuardService());
                 return;
             }
+            if (args.Length >= 1 && (args[0].Equals("--allow-inbound", StringComparison.OrdinalIgnoreCase)
+                || args[0].Equals("--deny-inbound", StringComparison.OrdinalIgnoreCase)
+                || args[0].Equals("--restore-firewall", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (UserSessionPrivilege.IsCurrentProcessUnprivileged())
+                {
+                    Environment.ExitCode = 5;
+                    Console.Error.WriteLine("This firewall administration command requires an elevated administrator.");
+                    return;
+                }
+                try
+                {
+                    string operation = args[0].Equals("--restore-firewall", StringComparison.OrdinalIgnoreCase) ? "Restore"
+                        : args[0].Equals("--allow-inbound", StringComparison.OrdinalIgnoreCase) ? "Approve" : "Revoke";
+                    if (operation != "Restore" && args.Length != 3)
+                        throw new ArgumentException("Use --allow-inbound or --deny-inbound followed by PersistentStore/localhost and the exact rule Name.");
+                    if (operation == "Restore")
+                    {
+                        InstallBootstrap.TryStopNamedService(InstallBootstrap.WatchdogServiceName, 4000);
+                        InstallBootstrap.TryStopService(8000);
+                        InstallBootstrap.RequireFirewallServicesStopped();
+                    }
+                    var bridge = new WindowsFirewallPolicyBridge();
+                    Console.WriteLine(bridge.RunAsync(operation, CancellationToken.None,
+                        operation == "Restore" ? null : args[1], operation == "Restore" ? null : args[2]).GetAwaiter().GetResult());
+                    if (operation == "Restore") new SelfNetworkIsolation(new WindowsSelfNetworkFirewall(), AppDomain.CurrentDomain.BaseDirectory).Remove();
+                }
+                catch (Exception ex) { Console.Error.WriteLine(ex.Message); Environment.ExitCode = 1; }
+                return;
+            }
             if (args.Length >= 1 && args[0].Equals("--ensure-running", StringComparison.OrdinalIgnoreCase))
             {
                 InstallBootstrap.TryStartService();
@@ -296,6 +326,12 @@ namespace Sentinel.Service
                         opts.ShutdownTimeout = TimeSpan.FromSeconds(10);
                     });
 
+                    services.AddSingleton<ISelfNetworkFirewall, WindowsSelfNetworkFirewall>();
+                    services.AddHostedService<SelfNetworkIsolationService>();
+                    services.AddSingleton<IWindowsFirewallPolicyBridge, WindowsFirewallPolicyBridge>();
+                    services.AddSingleton<FirewallPolicyStatus>();
+                    services.AddHostedService<LocalFirewallPolicyService>();
+
                     // Compiled defaults + DPAPI config.enc only. Disk JSON is not bound.
                     var config = new SentinelConfig();
                     var threatReportingConfig = new ThreatReportingConfig();
@@ -306,8 +342,6 @@ namespace Sentinel.Service
 
                     var encryptedStore = new EncryptedConfigStore();
                     encryptedStore.ApplyOverrides(config, threatReportingConfig, autoIncidentReportingConfig);
-                    if (!ProxyAuthHelper.HasSharedSecret(threatReportingConfig))
-                        threatReportingConfig.ProxySharedSecret = ThreatReportingConfig.CompiledProxySharedSecret;
                     // v2.5.5: HardeningModule.RestrictivePortHardeningEnabled is always-on - no sync needed.
                     services.AddSingleton(encryptedStore);
 
@@ -395,6 +429,7 @@ namespace Sentinel.Service
                     services.AddSingleton<EtwEventDispatcher>();
 
                     // Rules
+                    services.AddSingleton<IDetectionRule, ExposedProcessExploitRule>();
                     services.AddTransient<IDetectionRule, LsassAccessRule>();
                     services.AddTransient<IDetectionRule, RansomwareDetectionRule>();
                     services.AddTransient<IDetectionRule, ReverseShellRule>();
@@ -500,7 +535,6 @@ namespace Sentinel.Service
                             ("AsrPolicyGuard",              s => s.GetRequiredService<AsrPolicyGuard>()),
                             ("AgentWatchdog",               s => s.GetRequiredService<AgentWatchdog>()),
                             ("SyscallStubMonitor",          s => s.GetRequiredService<SyscallStubMonitor>()),
-                            ("ConnectivityCanaryMonitor",   s => s.GetRequiredService<ConnectivityCanaryMonitor>()),
                             ("EtwSessionGuard",             s => s.GetRequiredService<EtwSessionGuard>()),
                             ("EtwProviderTamperMonitor",    s => s.GetRequiredService<EtwProviderTamperMonitor>()),
                             ("HoneypotDllMonitor",          s => s.GetRequiredService<HoneypotDllMonitor>())
@@ -525,7 +559,6 @@ namespace Sentinel.Service
                     services.AddSingleton<AsrPolicyGuard>();
                     services.AddSingleton<AgentWatchdog>();
                     services.AddSingleton<SyscallStubMonitor>();
-                    services.AddSingleton<ConnectivityCanaryMonitor>();
                     services.AddSingleton<EtwSessionGuard>();
                     services.AddSingleton<EtwProviderTamperMonitor>();
                     services.AddSingleton<HoneypotDllMonitor>();
@@ -684,15 +717,12 @@ namespace Sentinel.Service
                     {
                         var monitors = SafeMonitorResolver.Build(sp,
                             ("ArpSpoofMonitor",                 s => s.GetRequiredService<ArpSpoofMonitor>()),
-                            ("DnsResponseValidationMonitor",    s => s.GetRequiredService<DnsResponseValidationMonitor>()),
-                            ("PublicIpMonitor",                 s => s.GetRequiredService<PublicIpMonitor>()),
                             ("WifiSecurityMonitor",             s => s.GetRequiredService<WifiSecurityMonitor>()),
                             ("NetworkInterfaceGuard",           s => s.GetRequiredService<NetworkInterfaceGuard>()),
                             ("AppDnsExfilMonitor",              s => s.GetRequiredService<AppDnsExfilMonitor>()),
                             ("NetworkShareMonitor",             s => s.GetRequiredService<NetworkShareMonitor>()),
                             ("NetworkReinfectionDetector",      s => s.GetRequiredService<NetworkReinfectionDetector>()),
                             ("ReinfectionCorrelator",           s => s.GetRequiredService<ReinfectionCorrelator>()),
-                            ("DnsCrossValidator",               s => s.GetRequiredService<DnsCrossValidator>()),
                             ("TrafficVolumeBaseline",           s => s.GetRequiredService<TrafficVolumeBaseline>()),
                             ("OutboundConnectionWhitelist",     s => s.GetRequiredService<OutboundConnectionWhitelist>()),
                             ("RemoteAccessMonitor",             s => s.GetRequiredService<RemoteAccessMonitor>()),
@@ -722,15 +752,12 @@ namespace Sentinel.Service
                             sp.GetRequiredService<MonitorRegistry>());
                     });
                     services.AddSingleton<ArpSpoofMonitor>();
-                    services.AddSingleton<DnsResponseValidationMonitor>();
-                    services.AddSingleton<PublicIpMonitor>();
                     services.AddSingleton<WifiSecurityMonitor>();
                     services.AddSingleton<NetworkInterfaceGuard>();
                     services.AddSingleton<WinsockLspIntegrityMonitor>();
                     services.AddSingleton<AppDnsExfilMonitor>();
                     services.AddSingleton<NetworkShareMonitor>();
                     services.AddSingleton<NetworkReinfectionDetector>();
-                    services.AddSingleton<DnsCrossValidator>();
                     services.AddSingleton<TrafficVolumeBaseline>();
                     services.AddSingleton<OutboundConnectionWhitelist>();
                     services.AddSingleton<RemoteAccessMonitor>();
