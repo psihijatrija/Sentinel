@@ -22,8 +22,12 @@ $v4Key = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' 
 $v6Key = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\' + $id
 function Read-Static($path) {
     if (-not (Test-Path $path)) { return '' }
-    $value = Get-ItemPropertyValue -Path $path -Name NameServer -ErrorAction SilentlyContinue
-    if ($null -eq $value) { return '' }; return [string]$value
+    $key = Get-Item -LiteralPath $path
+    try {
+        $value = $key.GetValue('NameServer', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($value -isnot [string]) { throw 'Unsupported DNS registry value type; no mutation is permitted.' }
+        return $value
+    } finally { $key.Dispose() }
 }
 function Normalize-Servers($value) {
     return (($value -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { ([Net.IPAddress]::Parse($_)).ToString() }) -join ',')
