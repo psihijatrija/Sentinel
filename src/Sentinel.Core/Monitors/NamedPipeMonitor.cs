@@ -196,6 +196,7 @@ namespace Sentinel.Core
                 if (matchedPattern != null)
                 {
                     uint ownerPid = TryGetPipeOwner(pipePath);
+                    if (IsOwnDecoyPipe(pipeName, ownerPid)) continue;
                     string ownerName = ownerPid > 0 ? ResolveProcessName(ownerPid) : "Unknown";
 
                     await _detectionEngine.EmitAsync(new DetectionEvent
@@ -231,6 +232,7 @@ namespace Sentinel.Core
                 {
                     // High-entropy pipe name from non-system process
                     uint ownerPid = TryGetPipeOwner(pipePath);
+                    if (IsOwnDecoyPipe(pipeName, ownerPid)) continue;
                     string ownerName = ownerPid > 0 ? ResolveProcessName(ownerPid) : "Unknown";
 
                     // Only alert if owner is not a known system process
@@ -346,6 +348,9 @@ namespace Sentinel.Core
             }
             return entropy;
         }
+
+        internal static bool IsOwnDecoyPipe(string name, uint serverPid)
+            => serverPid == (uint)System.Net48Environment.ProcessId && DecoyPipeMonitor.IsDecoyPipeName(name);
 
         private uint TryGetPipeOwner(string pipePath)
         {

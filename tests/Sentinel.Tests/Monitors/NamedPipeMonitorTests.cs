@@ -14,6 +14,16 @@ namespace Sentinel.Tests.Monitors
         // 
 
         [Fact]
+        public void OnlyKernelAttributedOwnDecoyIsExcludedFromPipeInspectionAlerts()
+        {
+            uint ownPid = (uint)System.Net48Environment.ProcessId;
+            Assert.True(NamedPipeMonitor.IsOwnDecoyPipe("MSSE-1234-server", ownPid));
+            Assert.False(NamedPipeMonitor.IsOwnDecoyPipe("MSSE-1234-server", ownPid + 1));
+            Assert.False(NamedPipeMonitor.IsOwnDecoyPipe("MSSE-1234-server", 0));
+            Assert.False(NamedPipeMonitor.IsOwnDecoyPipe("unregistered-pipe", ownPid));
+        }
+
+        [Fact]
         public void NamedPipeSignal_KnownBadPattern_Model()
         {
             var signal = new NamedPipeSignal

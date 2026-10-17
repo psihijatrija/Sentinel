@@ -135,7 +135,7 @@ namespace Sentinel.Core
                 if (host.MatchType == "WorkstationOs")
                     osMatchCount++;
 
-                _logger.LogWarning("CVE Shield MATCH: Local asset '{Asset}' matches vulnerability {CveId} ({Vendor} - {Product}, {MatchType}).",
+                _logger.LogWarning("CVE Shield candidate: Local asset '{Asset}' matches product metadata for {CveId} ({Vendor} - {Product}, {MatchType}); affected version is unverified.",
                     host.MatchedAsset, vuln.CveId, vuln.VendorProject, vuln.Product, host.MatchType);
 
                 if (host.DeployProcessRules)
@@ -148,6 +148,8 @@ namespace Sentinel.Core
                 {
                     CveId = vuln.CveId,
                     Vendor = vuln.VendorProject,
+                    Applicability = "ProductCandidateOnly",
+                    AffectedVersionVerified = false,
                     Product = vuln.Product,
                     MatchType = host.MatchType,
                     MatchedAsset = host.MatchedAsset,

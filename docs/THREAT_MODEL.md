@@ -887,3 +887,8 @@ delete evidence or run restored files. Process termination remains irreversible.
 Redacted bundles are derived evidence. Their manifest checks content consistency,
 not original origin/custody. Timestamps and behavioral categories remain sensitive;
 preview exports before sharing them.
+
+
+## Limits demonstrated by operational logs
+
+Certificate metadata and absent OS trust markers do not establish hostile installation or authorize removal. A named pipe scanner can itself connect to a honeypot; client/server PID attribution must distinguish that observer effect. Shared-vendor or substring software matches do not establish CVE applicability. Exclusive event writer ownership and separate agent/service chains prevent accidental interleaving, but neither authenticates a user-writable agent log nor proves collection completeness. Unavailable ETW providers and uninstrumented monitor progress remain visibility limits; these corrections do not claim to repair that coverage.

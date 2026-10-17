@@ -42,6 +42,7 @@ namespace Sentinel.Agent
         private readonly ILogger<WebDashboardService> _logger;
         private readonly SignerTrustService? _signerTrust;
         private readonly DllUnloadEngine? _dllUnload;
+        private readonly string[] _eventLogPaths;
         private readonly ConcurrentBag<WebSocket> _wsClients = new();
         private readonly string _csrfToken;
         private readonly string _bearerToken;
@@ -55,13 +56,16 @@ namespace Sentinel.Agent
             SentinelConfig config,
             ILogger<WebDashboardService> logger,
             SignerTrustService? signerTrust = null,
-            DllUnloadEngine? dllUnload = null)
+            DllUnloadEngine? dllUnload = null, JsonlEventLogger? eventLogger = null)
         {
             _quarantine = quarantine;
             _config = config;
             _logger = logger;
             _signerTrust = signerTrust;
             _dllUnload = dllUnload;
+            _eventLogPaths = new[] { Path.Combine(ProgramDataRoot, "events.jsonl"), eventLogger?.LogFilePath }
+                .Where(path => !string.IsNullOrEmpty(path)).Select(path => path!)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
             // Generate CSRF token for POST requests
             var bytes = new byte[16];
@@ -534,34 +538,30 @@ namespace Sentinel.Agent
             if (!string.IsNullOrEmpty(countParam) && int.TryParse(countParam, out int c))
                 count = Math.Min(c, 500);
 
-            var logFile = Path.Combine(ProgramDataRoot, "events.jsonl");
-            var events = new List<object>();
-
-            if (File.Exists(logFile))
+            count = Math.Max(1, count);
+            var records = new List<(string Type, string Timestamp, string Data)>();
+            foreach (var path in _eventLogPaths)
             {
+                if (!File.Exists(path)) continue;
                 try
                 {
-                    var lines = ReadLastLines(logFile, count);
-                    foreach (var line in lines)
+                    foreach (var line in ReadLastLines(path, count))
                     {
                         try
                         {
                             using var doc = JsonDocument.Parse(line);
                             var root = doc.RootElement;
-                            events.Add(new
-                            {
-                                type = root.TryGetProperty("type", out var t) ? t.GetString() : "unknown",
-                                timestamp = root.TryGetProperty("timestamp", out var ts) ? ts.GetString() : "",
-                                data = line, // raw JSON for frontend to parse
-                            });
+                            records.Add((root.TryGetProperty("type", out var t) ? t.GetString() ?? "unknown" : "unknown",
+                                root.TryGetProperty("timestamp", out var ts) ? ts.GetString() ?? "" : "", line));
                         }
-                        catch { }
+                        catch (JsonException) { }
                     }
                 }
-                catch { }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
-
-            events.Reverse();
+            var events = records.OrderByDescending(record => record.Timestamp, StringComparer.Ordinal)
+                .Take(count).Select(record => new { type = record.Type, timestamp = record.Timestamp, data = record.Data }).ToList();
             await WriteJson(response, new { ok = true, events, total = events.Count }).ConfigureAwait(false);
         }
 
@@ -823,6 +823,8 @@ namespace Sentinel.Agent
                 var eventsPath = Path.Combine(ProgramDataRoot, "events.jsonl");
                 var eventsSize = File.Exists(eventsPath) ? new FileInfo(eventsPath).Length : 0;
                 sb.AppendLine($"  Events:      {eventsPath}  ({eventsSize / 1024} KB)");
+                foreach (var path in _eventLogPaths.Where(path => !string.Equals(path, eventsPath, StringComparison.OrdinalIgnoreCase)))
+                    sb.AppendLine($"  Agent events: {path}");
                 sb.AppendLine($"  Quarantine:  {Path.Combine(ProgramDataRoot, "Quarantine")}");
 
                 var packsDir = Path.Combine(ProgramDataRoot, "IncidentReports");
@@ -908,47 +910,41 @@ namespace Sentinel.Agent
 
         private async Task WatchAndBroadcastEvents(CancellationToken ct)
         {
-            var logFile = Path.Combine(ProgramDataRoot, "events.jsonl");
-
-            // Wait for file to exist
-            while (!File.Exists(logFile) && !ct.IsCancellationRequested)
-                await Task.Delay(2000, ct).ConfigureAwait(false);
-
-            long lastOffset = 0;
-            try
+            var offsets = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in _eventLogPaths)
             {
-                if (File.Exists(logFile))
-                {
-                    using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    lastOffset = fs.Length;
-                }
+                try { offsets[path] = File.Exists(path) ? new FileInfo(path).Length : 0; }
+                catch (IOException) { offsets[path] = 0; }
+                catch (UnauthorizedAccessException) { offsets[path] = 0; }
             }
-            catch { }
 
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
-                    if (File.Exists(logFile))
+                    foreach (var logFile in _eventLogPaths)
                     {
-                        using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read,
-                            FileShare.ReadWrite | FileShare.Delete);
-
-                        if (fs.Length < lastOffset)
-                            lastOffset = 0;
-
-                        if (fs.Length > lastOffset)
+                        long lastOffset = offsets[logFile];
+                        if (File.Exists(logFile))
                         {
-                            fs.Seek(lastOffset, SeekOrigin.Begin);
-                            using var reader = new StreamReader(fs, Encoding.UTF8, false, 4096, true);
-                            string? line;
-                            while ((line = reader.ReadLine()) != null)
+                            using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete);
+
+                            if (fs.Length < lastOffset)
+                                lastOffset = 0;
+
+                            if (fs.Length > lastOffset)
                             {
-                                if (!string.IsNullOrWhiteSpace(line))
-                                    await BroadcastEvent(line).ConfigureAwait(false);
+                                fs.Seek(lastOffset, SeekOrigin.Begin);
+                                using var reader = new StreamReader(fs, Encoding.UTF8, false, 4096, true);
+                                string? line;
+                                while ((line = reader.ReadLine()) != null)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(line))
+                                        await BroadcastEvent(line).ConfigureAwait(false);
+                                }
+                                offsets[logFile] = fs.Position;
                             }
-                            lastOffset = fs.Position;
                         }
                     }
                 }

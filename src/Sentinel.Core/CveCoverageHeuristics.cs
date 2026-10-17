@@ -370,6 +370,13 @@ namespace Sentinel.Core
             var result = new KevHostMatch();
             var prod = product ?? "";
             var vend = vendor ?? "";
+            // Generic labels require product identity in addition to the shared word.
+            if (prod.Equals("Desktop", StringComparison.OrdinalIgnoreCase)
+                || prod.Equals("Client", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(vend)) return result;
+                prod = vend + " " + prod;
+            }
 
             if (IsServerRoleProduct(prod))
             {
@@ -419,10 +426,8 @@ namespace Sentinel.Core
                     return result;
                 }
 
-                if (TryContains(installedApps, prod, out var ia)
-                    || (!string.IsNullOrWhiteSpace(vend)
-                        && vend.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) < 0
-                        && TryContains(installedApps, vend, out ia)))
+                // A shared publisher is not evidence of the vulnerable product being installed.
+                if (TryContains(installedApps, prod, out var ia))
                 {
                     result.Matched = true;
                     result.MatchType = "InstalledSoftware";
@@ -526,13 +531,10 @@ namespace Sentinel.Core
             foreach (var item in haystack)
             {
                 if (string.IsNullOrEmpty(item)) continue;
-                if (item.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    hit = item;
-                    return true;
-                }
-                // Reverse match only for distinctive tokens (avoid "Microsoft" / "Server" / "e")
-                if (item.Length >= 6 && needle.IndexOf(item, StringComparison.OrdinalIgnoreCase) >= 0)
+                // Match a complete product phrase, never embedded text or a reverse substring
+                // (e.g. Windows services is not Cisco Identity Services Engine).
+                if (Regex.IsMatch(item, @"(?<![\p{L}\p{N}])" + Regex.Escape(needle) + @"(?![\p{L}\p{N}])",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 {
                     hit = item;
                     return true;

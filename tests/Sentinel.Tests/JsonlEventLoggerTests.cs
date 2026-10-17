@@ -31,6 +31,46 @@ namespace Sentinel.Tests
         }
 
         [Fact]
+        public async Task CompetingWriterCannotRenameOrCorruptTheActiveLog()
+        {
+            await _logger.LogEventAsync("first", new { Id = 1 });
+            await using var competing = new JsonlEventLogger(_logPath);
+            await competing.LogEventAsync("competing", new { Id = 2 });
+            await _logger.LogEventAsync("last", new { Id = 3 });
+            Assert.True(competing.DroppedEvents > 0);
+            Assert.Empty(Directory.GetFiles(_tempDir, "*.stale.*"));
+            using var stream = new FileStream(_logPath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            var lines = reader.ReadToEnd().Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+            foreach (var line in lines)
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(line);
+                Assert.NotEqual("competing", document.RootElement.GetProperty("type").GetString());
+            }
+        }
+
+        [Fact]
+        public async Task RejectedWriterRecoversWhenTheOwnerReleasesTheFile()
+        {
+            await _logger.LogEventAsync("owner", new { Id = 1 });
+            await using var competing = new JsonlEventLogger(_logPath);
+            await competing.LogEventAsync("blocked", new { Id = 2 });
+            long dropped = competing.DroppedEvents;
+            Assert.True(dropped > 0);
+            await _logger.DisposeAsync();
+            await competing.LogEventAsync("recovered", new { Id = 3 });
+            Assert.Equal(dropped, competing.DroppedEvents);
+            using var stream = new FileStream(_logPath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            string content = reader.ReadToEnd();
+            Assert.Contains("recovered", content);
+            Assert.DoesNotContain("blocked", content);
+        }
+
+        [Fact]
         public async Task LogEventAsync_CreatesLogFile()
         {
             await _logger.LogEventAsync("test", new { Message = "hello" });

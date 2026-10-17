@@ -378,6 +378,9 @@ namespace Sentinel.Core
             "DserNamePipe_00",   // known handler pipe name
         };
 
+        internal static bool IsDecoyPipeName(string name)
+            => Array.Exists(DecoyPipeNames, candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase));
+
         public DecoyPipeMonitor(DetectionEngine detectionEngine, ILogger<DecoyPipeMonitor> logger)
         {
             _detectionEngine = detectionEngine;
@@ -429,6 +432,11 @@ namespace Sentinel.Core
                     int clientPid = 0;
                     try { GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out clientPid); } catch { }
 
+                    // Our pipe-owner inspection opens the pipe and therefore connects as a client.
+                    // Compare the kernel-reported PID, never an attacker-controlled process name.
+                    if (clientPid == System.Net48Environment.ProcessId)
+                        continue;
+
                     string clientProcessName = "unknown";
                     try
                     {
@@ -444,8 +452,7 @@ namespace Sentinel.Core
                                    $"'\\\\?\\pipe\\{pipeName}'. This pipe name is associated with C2 frameworks.",
                         Reasoning = "Sentinel creates named pipes matching known C2 framework patterns " +
                                     "(CobaltStrike, Metasploit, PoshC2). No legitimate software uses these pipe names. " +
-                                    "A connection is definitive proof of C2 activity or lateral movement tooling " +
-                                    "operating on this host.",
+                                    "An external client connected to a decoy; inspect its identity and corroborating behavior.",
                         Confidence = 0.97,
                         Tier = DetectionTier.Tier1Behavioral,
                         AuthorizedResponse = ResponseAction.KillProcessTree,

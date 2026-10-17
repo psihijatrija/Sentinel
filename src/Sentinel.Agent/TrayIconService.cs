@@ -28,6 +28,7 @@ namespace Sentinel.Agent
         private static extern bool BringWindowToTop(IntPtr hWnd);
 
         private readonly QuarantineManager _quarantine;
+        private readonly string[] _eventLogPaths;
         private NotifyIcon? _notifyIcon;
         private ContextMenuStrip? _contextMenu;
         private Thread? _uiThread;
@@ -36,10 +37,13 @@ namespace Sentinel.Agent
         private (string RuleName, string ProcessName, double Confidence, string Evidence, int ProcessId)? _pendingDetection;
         private AgentDashboardForm? _settingsForm;
 
-        public TrayIconService(QuarantineManager quarantine)
+        public TrayIconService(QuarantineManager quarantine, JsonlEventLogger? eventLogger = null)
         {
             _quarantine = quarantine ?? new QuarantineManager();
             _version = LoadVersion();
+            var serviceLog = Path.Combine(ProgramDataRoot, "events.jsonl");
+            _eventLogPaths = eventLogger == null || string.Equals(serviceLog, eventLogger.LogFilePath, StringComparison.OrdinalIgnoreCase)
+                ? new[] { serviceLog } : new[] { serviceLog, eventLogger.LogFilePath };
         }
 
         private static string LoadVersion()
@@ -271,24 +275,13 @@ namespace Sentinel.Agent
         /// </summary>
         private void WatchLogFileSync(CancellationToken cancellationToken)
         {
-            var logFile = Path.Combine(ProgramDataRoot, "events.jsonl");
-
-            while (!File.Exists(logFile) && !cancellationToken.IsCancellationRequested)
+            var offsets = new System.Collections.Generic.Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in _eventLogPaths)
             {
-                Thread.Sleep(1000);
+                try { offsets[path] = File.Exists(path) ? new FileInfo(path).Length : 0; }
+                catch (IOException) { offsets[path] = 0; }
+                catch (UnauthorizedAccessException) { offsets[path] = 0; }
             }
-
-            long lastOffset = 0;
-            try
-            {
-                if (File.Exists(logFile))
-                {
-                    using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    lastOffset = fs.Length;
-                }
-            }
-            catch { }
 
             var shownCache = new System.Collections.Generic.Dictionary<string, DateTime>();
 
@@ -306,93 +299,97 @@ namespace Sentinel.Agent
                     foreach (var k in keysToRemove)
                         shownCache.Remove(k);
 
-                    if (File.Exists(logFile))
+                    foreach (var logFile in _eventLogPaths)
                     {
-                        using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read,
-                            FileShare.ReadWrite | FileShare.Delete);
-                        if (fs.Length < lastOffset)
-                            lastOffset = 0;
-
-                        if (fs.Length > lastOffset)
+                        long lastOffset = offsets[logFile];
+                        if (File.Exists(logFile))
                         {
-                            fs.Seek(lastOffset, SeekOrigin.Begin);
-                            using var reader = new StreamReader(fs, System.Text.Encoding.UTF8, false, 4096, true);
-                            string? line;
-                            while ((line = reader.ReadLine()) != null)
+                            using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete);
+                            if (fs.Length < lastOffset)
+                                lastOffset = 0;
+
+                            if (fs.Length > lastOffset)
                             {
-                                if (line.Contains("\"type\":\"detection\"", StringComparison.OrdinalIgnoreCase))
+                                fs.Seek(lastOffset, SeekOrigin.Begin);
+                                using var reader = new StreamReader(fs, System.Text.Encoding.UTF8, false, 4096, true);
+                                string? line;
+                                while ((line = reader.ReadLine()) != null)
                                 {
-                                    try
+                                    if (line.Contains("\"type\":\"detection\"", StringComparison.OrdinalIgnoreCase))
                                     {
-                                        using var doc = JsonDocument.Parse(line);
-                                        var data = doc.RootElement.GetProperty("data");
-                                        var ruleName = data.GetProperty("RuleName").GetString() ?? "Threat Detected";
-                                        var processName = data.GetProperty("ProcessName").GetString() ?? "unknown";
-                                        var confidence = data.GetProperty("Confidence").GetDouble();
-                                        var evidence = data.GetProperty("Evidence").GetString() ?? "";
-
-                                        int tierVal = 1;
-                                        if (data.TryGetProperty("Tier", out var tierProp))
-                                            tierVal = tierProp.GetInt32();
-
-                                        if (tierVal == 0)
-                                            _pendingDetection = (ruleName, processName, confidence, evidence, data.GetProperty("ProcessId").GetInt32());
-                                    }
-                                    catch { }
-                                }
-                                else if (line.Contains("\"type\":\"response\"", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    try
-                                    {
-                                        using var doc = JsonDocument.Parse(line);
-                                        var data = doc.RootElement.GetProperty("data");
-                                        var actionTaken = data.GetProperty("ActionTaken").GetString() ?? "";
-
-                                        bool verified = data.TryGetProperty("Execution", out var execution) &&
-                                            execution.ValueKind == JsonValueKind.Object &&
-                                            execution.TryGetProperty("VerifiesRequestedAction", out var verifiedFlag) &&
-                                            verifiedFlag.ValueKind == JsonValueKind.True;
-                                        if (_pendingDetection.HasValue && verified &&
-                                            data.GetProperty("ProcessId").GetInt32() == _pendingDetection.Value.ProcessId &&
-                                            (actionTaken == "KILL" || actionTaken == "QUARANTINE_AND_KILL" ||
-                                             actionTaken == "NETWORK_ISOLATE" || actionTaken == "REMOVE_CERT_AND_KILL_ADDER"))
+                                        try
                                         {
-                                            var (ruleName, processName, confidence, evidence, _) = _pendingDetection.Value;
+                                            using var doc = JsonDocument.Parse(line);
+                                            var data = doc.RootElement.GetProperty("data");
+                                            var ruleName = data.GetProperty("RuleName").GetString() ?? "Threat Detected";
+                                            var processName = data.GetProperty("ProcessName").GetString() ?? "unknown";
+                                            var confidence = data.GetProperty("Confidence").GetDouble();
+                                            var evidence = data.GetProperty("Evidence").GetString() ?? "";
 
-                                            var cacheKey = $"{ruleName}:{processName}";
-                                            if (shownCache.TryGetValue(cacheKey, out var lastShown))
-                                            {
-                                                if (DateTime.UtcNow - lastShown < TimeSpan.FromSeconds(30))
-                                                {
-                                                    _pendingDetection = null;
-                                                    continue;
-                                                }
-                                            }
-                                            shownCache[cacheKey] = DateTime.UtcNow;
+                                            int tierVal = 1;
+                                            if (data.TryGetProperty("Tier", out var tierProp))
+                                                tierVal = tierProp.GetInt32();
 
-                                            try
-                                            {
-                                                if (_notifyIcon != null)
-                                                {
-                                                    var tip = $"Sentinel v{_version} - last: {ruleName}";
-                                                    if (tip.Length > 63) tip = tip[..63];
-                                                    _notifyIcon.Text = tip;
-                                                }
-                                            }
-                                            catch { }
+                                            if (tierVal == 0)
+                                                _pendingDetection = (ruleName, processName, confidence, evidence, data.GetProperty("ProcessId").GetInt32());
                                         }
-                                        _pendingDetection = null;
+                                        catch { }
                                     }
-                                    catch { _pendingDetection = null; }
+                                    else if (line.Contains("\"type\":\"response\"", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        try
+                                        {
+                                            using var doc = JsonDocument.Parse(line);
+                                            var data = doc.RootElement.GetProperty("data");
+                                            var actionTaken = data.GetProperty("ActionTaken").GetString() ?? "";
+
+                                            bool verified = data.TryGetProperty("Execution", out var execution) &&
+                                                execution.ValueKind == JsonValueKind.Object &&
+                                                execution.TryGetProperty("VerifiesRequestedAction", out var verifiedFlag) &&
+                                                verifiedFlag.ValueKind == JsonValueKind.True;
+                                            if (_pendingDetection.HasValue && verified &&
+                                                data.GetProperty("ProcessId").GetInt32() == _pendingDetection.Value.ProcessId &&
+                                                (actionTaken == "KILL" || actionTaken == "QUARANTINE_AND_KILL" ||
+                                                 actionTaken == "NETWORK_ISOLATE" || actionTaken == "REMOVE_CERT_AND_KILL_ADDER"))
+                                            {
+                                                var (ruleName, processName, confidence, evidence, _) = _pendingDetection.Value;
+
+                                                var cacheKey = $"{ruleName}:{processName}";
+                                                if (shownCache.TryGetValue(cacheKey, out var lastShown))
+                                                {
+                                                    if (DateTime.UtcNow - lastShown < TimeSpan.FromSeconds(30))
+                                                    {
+                                                        _pendingDetection = null;
+                                                        continue;
+                                                    }
+                                                }
+                                                shownCache[cacheKey] = DateTime.UtcNow;
+
+                                                try
+                                                {
+                                                    if (_notifyIcon != null)
+                                                    {
+                                                        var tip = $"Sentinel v{_version} - last: {ruleName}";
+                                                        if (tip.Length > 63) tip = tip[..63];
+                                                        _notifyIcon.Text = tip;
+                                                    }
+                                                }
+                                                catch { }
+                                            }
+                                            _pendingDetection = null;
+                                        }
+                                        catch { _pendingDetection = null; }
+                                    }
                                 }
+                                offsets[logFile] = fs.Position;
                             }
-                            lastOffset = fs.Position;
                         }
                     }
                 }
                 catch { }
 
-                Thread.Sleep(1000);
+                if (cancellationToken.WaitHandle.WaitOne(1000)) break;
             }
         }
     }

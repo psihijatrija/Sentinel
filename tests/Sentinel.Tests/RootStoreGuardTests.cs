@@ -128,6 +128,18 @@ namespace Sentinel.Tests
             Assert.False(result.Success);
         }
 
+        [Fact]
+        public void DistrustSuspiciousRoot_UnlistedUnstampedCertificateCannotAuthorizeMutation()
+        {
+            using var cert = CreateSelfSignedRoot("CN=Unlisted review fixture", TimeSpan.FromDays(30));
+            Assert.True(CertSuspicionAnalyzer.IsSuspicious(cert));
+            var result = NewRemediator().DistrustSuspiciousRoot(cert);
+            Assert.False(result.Success);
+            Assert.Equal(0, result.RemovedFromTrust);
+            Assert.Equal(0, result.AddedToDisallowed);
+            Assert.Contains("explicit distrust authorization", result.Message);
+        }
+
         // ---- Hardcoded-list path remains fail-closed (unchanged contract) ----
 
         [Fact]

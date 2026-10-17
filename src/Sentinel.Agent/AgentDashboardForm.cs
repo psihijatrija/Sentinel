@@ -78,11 +78,6 @@ namespace Sentinel.Agent
                     "Sentinel", "WebView2");
                 Directory.CreateDirectory(userDataFolder);
 
-                var env = CoreWebView2Environment.CreateAsync(
-                    browserExecutableFolder: null,
-                    userDataFolder: userDataFolder,
-                    options: null);
-
                 var webView = new WebView2
                 {
                     Dock = DockStyle.Fill,
@@ -93,12 +88,20 @@ namespace Sentinel.Agent
                 Controls.Add(webView);
                 _webView = webView;
 
+                var env = CoreWebView2Environment.CreateAsync(
+                    browserExecutableFolder: null,
+                    userDataFolder: userDataFolder,
+                    options: null);
+
                 // Initialize against the environment once it is ready. No await on the STA thread:
                 // attach a continuation that marshals back to the UI thread.
                 env.ContinueWith(t =>
                 {
-                    if (t.IsFaulted || t.Result == null)
+                    if (t.IsFaulted || t.IsCanceled)
                     {
+                        // Reading Exception observes the environment task's failure.
+                        if (t.IsFaulted) System.Diagnostics.Trace.TraceWarning(
+                            "Sentinel WebView2 environment unavailable: {0}", t.Exception);
                         BeginInvokeFallback();
                         return;
                     }
@@ -107,7 +110,18 @@ namespace Sentinel.Agent
                         if (IsDisposed || _webView == null) return;
                         BeginInvoke((Action)(() =>
                         {
-                            try { _webView.EnsureCoreWebView2Async(t.Result); }
+                            try
+                            {
+                                if (IsDisposed || _webView == null) return;
+                                var initialization = _webView.EnsureCoreWebView2Async(t.Result);
+                                initialization.ContinueWith(completed =>
+                                {
+                                    if (completed.IsFaulted)
+                                        System.Diagnostics.Trace.TraceWarning(
+                                            "Sentinel WebView2 initialization failed: {0}", completed.Exception);
+                                    if (completed.IsFaulted || completed.IsCanceled) BeginInvokeFallback();
+                                }, System.Threading.Tasks.TaskScheduler.Default);
+                            }
                             catch { StartLegacyBrowserOnce(); }
                         }));
                     }

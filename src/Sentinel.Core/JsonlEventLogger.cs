@@ -376,29 +376,15 @@ namespace Sentinel.Core
                 }
 
                 _fileStream = new FileStream(_logFilePath, FileMode.Append, FileAccess.Write,
-                    FileShare.ReadWrite | FileShare.Delete);
+                    FileShare.Read | FileShare.Delete);
                 _writer = new StreamWriter(_fileStream) { AutoFlush = true };
                 _isDegraded = false;
             }
             catch (IOException)
             {
-                // Stale file handling: try renaming locked/inaccessible file to .stale.<timestamp>
-                try
-                {
-                    var stalePath = $"{_logFilePath}.stale.{DateTime.UtcNow:yyyyMMddHHmmss}";
-                    if (File.Exists(_logFilePath))
-                    {
-                        File.Move(_logFilePath, stalePath);
-                    }
-                    _fileStream = new FileStream(_logFilePath, FileMode.Create, FileAccess.Write,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    _writer = new StreamWriter(_fileStream) { AutoFlush = true };
-                    _isDegraded = false;
-                }
-                catch
-                {
-                    _isDegraded = true;
-                }
+                // A live writer owns this destination. Never rename its file or create a
+                // replacement behind its open handle; retain the original and report drops.
+                _isDegraded = true;
             }
             catch
             {

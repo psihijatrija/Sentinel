@@ -1,6 +1,11 @@
 # Changelog
 ## [3.2.2] - 2026-10-17
 ### Fixed
+- Prevented Sentinel's pipe-owner inspection from generating C2 alerts against its own decoys, using kernel-reported PIDs rather than process names.
+- Certificate trust-marker heuristics are now Tier2 review-only findings. Only explicit thumbprint distrust policy may remove certificates, block them or quarantine associated files; the remediator enforces this at its entry point.
+- Separated agent logs and audit chains from the service log. Event files accept one writer and no longer rename a live writer's file on contention; lost writes remain counted. Dashboard history/live events and tray notifications read both sources.
+- Observed both WebView2 environment and initialization task failures before falling back to the legacy browser.
+- Removed vendor-only and reverse-substring CVE product matching; generic product labels require vendor context. CVE match records explicitly leave affected-version applicability unverified.
 - Process-tree inspection opens handles through the shared NativeResolver import boundary; release CI checks that boundary before the full Windows suite.
 - Windows process-tree integration fixtures now start without console helper processes and pin all process handles before containment. Failure diagnostics include observed containment outcomes.
 - Module attribution tests inject servicing-window state and cover both active and inactive servicing, avoiding dependence on Windows Update activity on the runner.

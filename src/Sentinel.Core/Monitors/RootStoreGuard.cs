@@ -11,23 +11,10 @@ using Microsoft.Extensions.Logging;
 namespace Sentinel.Core.Monitors
 {
     /// <summary>
-    /// Autonomous root-store guard (SYSTEM session, SystemIntegrity group).
-    ///
-    /// Continuously (startup + poll) finds root certificates that the OS trusted-root program
-    /// does NOT vouch for - carrying neither the AuthRoot-CTL stamp nor the Microsoft
-    /// root-program marker (see <see cref="CertSuspicionAnalyzer"/>) - plus any thumbprint on
-    /// the explicit <see cref="CertDistrustList"/>. For each such cert it:
-    ///
-    ///   1. Removes it from every trusted store and pins it to Disallowed (via
-    ///      <see cref="CertRemediator"/>), and
-    ///   2. Quarantines files that were Authenticode-signed by a chain rooting to the removed
-    ///      cert - the things the planted root was used to vouch for.
-    ///
-    /// This is autonomous host mutation. It is gated on <c>ActiveResponse</c> and recorded as a
-    /// Tier1 response (Tier2 can never act). The suspicion verdict is a non-attacker-controllable
-    /// OS-CTL signal, re-checked inside <see cref="CertRemediator.DistrustSuspiciousRoot"/> as a
-    /// hard safety floor so OS/public trust anchors are never touched. A failing cycle logs and
-    /// continues (graceful degradation) - it must never crash the monitor group.
+    /// Root-store inventory and explicit-thumbprint distrust enforcement.
+    /// Missing OS trust markers are review-only Tier2 findings. Only an explicit
+    /// CertDistrustList identity can authorize removal, blocking or associated file actions.
+    /// Store changes do not establish malicious use or installer identity.
     /// </summary>
     public sealed class RootStoreGuard : BackgroundService
     {
@@ -73,7 +60,7 @@ namespace Sentinel.Core.Monitors
 
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
-            _logger.LogInformation("[RootStoreGuard] Started - autonomous suspicious-root detection + removal");
+            _logger.LogInformation("[RootStoreGuard] Started - root review and explicit-thumbprint distrust enforcement");
 
             // Startup sweep immediately, then poll.
             try { await SweepAsync(ct).ConfigureAwait(false); }
@@ -145,10 +132,15 @@ namespace Sentinel.Core.Monitors
                 bool firstSeen = _handled.Add(norm);
                 if (!firstSeen && !mayAct) continue; // already logged; nothing to do without action
 
-                if (!mayAct)
+                // Missing store trust markers are an observation, not removal authority.
+                bool explicitlyDistrusted = CertDistrustList.IsDistrusted(norm);
+                if (!mayAct || !explicitlyDistrusted)
                 {
+                    if (!firstSeen) continue;
                     await EmitAsync(cert, norm, removed: false, quarantined: 0,
-                        note: "ActiveResponse disabled - detection only, no removal").ConfigureAwait(false);
+                        note: !explicitlyDistrusted
+                            ? "Trust markers unavailable or absent; review only, no removal or file quarantine authorized."
+                            : "Host mutation unavailable - detection only, no removal").ConfigureAwait(false);
                     continue;
                 }
 
@@ -165,11 +157,7 @@ namespace Sentinel.Core.Monitors
                 }, ct).ConfigureAwait(false);
 
                 // 1. Remove + block the root.
-                CertRemediator.RemediationResult rr;
-                if (CertDistrustList.IsDistrusted(norm))
-                    rr = _remediator.Distrust(norm);               // explicit list (fail-closed)
-                else
-                    rr = _remediator.DistrustSuspiciousRoot(cert);  // analyzer-authorized
+                var rr = _remediator.Distrust(norm); // Explicit identity policy only.
 
                 // 2. Quarantine files signed by a chain rooting to this now-removed cert.
                 int quarantined = 0;
@@ -368,9 +356,8 @@ namespace Sentinel.Core.Monitors
                 Evidence = evidence,
                 Reasoning = reasoning,
                 Confidence = removed ? 0.95 : 0.80,
-                // Removal/quarantine is an authorized host mutation -> Tier1. Detection-only is
-                // still surfaced; keep it Tier1 LogOnly (never Tier2 for a cert-trust event we acted on).
-                Tier = DetectionTier.Tier1Behavioral,
+                // Heuristics cannot authorize host mutation; only explicit identity policy may act.
+                Tier = listed ? DetectionTier.Tier1Behavioral : DetectionTier.Tier2Indicator,
                 AuthorizedResponse = removed ? ResponseAction.RemoveCert : ResponseAction.LogOnly,
                 ProcessName = "SYSTEM",
                 ProcessId = 0,

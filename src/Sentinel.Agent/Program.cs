@@ -298,7 +298,14 @@ namespace Sentinel.Agent
                     services.AddSingleton<ThreatReportService>();
                     services.AddSingleton<ToastService>();
                     services.AddSingleton<AutoIncidentReporter>();
-                    services.AddSingleton<JsonlEventLogger>(_ => new JsonlEventLogger(config.LogPath));
+                    // The service owns the shared events file; interactive monitors write separately.
+                    // Keep audit chains separate too: each writer needs its own directory.
+                    services.AddSingleton<JsonlEventLogger>(_ => new JsonlEventLogger(
+                        string.IsNullOrWhiteSpace(config.LogPath)
+                            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                "Sentinel", "Agent", "events.jsonl")
+                            : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(config.LogPath!))!,
+                                "agent", Path.GetFileName(config.LogPath))));
                     services.AddSingleton<EventGraph>();
                     services.AddSingleton<ProcessAncestryCache>();
                     services.AddSingleton<SecureCacheStore>();
