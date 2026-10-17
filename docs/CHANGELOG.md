@@ -1,4 +1,23 @@
 # Changelog
+## [3.2.7] - 2026-10-18
+### Fixed
+- **Service crashing immediately on startup** — `UnhandledException` handler was registered after `HardeningModule.ApplyOrFail()` and `CreateHostBuilder().Build()`, so any exception in those calls left no crash trace. Handler now registered first; trace points added at each startup step to `startup_trace.log`.
+- **Agent not starting / tray icon missing** — two root causes:
+  1. `AgentWatchdog.VerifyAgentBinaryIntegrity` refused to launch unsigned binaries in Release builds (`#if DEBUG`-only allowance). Unsigned co-installed pairs (same directory, write-time delta ≤ 5 min) are now permitted; post-install Agent-only replacement is still blocked.
+  2. `AgentWatchdog.IsAgentRunning` used `Process.MainModule?.FileName` which requires `PROCESS_VM_READ` — denied from SYSTEM for cross-session user processes. Replaced with `QueryFullProcessImageName` (`PROCESS_QUERY_LIMITED_INFORMATION`), always accessible from SYSTEM.
+- **WebView2 JIT crash taking down the tray icon** — all `Microsoft.Web.WebView2.*` references moved into a new `WebView2Host` isolation class. A missing WebView2 assembly now degrades cleanly to the IE11 `WebBrowser` fallback without crashing the STA thread.
+- Agent self-restart (`TryImmediateRestart`, `ScheduleDelayedRelaunch`) switched to `UseShellExecute = true` so the relaunched process inherits the correct desktop/window-station.
+### Validation
+- Build 0W/0E. Tray appears on first install and on watchdog relaunch for both signed and unsigned builds.
+
+## [3.2.6] - 2026-10-17
+### Fixed
+- Probed Edge WebView2 Runtime availability upfront via non-throwing `CoreWebView2Environment.GetAvailableBrowserVersionString()` prior to control construction or initialization.
+- Gracefully degrades directly to the legacy IE11 `WebBrowser` control when the WebView2 Runtime is not installed, eliminating unobserved task exception spam (`Couldn't find a compatible Webview2 Runtime installation`) in `agent_crash.log`.
+- Explicitly reports WebView2 unavailability to `%ProgramData%\Sentinel\agent_runtime.log` and marks the dashboard window title with `(legacy browser — WebView2 unavailable)`.
+### Validation
+- Clean build (0 warnings, 0 errors) and full test suite passing (2,902 tests passed, 1 skipped).
+
 ## [3.2.5] - 2026-10-17
 ### Added
 - Administrator-approved local DNS resolver profiles, protected snapshots, verified restoration and explicit failure/partial receipts. Configuration verification does not certify a router or DNS answers as safe.

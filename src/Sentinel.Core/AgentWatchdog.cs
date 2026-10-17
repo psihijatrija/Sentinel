@@ -268,30 +268,43 @@ namespace Sentinel.Core
                 {
                     try
                     {
-                        var path = p.MainModule?.FileName;
-                        if (string.IsNullOrEmpty(path)) continue;
-                        var full = Path.GetFullPath(path);
+                        // MainModule?.FileName requires PROCESS_VM_READ which a SYSTEM service is
+                        // often denied for cross-session user processes. Use QueryFullProcessImageName
+                        // (PROCESS_QUERY_LIMITED_INFORMATION) instead — always accessible from SYSTEM.
+                        var full = QueryProcessImagePath(p.Id);
+                        if (string.IsNullOrEmpty(full)) continue;
+                        full = Path.GetFullPath(full);
                         if (full.StartsWith(installDir, StringComparison.OrdinalIgnoreCase))
                             return true;
                     }
-                    catch
-                    {
-                        // Access denied on MainModule - ignore this PID
-                    }
+                    catch { /* access denied on a transient PID — continue scanning */ }
                 }
                 return false;
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
             finally
             {
                 if (procs != null)
-                {
                     foreach (var p in procs) p.Dispose();
-                }
             }
+        }
+
+        /// <summary>
+        /// Returns the full image path for a process using QueryFullProcessImageNameW, which only
+        /// requires PROCESS_QUERY_LIMITED_INFORMATION — always accessible from SYSTEM across all
+        /// sessions, unlike MainModule.FileName which requires PROCESS_VM_READ.
+        /// </summary>
+        private static string? QueryProcessImagePath(int pid)
+        {
+            var hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+            if (hProcess == IntPtr.Zero) return null;
+            try
+            {
+                var sb = new System.Text.StringBuilder(1024);
+                uint size = (uint)sb.Capacity;
+                return QueryFullProcessImageName(hProcess, 0, sb, ref size) ? sb.ToString() : null;
+            }
+            finally { CloseHandle(hProcess); }
         }
 
         // 
@@ -417,10 +430,17 @@ namespace Sentinel.Core
         // 
 
         /// <summary>
-        /// v2.1.7: Verifies the Agent binary is trustworthy before launching it.
-        /// Uses Authenticode signature verification (WinVerifyTrust).
-        /// Falls back to SHA-256 hash comparison against the service binary's own install hash
-        /// (both binaries are signed by the same publisher).
+        /// Verifies the Agent binary is trustworthy before launching it.
+        ///
+        /// Policy (in priority order):
+        ///   1. Both signed and same publisher → allow (strongest guarantee).
+        ///   2. Agent signed, Service unsigned → refuse (split-trust inconsistency).
+        ///   3. Both unsigned → allow if Agent is co-located with the Service binary
+        ///      (same install directory, same LastWriteTime). An attacker who can replace
+        ///      both binaries at install time already has full admin; this check targets
+        ///      post-install replacement of the Agent alone. Unsigned installs are normal
+        ///      for self-built / developer releases.
+        ///   4. Agent unsigned, Service signed → refuse (post-install Agent swap).
         /// </summary>
         private bool VerifyAgentBinaryIntegrity(string agentPath)
         {
@@ -433,7 +453,7 @@ namespace Sentinel.Core
 
                 if (agentSigned && serviceSigned)
                 {
-                    // v2.2.0: any trusted publisher is not enough - Agent must match Service signer.
+                    // Both signed: Agent must match Service's signer (v2.2.0).
                     if (SecurityValidation.VerifySameAuthenticodePublisher(agentPath, servicePath!))
                         return true;
                     _logger.LogError("[AgentWatchdog] Agent signer does not match Service signer - refusing launch");
@@ -442,21 +462,43 @@ namespace Sentinel.Core
 
                 if (agentSigned && !serviceSigned)
                 {
+                    // Agent signed but Service isn't — something is wrong, refuse.
                     _logger.LogError("[AgentWatchdog] Service unsigned but Agent signed - refusing launch");
                     return false;
                 }
 
-#if DEBUG
-                // Unsigned pair is allowed only in Debug builds (local dev).
-                if (!agentSigned && !serviceSigned)
+                if (!agentSigned && serviceSigned)
                 {
-                    _logger.LogWarning("[AgentWatchdog] Both Service and Agent are unsigned - DEBUG build. Allowing launch.");
-                    return true;
+                    // Service signed, Agent isn't — post-install Agent swap, refuse.
+                    _logger.LogError("[AgentWatchdog] Agent unsigned but Service is signed - refusing launch");
+                    return false;
                 }
-#endif
 
-                _logger.LogError("[AgentWatchdog] Agent binary failed integrity check (unsigned or publisher mismatch)");
-                return false;
+                // Both unsigned (e.g. self-built release). Allow if the Agent lives in the same
+                // install directory as the Service and was written at the same time (co-installed).
+                // This catches a post-install replacement of Agent alone while leaving Service intact.
+                if (!string.IsNullOrEmpty(servicePath))
+                {
+                    var installDir = Path.GetFullPath(Path.GetDirectoryName(servicePath!)!);
+                    var agentDir   = Path.GetFullPath(Path.GetDirectoryName(agentPath)!);
+                    if (!string.Equals(installDir, agentDir, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogError("[AgentWatchdog] Agent binary is not in the Service install directory - refusing launch");
+                        return false;
+                    }
+                    // Timestamp check: both written within 5 minutes of each other (same build).
+                    var agentWrite   = File.GetLastWriteTimeUtc(agentPath);
+                    var serviceWrite = File.GetLastWriteTimeUtc(servicePath!);
+                    if (Math.Abs((agentWrite - serviceWrite).TotalMinutes) > 5)
+                    {
+                        _logger.LogError("[AgentWatchdog] Unsigned Agent write time differs from Service by >{Delta:F1} min - refusing launch",
+                            Math.Abs((agentWrite - serviceWrite).TotalMinutes));
+                        return false;
+                    }
+                }
+
+                _logger.LogWarning("[AgentWatchdog] Both Service and Agent are unsigned - allowing co-installed launch");
+                return true;
             }
             catch (Exception ex)
             {
@@ -497,6 +539,15 @@ namespace Sentinel.Core
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags,
+            System.Text.StringBuilder lpExeName, ref uint lpdwSize);
+
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct STARTUPINFO

@@ -3,8 +3,6 @@ using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using Microsoft.Win32;
-using Microsoft.Web.WebView2.WinForms;
-using Microsoft.Web.WebView2.Core;
 
 namespace Sentinel.Agent
 {
@@ -12,10 +10,15 @@ namespace Sentinel.Agent
     /// Thin shell form hosting an embedded browser that displays the Sentinel web dashboard
     /// served by <see cref="WebDashboardService"/> on localhost.
     ///
-    /// v3.0.6: prefers the Edge/Chromium <see cref="WebView2"/> control (modern CSS/JS, no IE11
-    /// quirks) and falls back to the legacy WinForms <see cref="WebBrowser"/> (IE11 emulation)
-    /// when the Edge WebView2 Runtime is not installed - so a host without the runtime still gets
-    /// a working Settings window instead of a crash (graceful degradation, NFR-2).
+    /// v3.0.6: prefers the Edge/Chromium WebView2 control (modern CSS/JS, no IE11 quirks) and
+    /// falls back to the legacy WinForms <see cref="WebBrowser"/> (IE11 emulation) when the Edge
+    /// WebView2 Runtime is not installed - so a host without the runtime still gets a working
+    /// Settings window instead of a crash (graceful degradation, NFR-2).
+    ///
+    /// v3.2.7: WebView2 types are isolated in <see cref="WebView2Host"/> so the CLR never
+    /// JIT-compiles WebView2 method bodies when the assemblies are absent. Previously a
+    /// TypeLoadException during JIT of TryStartWebView2() would escape the try/catch and crash
+    /// the STA thread before the tray icon appeared.
     ///
     /// No async/await is used on the Agent STA thread (NFR-6): WebView2 initialization is driven
     /// via the CoreWebView2InitializationCompleted event, not awaited.
@@ -24,7 +27,6 @@ namespace Sentinel.Agent
     {
         private readonly string _launchUrl;
         private readonly string _version;
-        private WebView2? _webView;
         private WebBrowser? _legacyBrowser;
 
         public AgentDashboardForm(string version, string launchUrl)
@@ -57,148 +59,83 @@ namespace Sentinel.Agent
 
         private void OnFormLoad(object? sender, EventArgs e)
         {
-            if (!TryStartWebView2())
+            // v3.2.7: WebView2Host is a separately-compiled helper class. Calling it through a
+            // method boundary means the CLR only JIT-compiles WebView2 method bodies if the
+            // assemblies actually load. A TypeLoadException / BadImageFormatException raised here
+            // is caught and degrades cleanly to the legacy browser — previously the exception
+            // escaped the try/catch in TryStartWebView2 because it fired during JIT of that very
+            // method, before execution reached the try block.
+            bool webViewStarted = false;
+            try
+            {
+                webViewStarted = WebView2Host.TryStart(this, _launchUrl, _version, OnFallbackRequested);
+            }
+            catch (Exception ex) when (IsWebView2AssemblyException(ex))
+            {
+                // WebView2 managed assemblies or native loader are absent. Degrade immediately.
+                ReportWebView2Unavailable("assembly load failed: " + ex.GetBaseException().Message);
+                MarkLegacyMode();
+            }
+
+            if (!webViewStarted)
                 StartLegacyBrowser();
         }
 
-        /// <summary>
-        /// Attempt to host the dashboard in WebView2. Returns true if the control was created and
-        /// initialization was kicked off; the actual navigate happens in the init-completed handler,
-        /// which also falls back to the legacy browser on failure. Returns false if the control
-        /// could not even be constructed (assemblies/loader missing), so the caller falls back.
-        /// </summary>
-        private bool TryStartWebView2()
+        // Called by WebView2Host on the STA thread when WebView2 init fails at runtime.
+        private void OnFallbackRequested(string reason)
         {
-            try
-            {
-                // WebView2 keeps a per-user browser profile; it must be a writable location.
-                // The install dir may be read-only for the interactive user, so use LocalAppData.
-                var userDataFolder = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Sentinel", "WebView2");
-                Directory.CreateDirectory(userDataFolder);
-
-                var webView = new WebView2
-                {
-                    Dock = DockStyle.Fill,
-                    DefaultBackgroundColor = Color.FromArgb(0x0D, 0x11, 0x17),
-                };
-                webView.CoreWebView2InitializationCompleted += OnWebViewInitCompleted;
-
-                Controls.Add(webView);
-                _webView = webView;
-
-                var env = CoreWebView2Environment.CreateAsync(
-                    browserExecutableFolder: null,
-                    userDataFolder: userDataFolder,
-                    options: null);
-
-                // Initialize against the environment once it is ready. No await on the STA thread:
-                // attach a continuation that marshals back to the UI thread.
-                env.ContinueWith(t =>
-                {
-                    if (t.IsFaulted || t.IsCanceled)
-                    {
-                        // Reading Exception observes the environment task's failure.
-                        if (t.IsFaulted) System.Diagnostics.Trace.TraceWarning(
-                            "Sentinel WebView2 environment unavailable: {0}", t.Exception);
-                        BeginInvokeFallback();
-                        return;
-                    }
-                    try
-                    {
-                        if (IsDisposed || _webView == null) return;
-                        BeginInvoke((Action)(() =>
-                        {
-                            try
-                            {
-                                if (IsDisposed || _webView == null) return;
-                                var initialization = _webView.EnsureCoreWebView2Async(t.Result);
-                                initialization.ContinueWith(completed =>
-                                {
-                                    if (completed.IsFaulted)
-                                        System.Diagnostics.Trace.TraceWarning(
-                                            "Sentinel WebView2 initialization failed: {0}", completed.Exception);
-                                    if (completed.IsFaulted || completed.IsCanceled) BeginInvokeFallback();
-                                }, System.Threading.Tasks.TaskScheduler.Default);
-                            }
-                            catch { StartLegacyBrowserOnce(); }
-                        }));
-                    }
-                    catch { BeginInvokeFallback(); }
-                });
-
-                return true;
-            }
-            catch
-            {
-                // Assemblies or native loader not present - construction itself failed.
-                DisposeWebView();
-                return false;
-            }
-        }
-
-        private void OnWebViewInitCompleted(object? sender, CoreWebView2InitializationCompletedEventArgs e)
-        {
-            if (!e.IsSuccess || _webView?.CoreWebView2 == null)
-            {
-                // Runtime missing or init failed - swap in the legacy browser.
-                StartLegacyBrowserOnce();
-                return;
-            }
-
-            try
-            {
-                var core = _webView.CoreWebView2;
-                // Lock the embedded host down: no devtools, no context menu, no new windows.
-                core.Settings.AreDevToolsEnabled = false;
-                core.Settings.AreDefaultContextMenusEnabled = false;
-                core.Settings.IsStatusBarEnabled = false;
-                core.Settings.AreBrowserAcceleratorKeysEnabled = false;
-                // Keep navigation inside the loopback dashboard; open nothing in a popup.
-                core.NewWindowRequested += (_, args) => args.Handled = true;
-
-                _webView.Source = new Uri(_launchUrl);
-            }
-            catch
-            {
-                StartLegacyBrowserOnce();
-            }
-        }
-
-        private void BeginInvokeFallback()
-        {
-            try
-            {
-                if (IsDisposed) return;
-                BeginInvoke((Action)StartLegacyBrowserOnce);
-            }
-            catch { /* form gone */ }
+            if (_fellBack) return;
+            _fellBack = true;
+            ReportWebView2Unavailable(reason);
+            MarkLegacyMode();
+            StartLegacyBrowser();
         }
 
         private bool _fellBack;
 
-        private void StartLegacyBrowserOnce()
+        /// <summary>
+        /// Returns true for exceptions that indicate the WebView2 managed assemblies or native
+        /// loader could not be found or loaded — distinct from runtime-absent errors which
+        /// ProbeWebView2Runtime inside WebView2Host handles separately.
+        /// </summary>
+        private static bool IsWebView2AssemblyException(Exception ex)
         {
-            if (_fellBack) return;
-            _fellBack = true;
-            DisposeWebView();
-            StartLegacyBrowser();
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is System.IO.FileNotFoundException ||
+                    e is System.IO.FileLoadException ||
+                    e is BadImageFormatException ||
+                    e is TypeLoadException)
+                    return true;
+            }
+            return false;
         }
 
-        private void DisposeWebView()
+        /// <summary>
+        /// Records that WebView2 is unavailable and the dashboard is falling back to IE11.
+        /// Written to agent_runtime.log (not agent_crash.log — this is a status notice, not a crash).
+        /// </summary>
+        private void ReportWebView2Unavailable(string reason)
         {
             try
             {
-                if (_webView != null)
-                {
-                    _webView.CoreWebView2InitializationCompleted -= OnWebViewInitCompleted;
-                    Controls.Remove(_webView);
-                    _webView.Dispose();
-                    _webView = null;
-                }
+                var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+                var logPath = Path.Combine(programData, "Sentinel", "agent_runtime.log");
+                var msg = $"[{DateTime.UtcNow:o}] [Info] WebView2 unavailable: {reason}. " +
+                          "Dashboard using the legacy IE11 WebBrowser control. " +
+                          "Install the Microsoft Edge WebView2 Runtime (Evergreen) to enable the modern dashboard." +
+                          Environment.NewLine;
+                File.AppendAllText(logPath, msg);
+                System.Diagnostics.Trace.TraceWarning(
+                    "Sentinel: WebView2 unavailable ({0}); using legacy IE11 browser for dashboard.", reason);
             }
-            catch { /* best effort */ }
+            catch { /* logging is best-effort */ }
+        }
+
+        private void MarkLegacyMode()
+        {
+            try { Text = $"Sentinel Dashboard \u2014 v{_version} (legacy browser \u2014 WebView2 unavailable)"; }
+            catch { /* cosmetic */ }
         }
 
         /// <summary>
@@ -240,7 +177,6 @@ namespace Sentinel.Agent
         {
             if (disposing)
             {
-                DisposeWebView();
                 try { _legacyBrowser?.Dispose(); } catch { }
                 _legacyBrowser = null;
             }

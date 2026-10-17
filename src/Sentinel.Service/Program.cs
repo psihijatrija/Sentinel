@@ -162,28 +162,11 @@ namespace Sentinel.Service
             AppendDiagnostic("startup_trace.log",
                 $"[{DateTime.UtcNow:O}] Main() entered. Args: {string.Join(" ", args)}\n");
 
-            // v2.5.5: Hardening is always-on - no early config read needed.
-            // Self-protect Sentinel process and apply full lockdown immediately.
-            HardeningModule.ApplyOrFail();
-
-            // Secure Sentinel's installation directory permissions
-            HardeningModule.SecureInstallationDirectory();
-
-            var host = CreateHostBuilder(args).Build();
-
-            // Wire up ReinfectionCorrelator -> AdvancedResponseEngine (avoids circular DI)
-            var responseEngine = host.Services.GetService<AdvancedResponseEngine>();
-            var correlator = host.Services.GetService<ReinfectionCorrelator>();
-            if (responseEngine != null && correlator != null)
-                responseEngine.SetReinfectionCorrelator(correlator);
-
-            // DIAGNOSTIC v1.4.8: Log unhandled exceptions that kill the host.
-            // The service was dying after ~16 seconds with no crash trace - this
-            // catches whatever unobserved Task exception is triggering host shutdown.
+            // Register crash handler FIRST so anything below is caught.
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             {
                 var ex = e.ExceptionObject as Exception;
-                var msg = $"[FATAL] UnhandledException in AppDomain: {ex?.GetType().Name}: {ex?.Message}\n{ex?.StackTrace}";
+                var msg = $"[FATAL] UnhandledException: {ex?.GetType().Name}: {ex?.Message}\n{ex?.StackTrace}\nInner: {ex?.InnerException?.Message}\n{ex?.InnerException?.StackTrace}";
                 AppendDiagnostic("fatal_crash.log", $"[{DateTime.UtcNow:O}] {msg}\n\n");
             };
 
@@ -191,8 +174,20 @@ namespace Sentinel.Service
             {
                 var msg = $"[UNOBSERVED] {e.Exception?.GetType().Name}: {e.Exception?.InnerException?.Message ?? e.Exception?.Message}\n{e.Exception?.InnerException?.StackTrace ?? e.Exception?.StackTrace}";
                 AppendDiagnostic("fatal_crash.log", $"[{DateTime.UtcNow:O}] {msg}\n\n");
-                e.SetObserved(); // Prevent process crash from unobserved tasks
+                e.SetObserved();
             };
+
+            // v2.5.5: Hardening is always-on - no early config read needed.
+            // Self-protect Sentinel process and apply full lockdown immediately.
+            AppendDiagnostic("startup_trace.log", $"[{DateTime.UtcNow:O}] Calling HardeningModule.ApplyOrFail()...\n");
+            HardeningModule.ApplyOrFail();
+
+            // Secure Sentinel's installation directory permissions
+            AppendDiagnostic("startup_trace.log", $"[{DateTime.UtcNow:O}] Calling SecureInstallationDirectory()...\n");
+            HardeningModule.SecureInstallationDirectory();
+
+            AppendDiagnostic("startup_trace.log", $"[{DateTime.UtcNow:O}] Calling CreateHostBuilder().Build()...\n");
+            var host = CreateHostBuilder(args).Build();
 
             // STABILITY v1.4.9: Use host.StartAsync() + manual infinite wait instead of host.Run().
             // host.Run() returns when ANY hosted service task completes, killing the process.

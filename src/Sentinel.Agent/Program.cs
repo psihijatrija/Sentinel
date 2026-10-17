@@ -151,7 +151,7 @@ namespace Sentinel.Agent
 
                 var psi = new ProcessStartInfo(exePath)
                 {
-                    UseShellExecute = false,
+                    UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
                 };
                 if (args != null && args.Length > 0)
@@ -184,7 +184,7 @@ namespace Sentinel.Agent
 
                 var psi = new ProcessStartInfo(exePath)
                 {
-                    UseShellExecute = false,
+                    UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
                 };
                 if (args != null && args.Length > 0)
