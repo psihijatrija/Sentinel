@@ -166,6 +166,12 @@ try {
     $script:failName=''; $request.Operation='Approve'; $request.RuleName='local-in'; $null=Invoke-SentinelFirewallPolicy $request
     $request.Operation='Apply'; $null=Invoke-SentinelFirewallPolicy $request
     Assert (($script:rules.PersistentStore | Where-Object Name -eq 'local-in').Enabled -eq 'True') 'Interrupted disable overrode a subsequent explicit approval'
+    $request=New-Fixture
+    $dynamic=New-Rule 'generated-exception' 'domain'; $dynamic.PolicyStoreSourceType='Dynamic'; $dynamic.PolicyStoreSource='Generated'
+    $script:rules.domain += $dynamic
+    $result=Invoke-SentinelFirewallPolicy $request
+    Assert (@($result.Conflicts | Where-Object { $_ -match 'Unmanaged effective.*generated-exception' }).Count -eq 1) 'Generated effective inbound exception was hidden'
+    Assert ($dynamic.Enabled -eq 'True' -and $script:writes -notcontains 'domain') 'Read-only effective policy was rewritten'
     "Passed $script:passed firewall policy checks"
 } finally {
     foreach ($dir in $script:temporaryDirectories) { Remove-Item -LiteralPath $dir -Recurse -Force }

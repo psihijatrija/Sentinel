@@ -12,7 +12,7 @@ $core = Join-Path $repo 'src/Sentinel.Core/bin/Release/net48-windows'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('Sentinel-Firewall-Smoke-' + [Guid]::NewGuid().ToString('N'))
 $prefix = 'Sentinel-Smoke-' + [Guid]::NewGuid().ToString('N')
 New-Item -ItemType Directory -Path $fixture | Out-Null
-Add-Type -Path (Join-Path $core 'Sentinel.Core.dll')
+$smokeExe = Join-Path $repo 'tools/Sentinel.FirewallSmoke/bin/Release/net48-windows/Sentinel.FirewallSmoke.exe'
 $clientSource = @'
 using System;
 using System.Net.Sockets;
@@ -35,14 +35,14 @@ Add-Type -TypeDefinition $clientSource -OutputAssembly (Join-Path $fixture 'Sent
 Copy-Item (Join-Path $fixture 'Sentinel.Agent.exe') (Join-Path $fixture 'control.exe')
 Copy-Item (Join-Path $repo 'src/Sentinel.Service/bin/Release/net48-windows/Sentinel.Service.exe') $fixture
 Copy-Item (Join-Path $repo 'tools/Sentinel.AutoRotate/bin/Release/net48-windows/SentinelAutoRotate.exe') $fixture
-$bridge = [Sentinel.Core.WindowsFirewallPolicyBridge]::new($fixture)
-$native = [Sentinel.Core.WindowsSelfNetworkFirewall]::new()
-$isolation = [Sentinel.Core.SelfNetworkIsolation]::new($native, $fixture)
-$token = [Threading.CancellationToken]::None
 $listener = $null
 $mutated = $false
 function Invoke-Policy($operation, $store = $null, $name = $null) {
-    $result = $bridge.RunAsync($operation, $token, $store, $name).GetAwaiter().GetResult()
+    $arguments = @($operation, $fixture)
+    if ($store) { $arguments += $store }
+    if ($name) { $arguments += $name }
+    $result = & $smokeExe @arguments
+    if ($LASTEXITCODE -ne 0) { throw ('Native firewall fixture failed: ' + $operation) }
     Write-Host $result
     return ($result | ConvertFrom-Json)
 }
@@ -59,7 +59,7 @@ try {
     New-NetFirewallRule -Name ($prefix + '-OUT') -DisplayName ($prefix + '-OUT') -Direction Outbound -Action Allow -Protocol TCP -RemotePort 65271 -Enabled True | Out-Null
     $mutated = $true
     $null = Invoke-Policy Apply
-    $isolation.Apply()
+    $null = Invoke-Policy NativeApply
     $result = Invoke-Policy Apply
     Assert-Smoke $result.SelfBlocksEffective 'Real ActiveStore reports the six self-blocks fully effective'
     Assert-Smoke ((Get-NetFirewallRule -PolicyStore PersistentStore -Name ($prefix + '-IN')).Enabled -eq 'False') 'Unapproved local inbound rule is retained and disabled'
@@ -79,16 +79,19 @@ try {
     & (Join-Path $fixture 'Sentinel.Agent.exe') '127.0.0.1' $listener.LocalEndpoint.Port
     Assert-Smoke ($LASTEXITCODE -eq 0) 'Agent-path executable retains localhost connectivity'
     $null = Invoke-Policy Restore
-    $isolation.Remove()
+    $null = Invoke-Policy NativeRemove
     Assert-Smoke ((Get-NetFirewallRule -PolicyStore PersistentStore -Name ($prefix + '-IN')).Enabled -eq 'True') 'Rollback restores the original inbound enabled state'
-    foreach ($rule in $isolation.Rules) {
-        Assert-Smoke (@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object Name -eq $rule.Name).Count -eq 0) ('Rollback removed effective owned rule ' + $rule.Name)
+    foreach ($executable in @('Sentinel.Service.exe', 'Sentinel.Agent.exe', 'SentinelAutoRotate.exe')) {
+        foreach ($direction in @('IN', 'OUT')) {
+            $ruleName = 'Sentinel-Offline-' + $executable + '-' + $direction
+            Assert-Smoke (@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object Name -eq $ruleName).Count -eq 0) ('Rollback removed effective owned rule ' + $ruleName)
+        }
     }
     $mutated = $false
 } finally {
     if ($listener) { $listener.Stop() }
     if ($mutated) {
-        try { $null = Invoke-Policy Restore; $isolation.Remove() }
+        try { $null = Invoke-Policy Restore; $null = Invoke-Policy NativeRemove }
         catch { Write-Warning ('Rollback failed in disposable runner: ' + $_.Exception.Message) }
     }
     Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object { $_.Name -like ($prefix + '-*') } | Remove-NetFirewallRule

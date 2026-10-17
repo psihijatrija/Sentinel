@@ -264,14 +264,28 @@ function Invoke-SentinelFirewallPolicy {
             $conflicts.Add('Effective profile is disabled or allows inbound by default: ' + [string]$profile.Name)
         }
     }
-    # Never write to a domain store. Report effective managed exceptions that local controls cannot disable.
-    $localNames = @('localhost', [Environment]::MachineName)
+    # Read-only/generated policy cannot be safely rewritten as a local rule. Surface every
+    # enabled effective exception outside the approved local baseline instead of claiming compliance.
+    $localNames = @('localhost', [Environment]::MachineName, 'Local Group Policy')
     foreach ($rule in $effective) {
-        if ([string]$rule.Direction -eq 'Inbound' -and [string]$rule.Action -eq 'Allow' -and
-            [string]$rule.Enabled -eq 'True' -and [string]$rule.PolicyStoreSourceType -eq 'GroupPolicy' -and
-            [string]$rule.PolicyStoreSource -notin $localNames -and -not (Test-EssentialInbound $rule)) {
-            $conflicts.Add('Managed inbound exception remains enabled: ' + [string]$rule.Name + ' / ' + [string]$rule.PolicyStoreSource)
+        if ([string]$rule.Direction -ne 'Inbound' -or [string]$rule.Action -ne 'Allow' -or
+            [string]$rule.Enabled -ne 'True' -or (Test-EssentialInbound $rule)) { continue }
+        $type = [string]$rule.PolicyStoreSourceType
+        $source = [string]$rule.PolicyStoreSource
+        if ($type -eq 'GroupPolicy' -and $source -notin $localNames) {
+            $conflicts.Add('Managed inbound exception remains enabled: ' + [string]$rule.Name + ' / ' + $source)
+            continue
         }
+        $store = $null
+        if ($type -eq 'Local' -and $source -eq 'PersistentStore') { $store = 'PersistentStore' }
+        elseif ($type -eq 'GroupPolicy' -and $source -in $localNames) { $store = 'localhost' }
+        if (-not $store) {
+            $conflicts.Add('Unmanaged effective inbound exception remains enabled: ' + [string]$rule.Name + ' / ' + $type + ' / ' + $source)
+            continue
+        }
+        $identity = Get-RuleIdentity $rule
+        $approved = @($state.Rules | Where-Object { $_.Store -eq $store -and $_.Name -ceq $rule.Name -and $_.Identity -eq $identity -and $_.Approved })
+        if ($approved.Count -eq 0) { $conflicts.Add('Unapproved effective inbound exception remains enabled: ' + [string]$rule.Name + ' / ' + $source) }
     }
-    return [pscustomobject]@{ Changed=$changed; LocalGpoAvailable=$localGpo; SelfBlocksEffective=$selfBlocksEffective; PolicyCompliant=($conflicts.Count -eq 0); Conflicts=@($conflicts | Select-Object -First 128); Notes=@($notes | Select-Object -First 32) }
+    return [pscustomobject]@{ Changed=$changed; LocalGpoAvailable=$localGpo; SelfBlocksEffective=$selfBlocksEffective; PolicyCompliant=($conflicts.Count -eq 0); Conflicts=@($conflicts | Select-Object -First 128); Notes=@($notes | Select-Object -First 32); Coverage="PersistentStore and supported local computer GPO; non-writable effective exceptions are reported; AppIso rules outside NetSecurity enumeration require separate review" }
 }
