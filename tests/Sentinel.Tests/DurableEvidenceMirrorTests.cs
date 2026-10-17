@@ -52,43 +52,21 @@ namespace Sentinel.Tests
             Assert.Contains("ManifestHmacSha256", json);
 
             // ...but never a shared secret or raw file content marker.
-            Assert.DoesNotContain(ThreatReportingConfig.CompiledProxySharedSecret, json);
+            Assert.Empty(ThreatReportingConfig.CompiledProxySharedSecret);
             Assert.DoesNotContain("ProxySharedSecret", json);
             Assert.DoesNotContain("BEGIN", json); // no embedded file blobs / PEM-style content
         }
 
         [Fact]
-        public void EvidenceRoute_SignedRequest_HasAuthHeadersAndNoSecret()
+        public void EvidenceRoute_CannotCreateOutboundRequestWithLegacyCredentials()
         {
-            // R2/FR-11: the /report/evidence request must be HMAC-signed with the standard
-            // headers only, and must never transmit the shared secret.
-            var secret = "test-shared-secret-32chars!!!!";
-            var config = new ThreatReportingConfig { ProxySharedSecret = secret };
-            const string path = "/report/evidence";
+            var config = new ThreatReportingConfig { Enabled = true, ProxySharedSecret = "test-shared-secret-32chars!!!!" };
             var body = JsonSerializer.Serialize(new EvidenceSummary { ReportId = "R1" });
-
-            var (request, err) = ProxyAuthHelper.CreateAuthenticatedPost(
-                "https://example.test", path, body, config);
-
-            Assert.Null(err);
-            Assert.NotNull(request);
-            using (request!)
-            {
-                Assert.True(request.Headers.Contains("X-Sentinel-Timestamp"));
-                Assert.True(request.Headers.Contains("X-Sentinel-Nonce"));
-                Assert.True(request.Headers.Contains("X-Sentinel-Signature"));
-                Assert.False(request.Headers.Contains("X-Sentinel-Auth"));
-
-                // Signature verifies against timestamp.nonce.path.body
-                var ts = request.Headers.GetValues("X-Sentinel-Timestamp").First();
-                var nonce = request.Headers.GetValues("X-Sentinel-Nonce").First();
-                var sig = request.Headers.GetValues("X-Sentinel-Signature").First();
-                var payload = ProxyAuthHelper.BuildSignaturePayload(ts, nonce, path, body);
-                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-                var expected = ConvertHex.ToHexString(
-                    hmac.ComputeHash(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
-                Assert.Equal(expected, sig);
-            }
+            var (request, error) = ProxyAuthHelper.CreateAuthenticatedPost("https://example.test", "/report/evidence", body, config);
+            Assert.Null(request);
+            Assert.NotNull(error);
+            Assert.False(config.Enabled);
+            Assert.Null(config.ProxySharedSecret);
         }
 
         [Fact]

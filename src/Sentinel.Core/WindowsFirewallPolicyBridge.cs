@@ -79,7 +79,7 @@ namespace Sentinel.Core
                 });
                 // Script goes over stdin to avoid Windows' command-line size limit. The short
                 // bootstrap is constant; user/rule names are only JSON data in a child environment.
-                const string bootstrap = "$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); try { $request=$env:SENTINEL_FIREWALL_REQUEST | ConvertFrom-Json; Remove-Item Env:SENTINEL_FIREWALL_REQUEST; Import-Module (Join-Path $request.SystemDirectory 'WindowsPowerShell\\v1.0\\Modules\\NetSecurity\\NetSecurity.psd1') -ErrorAction Stop; . ([ScriptBlock]::Create([Console]::In.ReadToEnd())); Invoke-SentinelFirewallPolicy $request | ConvertTo-Json -Compress -Depth 8 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }";
+                const string bootstrap = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); try { $request=$env:SENTINEL_FIREWALL_REQUEST | ConvertFrom-Json; Remove-Item Env:SENTINEL_FIREWALL_REQUEST; Import-Module (Join-Path $request.SystemDirectory 'WindowsPowerShell\\v1.0\\Modules\\NetSecurity\\NetSecurity.psd1') -ErrorAction Stop; . ([ScriptBlock]::Create([Console]::In.ReadToEnd().TrimStart([char]0xFEFF))); Invoke-SentinelFirewallPolicy $request | ConvertTo-Json -Compress -Depth 8 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }";
                 var start = new ProcessStartInfo
                 {
                     FileName = Path.Combine(launchSystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
