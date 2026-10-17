@@ -892,3 +892,5 @@ In the 3.2.3 offline implementation, DnsCrossValidator and DnsResponseValidation
 ## Interrupted DNS transaction boundary (3.2.5)
 
 Explicit recovery uses protected write-ahead starting/target states, a fresh current-state fingerprint and an elevated administrator caller. It refuses values outside the saved static family states, changed protocol support, legacy missing plans and newer transactions. This narrows accidental overwrites; it cannot distinguish an administrator who later sets exactly the same addresses, and it does not authenticate DHCP or original resolver trust. A second fingerprint check after durable preparation narrows the approval/I/O race; Windows offers no atomic compare-and-swap across both address families. Recovery never silently runs at startup. See [DNS repair](DNS_REPAIR.md) for remaining validation scopes.
+
+In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.

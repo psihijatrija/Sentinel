@@ -120,3 +120,5 @@ Administrator-approved DNS profile repair is implemented with explicit verificat
 ## DNS recovery and validation (3.2.5)
 
 New DNS transactions save intended/start states before mutation. Explicit administrator recovery handles interrupted family changes and refuses unrelated/newer settings. A dedicated disposable Windows job exercises actual native changes and independent emergency restoration; its successful execution is required before native validation is claimed. The regular suite has bounded hang diagnostics so an incomplete Windows test remains a visible failure. Hosts/proxy recovery follows this validation work.
+
+In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.

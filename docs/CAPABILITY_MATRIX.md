@@ -22,3 +22,5 @@ This is an engineering scope inventory for 3.2.5, not a commercial-product parit
 4. Run an independent adversarial review of privileged IPC, repair snapshots, containment races and false positives, then publish a repeatable scenario-based coverage report. A passing unit suite does not establish commercial detection parity.
 
 Encrypted DNS or active router diagnosis would require an explicit product-policy decision: current Sentinel endpoint operation intentionally makes no external probes. Installing this release does not change that policy.
+
+In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.

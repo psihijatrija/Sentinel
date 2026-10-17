@@ -1,3 +1,4 @@
+try {
 # Real DNS mutation on an ephemeral hosted runner. The product makes no network probes.
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -79,3 +80,9 @@ try {
 }
 if (-not $success) { throw 'DNS validation failed; emergency restoration is not a passing native result.' }
 Write-Host 'PASS: Native DNS repair, original/automatic restoration, cancellation rollback and restart recovery.'
+
+} catch {
+    $detail = ($_.Exception.Message + " " + $_.InvocationInfo.PositionMessage).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Host ('::error::DNS validation: ' + $detail)
+    throw
+}

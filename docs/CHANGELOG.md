@@ -5,6 +5,7 @@
 - Dashboard recovery selection and original-state preview through the existing UAC and actual IPC administrator-token checks. Failed recovery preserves the original target and attempts rollback to the newly approved state.
 - Separate disposable Windows DNS mutation job covering actual resolver writes, original/automatic restoration, cancellation rollback and disk-backed recovery with a new service instance. The wrapper retains an independent Windows-cmdlet restore and kills the test process tree on timeout. Regular test runs skip this guarded mutation fixture.
 ### Fixed
+- Removed legacy proxy startup-baseline restoration and unattributed Tier1 hijack claims. Proxy configuration changes are Tier2 LogOnly, with no registry deletion/restoration authority. Manual per-user/WinHTTP recovery remains future work.
 - Recheck the DNS preview after snapshot/audit persistence, before the first mutation. Allow guest hardware-facing Ethernet adapters while continuing to exclude known host virtual switches and tunnels.
 - Bound stalled Windows tests with hang diagnostics, retain sequence files, and annotate failed/incomplete tests rather than letting a hung host silently delay release.
 ### Validation

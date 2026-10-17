@@ -759,86 +759,42 @@ namespace Sentinel.Core
             CheckProxyKeys(Registry.LocalMachine, @"Software\Microsoft\Windows\CurrentVersion\Internet Settings", "HKLM");
         }
 
+        internal static DetectionEvent BuildProxyChangeObservation(string scope, string path, string valueName, string? previous, string? current)
+            => new()
+            {
+                RuleName = "Registry: Proxy Configuration Changed",
+                Evidence = $"Proxy setting '{valueName}' in {scope} changed. Previous observation: '{previous}', Current: '{current}'.",
+                Reasoning = "Administrator changes, VPN/security software and tampering can all change proxy settings. No responsible process or trusted recovery value is established; review only.",
+                Confidence = 0.5, Tier = DetectionTier.Tier2Indicator,
+                AuthorizedResponse = ResponseAction.LogOnly,
+                ProcessName = "Unknown", ProcessId = 0, SignalType = SignalType.Generic,
+                Metadata = new Dictionary<string, string>
+                {
+                    ["Hive"] = scope, ["KeyPath"] = path, ["ValueName"] = valueName,
+                    ["PreviousObservedValue"] = previous ?? "", ["CurrentValue"] = current ?? "",
+                    ["WeakObserveSeed"] = "true"
+                }
+            };
+
         private void CheckProxyKeys(RegistryKey hive, string path, string prefix)
         {
             try
             {
-                using var key = hive.OpenSubKey(path, ResponsePolicy.MayPerformInlineHostMutation(_config));
+                using var key = hive.OpenSubKey(path, writable: false);
                 if (key == null) return;
-
                 foreach (var valueName in new[] { "ProxyEnable", "ProxyServer", "AutoConfigURL" })
                 {
                     var currentVal = key.GetValue(valueName)?.ToString();
                     var baselineKey = $"{prefix}:{valueName}";
                     _proxyBaseline.TryGetValue(baselineKey, out var baselineVal);
-
-                    if (ProxyValuesEquivalent(valueName, baselineVal, currentVal))
-                    {
-                        // Adopt current representation so we do not re-fire on null<->"0"/"" noise
-                        _proxyBaseline[baselineKey] = currentVal;
-                        continue;
-                    }
-
-                    var evidence = $"Proxy setting '{valueName}' in {prefix} modified. Baseline: '{baselineVal}', Current: '{currentVal}'";
-                    var reasoning = $"Proxy hijacking reroutes user traffic. Sentinel detected an unauthorized modification to system proxy settings.";
-
-                    var detection = new DetectionEvent
-                    {
-                        RuleName = "Registry: Unauthorized Proxy Server Hijack",
-                        Evidence = evidence,
-                        Reasoning = reasoning,
-                        Confidence = 0.85,
-                        Tier = DetectionTier.Tier1Behavioral,
-                        AuthorizedResponse = ResponsePolicy.MayPerformInlineHostMutation(_config) ? ResponseAction.RemoveRegistryEntry : ResponseAction.LogOnly,
-                        ProcessName = "Unknown",
-                        ProcessId = 0,
-                        Metadata = new Dictionary<string, string>
-                        {
-                            { "Hive", prefix },
-                            { "KeyPath", path },
-                            { "ValueName", valueName },
-                            { "BaselineValue", baselineVal ?? "" },
-                            { "CurrentValue", currentVal ?? "" }
-                        }
-                    };
-
-                    _ = _detectionEngine.EmitAsync(detection);
-                    _toastService.ShowToast("Sentinel Alert: Proxy Hijack", $"Proxy '{valueName}' changed under {prefix}");
-
-                    if (ResponsePolicy.MayPerformInlineHostMutation(_config))
-                    {
-                        try
-                        {
-                            if (baselineVal == null)
-                            {
-                                key.DeleteValue(valueName, throwOnMissingValue: false);
-                            }
-                            else
-                            {
-                                if (valueName == "ProxyEnable" && int.TryParse(baselineVal, out int enableVal))
-                                {
-                                    key.SetValue(valueName, enableVal, RegistryValueKind.DWord);
-                                }
-                                else
-                                {
-                                    key.SetValue(valueName, baselineVal, RegistryValueKind.String);
-                                }
-                            }
-                            _logger.LogWarning("[RegistryMonitor] Actively restored hijacked proxy '{ValueName}' to baseline value '{Baseline}'", valueName, baselineVal);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "[RegistryMonitor] Failed to restore proxy setting '{ValueName}'", valueName);
-                        }
-                    }
-                    else
-                    {
-                        // LogOnly: adopt new value after one alert so we do not flood every 5s
-                        _proxyBaseline[baselineKey] = currentVal;
-                    }
+                    if (!ProxyValuesEquivalent(valueName, baselineVal, currentVal))
+                        _ = _detectionEngine.EmitAsync(BuildProxyChangeObservation(prefix, path, valueName, baselineVal, currentVal));
+                    // An initial observation may already be hostile. Never restore it or
+                    // authorize registry deletion from unattributed configuration drift.
+                    _proxyBaseline[baselineKey] = currentVal;
                 }
             }
-            catch { }
+            catch (Exception ex) { _logger.LogDebug(ex, "[RegistryMonitor] Proxy observation unavailable for {Scope}", prefix); }
         }
 
         /// <summary>
