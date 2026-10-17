@@ -8,7 +8,7 @@ function New-Rule($name, $store, $direction = 'Inbound', $action = 'Allow', $ena
         Protocol='UDP'; LocalPort=$local; RemotePort=$remote; IcmpType='Any'; Program='Any'; Package='Any'; Profile='Any'
         LocalAddress='Any'; RemoteAddress='Any'; InterfaceAlias='Any'; InterfaceType='Any'; Authentication='NotRequired'
         Encryption='NotRequired'; LocalUser='Any'; RemoteUser='Any'; RemoteMachine='Any'; OverrideBlockRules='False'
-        EdgeTraversalPolicy='Block'; PolicyStoreSource=$store; PolicyStoreSourceType=$(if ($store -eq 'PersistentStore') {'Local'} else {'GroupPolicy'}); EnforcementStatus='Full' }
+        EdgeTraversalPolicy='Block'; PolicyStoreSource=$store; PolicyStoreSourceType=$(if ($store -eq 'PersistentStore') {'Local'} else {'GroupPolicy'}); EnforcementStatus='Enforced' }
 }
 function New-Fixture {
     $script:rules = @{
@@ -156,9 +156,13 @@ try {
     # Native COM and local GPO may expose the same fixed name as separate effective rules.
     $script:rules.PersistentStore += @($script:rules.localhost | Where-Object Action -eq 'Block' | ForEach-Object { $copy=$_.PSObject.Copy(); $copy.Store='PersistentStore'; $copy.PolicyStoreSource='PersistentStore'; $copy.PolicyStoreSourceType='Local'; $copy })
     $script:duplicateActive=$true
+    foreach ($rule in @($script:rules.PersistentStore + $script:rules.localhost | Where-Object Action -eq 'Block')) { $rule.EnforcementStatus=@('ProfileInactive','Enforced') }
     foreach ($rule in @($script:rules.PersistentStore | Where-Object Action -eq 'Block')) { $rule | Add-Member -NotePropertyName DisplayName -NotePropertyValue $rule.Name; $rule.Name=[Guid]::NewGuid().ToString() }
     $result=Invoke-SentinelFirewallPolicy $request
     Assert $result.SelfBlocksEffective 'Duplicate effective local/GPO blocks were falsely rejected'
+    foreach ($rule in @($script:rules.PersistentStore + $script:rules.localhost | Where-Object Action -eq 'Block')) { $rule.EnforcementStatus='ProfileInactive' }
+    $result=Invoke-SentinelFirewallPolicy $request
+    Assert (-not $result.SelfBlocksEffective) 'Inactive profiles alone were falsely reported as enforced'
     foreach ($rule in @($script:rules.PersistentStore + $script:rules.localhost | Where-Object Action -eq 'Block')) { $rule.EnforcementStatus='LocalFirewallRulesDisallowed' }
     $result=Invoke-SentinelFirewallPolicy $request
     Assert (-not $result.SelfBlocksEffective) 'Unenforced duplicate blocks were falsely accepted'

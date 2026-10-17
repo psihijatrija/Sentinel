@@ -253,7 +253,7 @@ function Invoke-SentinelFirewallPolicy {
         $verified = $false
         foreach ($rule in $rules) {
             $enforcement = @($rule.EnforcementStatus | ForEach-Object { [string]$_ })
-            $enforced = ($enforcement -contains 'Full') -and @($enforcement | Where-Object { $_ -notin @('Full', 'InactiveProfile') }).Count -eq 0
+            $enforced = ($enforcement -contains 'Enforced') -and @($enforcement | Where-Object { $_ -notin @('Enforced', 'ProfileInactive') }).Count -eq 0
             # Local and GPO blocks can coexist in ActiveStore. Additional narrower block
             # copies cannot weaken a fully effective, correctly scoped block.
             if ((Test-SelfRule $rule $spec) -and $enforced) { $verified = $true; break }
