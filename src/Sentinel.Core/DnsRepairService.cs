@@ -116,7 +116,7 @@ namespace Sentinel.Core
             foreach (var adapter in adapters)
             {
                 var approval = records.Where(r => r.Phase == "Verified" && r.Applied != null &&
-                    r.Before.Id.Equals(adapter.Id, StringComparison.OrdinalIgnoreCase)).OrderByDescending(r => r.CreatedAt).FirstOrDefault();
+                    SameAdapter(r.Before.Id, adapter.Id)).OrderByDescending(r => r.CreatedAt).FirstOrDefault();
                 if (approval == null) continue;
                 adapter.ApprovedProfile = approval.Profile;
                 adapter.ApprovedConfigurationMatches = approval.Applied!.Fingerprint == adapter.Fingerprint;
@@ -142,7 +142,8 @@ namespace Sentinel.Core
             .Select(x => IPAddress.Parse(x).ToString()).ToArray();
         internal static bool SameServers(IEnumerable<string> left, IEnumerable<string> right)
             => left.Select(x => IPAddress.Parse(x).ToString()).SequenceEqual(right.Select(x => IPAddress.Parse(x).ToString()), StringComparer.OrdinalIgnoreCase);
-        private DnsAdapterState Read(string id) => _backend.Inspect().SingleOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase))
+        internal static bool SameAdapter(string left, string right) => Guid.TryParse(left, out var first) && Guid.TryParse(right, out var second) && first == second;
+        private DnsAdapterState Read(string id) => _backend.Inspect().SingleOrDefault(a => SameAdapter(a.Id, id))
             ?? throw new InvalidOperationException("Adapter is no longer available.");
         private static void RequireEligible(DnsAdapterState state)
         {
@@ -214,11 +215,11 @@ namespace Sentinel.Core
                 string[] effective;
                 if (restore || recover)
                 {
-                    record = _journal.ReadAll().SingleOrDefault(r => r.Id == request.TransactionId && r.Before.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase));
+                    record = _journal.ReadAll().SingleOrDefault(r => r.Id == request.TransactionId && SameAdapter(r.Before.Id, current.Id));
                     if (record == null) throw new InvalidOperationException("No matching DNS snapshot is available.");
                     if (recover)
                     {
-                        if (_journal.ReadAll().Any(r => r.Id != record.Id && r.CreatedAt > record.CreatedAt && r.Before.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase))
+                        if (_journal.ReadAll().Any(r => r.Id != record.Id && r.CreatedAt > record.CreatedAt && SameAdapter(r.Before.Id, current.Id))
                             || !IsPending(record) || !WithinPendingOperation(current, record))
                             throw new InvalidOperationException("Interrupted DNS recovery refused: current settings are outside the saved operation, or its recovery plan is unavailable.");
                     }
@@ -236,7 +237,7 @@ namespace Sentinel.Core
                 }
                 else
                 {
-                    if (_journal.ReadAll().Any(r => IsPending(r) && r.Before.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase)))
+                    if (_journal.ReadAll().Any(r => IsPending(r) && SameAdapter(r.Before.Id, current.Id)))
                         throw new InvalidOperationException("An unresolved DNS transaction requires recovery or administrator review before another repair.");
                     var profile = Profile(request.Profile);
                     v4 = profile.V4; v6 = profile.V6;

@@ -205,6 +205,15 @@ namespace Sentinel.Tests
         }
 
         [Fact]
+        public async Task AdapterIdentityAcceptsEquivalentGuidFormatsWithoutLosingThePreviewBinding()
+        {
+            var b = new Backend(); var request = Request(b);
+            request.AdapterId = Guid.Parse(request.AdapterId).ToString("D").ToUpperInvariant();
+            var result = await Service(b, new Journal(), new Audit()).ExecuteAsync(request, false, default);
+            Assert.Equal("Verified", result.Status);
+        }
+
+        [Fact]
         public async Task ConfigurationChangeDuringDurablePreparationRefusesBeforeMutation()
         {
             var b = new Backend(); var j = new Journal();

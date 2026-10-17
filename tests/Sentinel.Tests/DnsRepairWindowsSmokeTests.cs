@@ -79,7 +79,7 @@ namespace Sentinel.Tests
             string directory = Path.Combine(Path.GetTempPath(), "SentinelDnsSmoke_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
             var backend = new WindowsDnsConfigurationBackend();
-            DnsAdapterState Read() => backend.Inspect().Single(a => a.Id.Equals(adapterId, StringComparison.OrdinalIgnoreCase));
+            DnsAdapterState Read() => backend.Inspect().Single(a => DnsRepairService.SameAdapter(a.Id, adapterId));
             var original = Read();
             Assert.True(original.Eligible);
             await using var logger = new JsonlEventLogger(Path.Combine(directory, "events.jsonl"));

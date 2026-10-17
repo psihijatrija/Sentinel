@@ -84,7 +84,7 @@ namespace Sentinel.Core
             if (family != AddressFamily.InterNetwork && family != AddressFamily.InterNetworkV6)
                 throw new ArgumentException("Unsupported address family.");
             // Re-check administrative scope immediately before each mutation.
-            var current = Inspect().SingleOrDefault(a => a.Id.Equals(adapterId, StringComparison.OrdinalIgnoreCase));
+            var current = Inspect().SingleOrDefault(a => DnsRepairService.SameAdapter(a.Id, adapterId));
             if (current == null || !current.Eligible || current.PolicyManaged)
                 throw new InvalidOperationException("Adapter scope or policy changed; DNS mutation refused.");
             foreach (string address in DnsRepairService.Servers(servers))

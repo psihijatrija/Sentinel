@@ -9,8 +9,14 @@ if (-not ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Secur
     throw 'DNS mutation validation requires the disposable runner administrator token.'
 }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface } | Select-Object -First 1
-if (-not $adapter) { throw 'No connected hardware adapter is available; DNS validation did not execute.' }
+$adapter = Get-NetAdapter | Where-Object {
+    $_.Status -eq 'Up' -and $_.HardwareInterface -and
+    @(Get-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue).Count -gt 0
+} | Select-Object -First 1
+if (-not $adapter) {
+    $inventory = Get-NetAdapter | Select-Object Name,InterfaceIndex,InterfaceDescription,HardwareInterface,Status | ConvertTo-Json -Compress
+    throw ('No connected DNS-capable hardware adapter is available; validation did not execute. Inventory: ' + $inventory)
+}
 $id = ([guid]$adapter.InterfaceGuid).ToString('B')
 $v4Key = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + $id
 $v6Key = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\' + $id
@@ -61,7 +67,7 @@ try {
     if ($process) { $process.Dispose() }
     # Independent recovery mechanism: never rely on the implementation under test to
     # restore runner connectivity after a native failure or a killed test host.
-    if (-not $success -or (Normalize-Servers (Read-Static $v4Key)) -ne (Normalize-Servers $beforeV4) -or (Normalize-Servers (Read-Static $v6Key)) -ne (Normalize-Servers $beforeV6)) {
+    if ((Normalize-Servers (Read-Static $v4Key)) -ne (Normalize-Servers $beforeV4) -or (Normalize-Servers (Read-Static $v6Key)) -ne (Normalize-Servers $beforeV6)) {
         Write-Warning ('Restoring DNS using independent Windows cmdlets; saved state: ' + $backup)
         Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses
         foreach ($family in @('IPv4', 'IPv6')) {

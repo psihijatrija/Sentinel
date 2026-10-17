@@ -9,7 +9,7 @@
 - Recheck the DNS preview after snapshot/audit persistence, before the first mutation. Allow guest hardware-facing Ethernet adapters while continuing to exclude known host virtual switches and tunnels.
 - Bound stalled Windows tests with hang diagnostics, retain sequence files, and annotate failed/incomplete tests rather than letting a hung host silently delay release.
 ### Validation
-- Zero-warning/error solution cross-build, 87 portable production response/transaction regressions and 16 dashboard checks pass locally. PowerShell syntax, fail-closed runner guards and failure/hang summaries are checked locally; full Windows and live DNS results remain required in CI. Interactive UAC, SYSTEM-only journal ACL integration, reboot/power-loss, IPv6-only hardware and changing DHCP leases remain separate validation scopes.
+- Zero-warning/error solution cross-build, 88 portable production response/transaction regressions and 16 dashboard checks pass locally. PowerShell syntax, fail-closed runner guards and failure/hang summaries are checked locally; full Windows and live DNS results remain required in CI. Interactive UAC, SYSTEM-only journal ACL integration, reboot/power-loss, IPv6-only hardware and changing DHCP leases remain separate validation scopes.
 
 ## [3.2.4] - 2026-10-17
 ### Added
