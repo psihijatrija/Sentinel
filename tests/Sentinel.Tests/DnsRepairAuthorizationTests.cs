@@ -49,17 +49,38 @@ namespace Sentinel.Tests
 
         private static async Task<bool> CheckClient(TokenImpersonationLevel level)
         {
-            string name = "SentinelDnsAuth_" + Guid.NewGuid().ToString("N");
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-            using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous, level);
-            var connecting = client.ConnectAsync(5000);
-            await server.WaitForConnectionAsync(deadline.Token);
-            await connecting;
-            await client.WriteAsync(new byte[] { 1 }, 0, 1, deadline.Token);
-            var buffer = new byte[1];
-            Assert.Equal(1, await server.ReadAsync(buffer, 0, 1, deadline.Token));
-            return ServiceAgentIpcHost.IsAdministratorClient(server);
+            // Isolate Windows token impersonation from xUnit's async execution context.
+            // A stalled OS call must fail this test, not hold the entire test host open.
+            var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            string stage = "starting dedicated pipe thread";
+            var worker = new Thread(() =>
+            {
+                try
+                {
+                    bool approved;
+                    string name = "SentinelDnsAuth_" + Guid.NewGuid().ToString("N");
+                    using (var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous))
+                    using (var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous, level))
+                    {
+                        Volatile.Write(ref stage, "connecting pipe");
+                        var connecting = client.ConnectAsync(5000);
+                        server.WaitForConnection();
+                        connecting.GetAwaiter().GetResult();
+                        Volatile.Write(ref stage, "transferring client identity byte");
+                        client.WriteByte(1);
+                        Assert.Equal(1, server.ReadByte());
+                        Volatile.Write(ref stage, "checking actual client administrator token");
+                        approved = ServiceAgentIpcHost.IsAdministratorClient(server);
+                        Volatile.Write(ref stage, "disposing connected pipes");
+                    }
+                    result.TrySetResult(approved);
+                }
+                catch (Exception ex) { result.TrySetException(ex); }
+            }) { IsBackground = true, Name = "Sentinel DNS pipe authorization fixture" };
+            worker.Start();
+            if (await Task.WhenAny(result.Task, Task.Delay(TimeSpan.FromSeconds(15))).ConfigureAwait(false) != result.Task)
+                throw new TimeoutException("DNS authorization fixture stalled while " + Volatile.Read(ref stage));
+            return await result.Task.ConfigureAwait(false);
         }
     }
 }
