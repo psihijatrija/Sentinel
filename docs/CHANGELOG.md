@@ -9,7 +9,7 @@
 - Added continuous reconciliation of local and supported local-GPO inbound allow rules, retaining disabled rules, preserving outbound policy and narrow DHCP/essential IPv6 control exceptions, and recording original states for rollback. Exact-filter administrator approvals persist; Windows re-enables/new exceptions are disabled again. Domain GPOs are reported, never edited. ActiveStore/service verification and stale/conflict dashboard status prevent local-write success being mistaken for effective protection.
 - Added passive exploit-context correlation across Defender/security software, browsers, games, and other processes; removed identity skips in post-connection behavior tracking, required real parentage for child-spawn observations, and made port-only observations universally Tier2 LogOnly. Game/anti-cheat memory safety remains intact. Offline self-blocks no longer trigger the WFP monitor's EDRSilencer self-response path.
 ### Validation
-- Full Release solution build with warnings as errors; focused offline/isolation and IPC regression checks. Windows firewall/token enforcement and full .NET Framework test execution require the Windows validation checklist.
+- Full Windows Release solution build with zero warnings/errors and 2,852 passing .NET Framework tests; 44 firewall policy regressions, 38 portable offline/IPC checks and 11 dashboard checks pass. Real firewall smoke and interactive/domain/reboot validation remain separate release gates in the Windows validation checklist.
 
 ## [3.2.2] - 2026-10-17
 ### Fixed

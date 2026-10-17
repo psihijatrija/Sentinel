@@ -58,9 +58,23 @@ try {
     New-NetFirewallRule -Name ($prefix + '-IN') -DisplayName ($prefix + '-IN') -Direction Inbound -Action Allow -Protocol TCP -LocalPort 65271 -Enabled True | Out-Null
     New-NetFirewallRule -Name ($prefix + '-OUT') -DisplayName ($prefix + '-OUT') -Direction Outbound -Action Allow -Protocol TCP -RemotePort 65271 -Enabled True | Out-Null
     $mutated = $true
+    New-NetFirewallRule -PolicyStore localhost -Name ($prefix + '-GPO-IN') -DisplayName ($prefix + '-GPO-IN') -Direction Inbound -Action Allow -Protocol TCP -LocalPort 65272 -Enabled True | Out-Null
     $null = Invoke-Policy Apply
     $null = Invoke-Policy NativeApply
     $result = Invoke-Policy Apply
+    if (-not $result.SelfBlocksEffective) {
+        Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore | Where-Object { $_.Name -like 'Sentinel-Offline-*' -or $_.DisplayName -like 'Sentinel-Offline-*' } | ForEach-Object {
+            [pscustomobject]@{
+                Rule=($_ | Select-Object Name,DisplayName,Enabled,Direction,Action,Profile,EnforcementStatus,PolicyStoreSource)
+                Port=($_ | Get-NetFirewallPortFilter | Select-Object Protocol,LocalPort,RemotePort)
+                App=($_ | Get-NetFirewallApplicationFilter | Select-Object Program,Package)
+                Address=($_ | Get-NetFirewallAddressFilter | Select-Object LocalAddress,RemoteAddress)
+                Security=($_ | Get-NetFirewallSecurityFilter | Select-Object Authentication,Encryption,LocalUser,RemoteUser,RemoteMachine,OverrideBlockRules)
+            } | ConvertTo-Json -Depth 6 | Write-Host
+        }
+    }
+    Assert-Smoke $result.LocalGpoAvailable 'Local computer GPO is available on the Windows runner'
+    Assert-Smoke ((Get-NetFirewallRule -PolicyStore localhost -Name ($prefix + '-GPO-IN')).Enabled -eq 'False') 'Unapproved local-GPO inbound rule is retained and disabled'
     Assert-Smoke $result.SelfBlocksEffective 'Real ActiveStore reports the six self-blocks fully effective'
     Assert-Smoke ((Get-NetFirewallRule -PolicyStore PersistentStore -Name ($prefix + '-IN')).Enabled -eq 'False') 'Unapproved local inbound rule is retained and disabled'
     Assert-Smoke ((Get-NetFirewallRule -PolicyStore PersistentStore -Name ($prefix + '-OUT')).Enabled -eq 'True') 'Outbound allow rule remains enabled'
@@ -81,10 +95,11 @@ try {
     $null = Invoke-Policy Restore
     $null = Invoke-Policy NativeRemove
     Assert-Smoke ((Get-NetFirewallRule -PolicyStore PersistentStore -Name ($prefix + '-IN')).Enabled -eq 'True') 'Rollback restores the original inbound enabled state'
+    Assert-Smoke ((Get-NetFirewallRule -PolicyStore localhost -Name ($prefix + '-GPO-IN')).Enabled -eq 'True') 'Rollback restores the original local-GPO inbound enabled state'
     foreach ($executable in @('Sentinel.Service.exe', 'Sentinel.Agent.exe', 'SentinelAutoRotate.exe')) {
         foreach ($direction in @('IN', 'OUT')) {
             $ruleName = 'Sentinel-Offline-' + $executable + '-' + $direction
-            Assert-Smoke (@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object Name -eq $ruleName).Count -eq 0) ('Rollback removed effective owned rule ' + $ruleName)
+            Assert-Smoke (@(Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object { $_.Name -eq $ruleName -or $_.DisplayName -eq $ruleName }).Count -eq 0) ('Rollback removed effective owned rule ' + $ruleName)
         }
     }
     $mutated = $false
@@ -94,6 +109,8 @@ try {
         try { $null = Invoke-Policy Restore; $null = Invoke-Policy NativeRemove }
         catch { Write-Warning ('Rollback failed in disposable runner: ' + $_.Exception.Message) }
     }
-    Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object { $_.Name -like ($prefix + '-*') } | Remove-NetFirewallRule
+    foreach ($store in @('PersistentStore', 'localhost')) {
+        Get-NetFirewallRule -PolicyStore $store | Where-Object { $_.Name -like ($prefix + '-*') } | Remove-NetFirewallRule
+    }
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }

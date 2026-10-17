@@ -26,7 +26,7 @@ function New-Fixture {
             [pscustomobject]@{ Store=$store; Name=$_; Enabled='True'; DefaultInboundAction='Allow'; DefaultOutboundAction='Allow' }
         })
     }
-    $script:gpoAvailable = $true; $script:failName = ''; $script:writes = @()
+    $script:gpoAvailable = $true; $script:duplicateActive = $false; $script:failName = ''; $script:writes = @()
     $dir = Join-Path ([IO.Path]::GetTempPath()) ('SentinelPolicyTest-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $dir | Out-Null
     $script:temporaryDirectories += $dir
@@ -45,6 +45,7 @@ function Get-NetFirewallProfile { param($PolicyStore)
 function Get-NetFirewallRule { param($PolicyStore, [switch]$TracePolicyStore)
     if ($PolicyStore -eq 'localhost' -and -not $script:gpoAvailable) { throw 'No GPO' }
     if ($PolicyStore -eq 'ActiveStore') {
+        if ($script:duplicateActive) { return @($script:rules.PersistentStore) + @($script:rules.localhost) + @($script:rules.domain) }
         $merged = @{}; foreach ($store in @('PersistentStore','localhost','domain')) {
             if ($store -eq 'localhost' -and -not $script:gpoAvailable) { continue }
             foreach ($rule in $script:rules[$store]) { $merged[$rule.Name] = $rule }
@@ -150,6 +151,17 @@ try {
     $request.Operation='Approve'; $request.Store='domain'; $request.RuleName='managed-in'; $failed=$false
     try { $null=Invoke-SentinelFirewallPolicy $request } catch { $failed=$true }
     Assert $failed 'Approval allowed a domain store write'
+    $request=New-Fixture
+    $null=Invoke-SentinelFirewallPolicy $request
+    # Native COM and local GPO may expose the same fixed name as separate effective rules.
+    $script:rules.PersistentStore += @($script:rules.localhost | Where-Object Action -eq 'Block' | ForEach-Object { $copy=$_.PSObject.Copy(); $copy.Store='PersistentStore'; $copy.PolicyStoreSource='PersistentStore'; $copy.PolicyStoreSourceType='Local'; $copy })
+    $script:duplicateActive=$true
+    foreach ($rule in @($script:rules.PersistentStore | Where-Object Action -eq 'Block')) { $rule | Add-Member -NotePropertyName DisplayName -NotePropertyValue $rule.Name; $rule.Name=[Guid]::NewGuid().ToString() }
+    $result=Invoke-SentinelFirewallPolicy $request
+    Assert $result.SelfBlocksEffective 'Duplicate effective local/GPO blocks were falsely rejected'
+    foreach ($rule in @($script:rules.PersistentStore + $script:rules.localhost | Where-Object Action -eq 'Block')) { $rule.EnforcementStatus='LocalFirewallRulesDisallowed' }
+    $result=Invoke-SentinelFirewallPolicy $request
+    Assert (-not $result.SelfBlocksEffective) 'Unenforced duplicate blocks were falsely accepted'
     $request=New-Fixture; Set-Content -LiteralPath $request.StatePath -Value '{broken'; $failed=$false
     try { $null=Invoke-SentinelFirewallPolicy $request } catch { $failed=$true }
     Assert ($failed -and $script:writes.Count -eq 0) 'Malformed journal allowed unjournaled mutation'

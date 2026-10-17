@@ -247,12 +247,20 @@ function Invoke-SentinelFirewallPolicy {
     $effectiveProfiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore)
     $conflicts = [System.Collections.Generic.List[string]]::new()
     foreach ($spec in @($Request.SelfRules)) {
-        $rule = @($effective | Where-Object { $_.Name -ceq $spec.Name })
-        if ($rule.Count -ne 1) { $conflicts.Add('Missing/ambiguous effective self-block: ' + $spec.Name); continue }
-        $enforcement = @($rule[0].EnforcementStatus | ForEach-Object { [string]$_ })
-        $enforced = ($enforcement -contains 'Full') -and @($enforcement | Where-Object { $_ -notin @('Full', 'InactiveProfile') }).Count -eq 0
-        if (-not (Test-SelfRule $rule[0] $spec) -or -not $enforced) {
-            $conflicts.Add('Self-block not fully effective (policy/filter conflict): ' + $spec.Name + ' / ' + [string]$rule[0].EnforcementStatus)
+        # COM INetFwRule.Name is surfaced as DisplayName by NetSecurity; its
+        # persistent Name may be an OS-generated GUID. Validate actual filters below.
+        $rules = @($effective | Where-Object { $_.Name -ceq $spec.Name -or $_.DisplayName -ceq $spec.Name })
+        $verified = $false
+        foreach ($rule in $rules) {
+            $enforcement = @($rule.EnforcementStatus | ForEach-Object { [string]$_ })
+            $enforced = ($enforcement -contains 'Full') -and @($enforcement | Where-Object { $_ -notin @('Full', 'InactiveProfile') }).Count -eq 0
+            # Local and GPO blocks can coexist in ActiveStore. Additional narrower block
+            # copies cannot weaken a fully effective, correctly scoped block.
+            if ((Test-SelfRule $rule $spec) -and $enforced) { $verified = $true; break }
+        }
+        if (-not $verified) {
+            $details = @($rules | ForEach-Object { [string]$_.PolicyStoreSource + ':' + [string]$_.EnforcementStatus }) -join '; '
+            $conflicts.Add('Self-block not fully effective (policy/filter conflict): ' + $spec.Name + ' / candidates=' + $rules.Count + ' / ' + $details)
         }
     }
     $selfBlocksEffective = $conflicts.Count -eq 0
