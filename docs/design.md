@@ -266,7 +266,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `PrivacyServiceOutboundMonitor` | **Observe-only:** optional OS services (DiagTrack, whesvc, ...) running + public remotes; never stop/kill/isolate | 15s |
 | `ServiceProcessMap` | Service name <-> PID map (shared `svchost` attribution for privacy observe) | on demand |
 | `TlsCertificateMonitor` | Monitors LocalMachine\Root + TrustedPublisher; baselines at startup. BYOVD follow-up: exact cert **thumbprint** match only -> stop service + delete SCM key (does **not** delete `System32\drivers\*.sys`) | 60s |
-| `RootStoreGuard` | **v3.0.4.** Autonomous suspicious-root detect+remove+quarantine. A root in a trusted store (Root/CA, LM+CU) is suspicious when it carries **neither** OS-authoritative stamp - not an AuthRoot CTL member (`crypt32` prop 98) **and** not a Microsoft root-program root (prop 105 / OID `1.3.6.1.4.1.311.60.3.2`) - plus any thumbprint on `CertDistrustList`. On a hit: `CertRemediator` removes from all trusted stores + pins to Disallowed, then files whose Authenticode chain roots at the removed cert are quarantined (`forceQuarantineSigned`, WRP-safe, capped). **Hard safety floor:** removal re-verifies the verdict on the live store-connected context (CTL stamps exist only there), so OS roots (MS Root CA 2010/2011) and public CAs are never touched. Gated on `ActiveResponse`; Tier1 response | startup + 90s |
+| `RootStoreGuard` | Inventories root stores. Missing trust markers produce Tier2 LogOnly review findings. Only explicit thumbprint distrust policy authorizes removal/blocking and associated file actions; the remediator enforces that boundary. | startup + 90s |
 | `UacBypassSurfaceMonitor` | Detects COM AutoElevation vectors and manifest autoElevate + copy-drop | periodic |
 | `HostsFileGuard` | Monitors hosts file for suspicious modifications (C2 IP redirects, security domain blocking); users may freely edit. Enforces a localhost/loopback baseline only. Only enforces FCM `mtalk.*` lines when `MitmDefense.Enabled` or `BlockFcmPushChannel=true` (appends missing lines, never overwrites). Enforces the **union** of `EnforcedDomainBlocks`/`EnforcedIpBlocks` (operator config) and `RuntimeBlocklistService` (runtime): domains via hosts line + wildcard NRPT (browser-authoritative via DoH-off), IPs via in/out firewall rules - self-healing, posture-gated. **v2.8.7:** un-blocking is deliberate - wildcard NRPT rules and firewall rules are torn down (`RemoveStaleDomainBlocks`/`RemoveStaleIpBlocks`) when an entry drops out of the desired set; the automatic startup `CleanupRetiredForumHrArtifacts` un-block was removed. Hosts-file sinkhole lines are NEVER cleared to ensure threats cannot auto-allow themselves. `forum.hr` is re-added as a default block seeded by `RuntimeBlocklistService` | FSW + 30s |
 | `BrowserDnsPolicyGuard` | Disables DoH system-wide across all browsers; 15s self-healing | 15s |
@@ -492,7 +492,7 @@ Emitted as Tier1 `DetectionEvent`s directly via `EmitAsync`. Requires signals fr
 | `QuarantineAndKill` | Kill process + quarantine binary + place lock file |
 | `RemoveRegistryEntry` | Removes malicious autorun/service/COM entries |
 | `DismountVolume` | Dismounts ISO/VHD/SUBST drives hosting threats |
-| `RemoveCert` | Removes suspicious root certificates from store |
+| `RemoveCert` | Removes explicitly distrust-listed certificates, subject to authorization and store outcome verification |
 | `RemoveCertAndKillAdder` | Removes planted certificate + kills the process that installed it (BYOVD cert-trace) |
 
 ### ActiveResponse model (current)
@@ -569,14 +569,14 @@ budgets continue to apply.
 
 ## Logging
 
-`JsonlEventLogger` writes newline-delimited JSON to `%ProgramData%\Sentinel\events.jsonl`.
+`JsonlEventLogger` writes service events to `%ProgramData%\Sentinel\events.jsonl` and agent events to `%LocalAppData%\Sentinel\Agent\events.jsonl` by default. Each destination has its own audit directory; dashboard and tray readers consume both sources.
 
 - Thread-safe via `SemaphoreSlim`
 - `System.Text.Json` only - no string-built JSON
-- Size-based rotation at 50 MB, up to 5 rotated files
+- Size-based rotation at 20 MB, up to 5 rotated files
 - Rate-limited: max 1000 entries/second, burst of 5000
-- `FileShare.ReadWrite` - concurrent readers never blocked
-- Self-healing: retries on write failure; renames stale locked files
+- Writers use `FileShare.Read | FileShare.Delete`: readers remain permitted and competing writers are rejected.
+- Self-healing: retries opening after failures and counts dropped events; never renames an active writer's file.
 
 ---
 

@@ -49,38 +49,11 @@ This document assumes the attacker has read the source code.
 
 Versioned subsections below record earlier behavior, not additional current response authority. In 3.2.2, certificate trust-marker absence became Tier2 review-only; only explicit thumbprint distrust authorizes certificate mutation. In 3.2.3, online transports and automatic off-host mirroring were removed. The current controls above and [requirements](requirements.md) take precedence.
 
-### v3.0.4 - autonomous removal of planted / unvouched-for root CAs (superseded in 3.2.2)
+### Certificate-store observations and mutation authority (current)
 
-Answers the attack the user actually experienced: a root certificate planted in the trusted store to
-enable TLS interception (MITM) and to vouch for malicious signed code. The pre-existing
-`TlsCertificateMonitor` catches a root **added after Sentinel's baseline**, but a root already present
-at first run (planted before install, or left by a prior compromise) slipped through its baseline, and
-there was no autonomous removal of the *existing* store population. `RootStoreGuard` (SYSTEM,
-SystemIntegrity; startup sweep + 90s poll) closes that: it continuously audits the whole trusted-store
-population and acts on anything the OS trusted-root program does not vouch for.
+A trusted-store certificate can affect TLS and signed-code trust, but its presence, Subject/Issuer strings or absent OS trust markers do not establish hostile installation or malicious use. `RootStoreGuard` inventories existing certificates as well as later changes. Missing AuthRoot/OS trust markers yield Tier2 LogOnly review findings.
 
-**The signal is the attacker's problem, not a name.** A legitimate root carries one of two
-non-attacker-controllable stamps the OS CTL mechanism writes: AuthRoot-CTL membership (`crypt32` prop
-98, every public CA) or the Microsoft root-program policy marker (prop 105, OID
-`1.3.6.1.4.1.311.60.3.2`, the OS roots that sign Windows). A planted/orphaned/de-vouched root carries
-**neither** - it is physically trusted but nothing authoritative anchors it. An attacker cannot forge
-either stamp from userland (they are assigned by the signed CTL update path, not by anything in the
-cert the attacker controls), so renaming the planted root "Microsoft ..." or copying a real root's
-Subject does not help. On a hit the root is removed from every trusted store, pinned to Disallowed, and
-files whose Authenticode chain roots at it are quarantined. This signal and threshold were
-reverse-engineered from how Zemana AntiLogger flags "Suspicious Root CA" and verified against a live
-Windows root store (it flags only orphaned/legacy roots; it leaves MS Root CA 2010/2011 and all public
-CAs intact).
-
-**Honest ceiling / self-harm guard.** Auto-removing trust anchors is the one cert action that can brick
-a host (cf. the April 2026 Microsoft Defender incident that removed two legitimate DigiCert roots and
-broke TLS/code-signing fleet-wide). The hard safety floor is re-verified against the **live
-store-connected** context (the stamps exist only there; a detached DER copy loses them) immediately
-before removal, so a vouched-for anchor is refused unconditionally - the guard can only ever remove a
-root the OS does not vouch for. A local admin can of course re-plant a root (B1); as everywhere else,
-Sentinel makes the plant visible, durably recorded, auto-reverted, and chain-corroborating - it does
-not claim to prevent an admin-level action, only to not let a planted root silently persist. The whole
-mutation path is `ActiveResponse`-gated and Tier1; with ActiveResponse off it observes and records only.
+Autonomous removal, Disallowed insertion and associated file quarantine require an exact thumbprint in the explicit `CertDistrustList`, with the existing mutation policy and file protections. The remediator refuses heuristic-only requests. Historical list entries for three legitimate Microsoft roots were removed; old logs are not authorization to distrust them again. Local administrative rights and incomplete telemetry remain limits, and recorded action labels alone do not prove final store state.
 
 ### v2.8.2 - a new network adapter appearing ("attacker adds his network to mine")
 
@@ -438,7 +411,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 | SecureBootIntegrityMonitor | Checks Secure Boot state |
 | ScheduledTaskMonitor | Detects new/modified scheduled tasks |
 | TlsCertificateMonitor | Detects unauthorized root CA installations |
-| RootStoreGuard | Autonomously removes + blocks roots the OS trusted-root program does not vouch for (no AuthRoot-CTL / MS-program stamp), then quarantines files signed by a chain to them |
+| RootStoreGuard | Reviews missing trust markers as Tier2 LogOnly; only explicit thumbprint distrust policy authorizes certificate mutations and associated file actions |
 | UacBypassSurfaceMonitor | Detects autoelevate binary abuse |
 
 ### Group 5: Credential Protection
@@ -909,3 +882,9 @@ preview exports before sharing them.
 ## Limits demonstrated by operational logs
 
 Certificate metadata and absent OS trust markers do not establish hostile installation or authorize removal. A named pipe scanner can itself connect to a honeypot; client/server PID attribution must distinguish that observer effect. Shared-vendor or substring software matches do not establish CVE applicability. Exclusive event writer ownership and separate agent/service chains prevent accidental interleaving, but neither authenticates a user-writable agent log nor proves collection completeness. Unavailable ETW providers and uninstrumented monitor progress remain visibility limits; these corrections do not claim to repair that coverage.
+
+## DNS coverage limits
+
+In the published 3.2.2 build, the cross-validator probes cloudflare.com against 1.1.1.1 over ordinary UDP and compares IPv4 /16 subnets. This is heuristic evidence, not an authenticated independent view; interception of both paths, same-subnet manipulation, IPv6-only behavior and domains outside the probe can evade it. Critical-domain resolution shifts can also reflect legitimate infrastructure changes.
+
+In the 3.2.3 offline implementation, DnsCrossValidator and DnsResponseValidationMonitor are no-op compatibility types and are not active DNS-answer validation. Local adapter DNS-change monitoring and baseline restoration remain. A startup baseline is not proof that the resolver was trustworthy, and the static NameServer check is not complete DHCP or router-state validation. Browser DNS policy enforcement does not independently authenticate the OS resolver. Sentinel does not repair router firmware, authenticate DHCP or verify Wi-Fi password strength.

@@ -63,3 +63,7 @@ When a unit of work (a spec, a feature, a fix) is complete and verified, perform
   manual force-push.
 - Never type an ad-hoc `git push --force` / `--force-with-lease` by hand outside `push.ps1`.
 - Flag (do not commit) any file that looks like a secret before it enters a release commit.
+
+## GitHub Actions publication
+
+A successful Build & Test push on main/master triggers Release for that exact tested commit. Pull-request builds and unsuccessful runs cannot publish. Release retains independent Windows checks and skips already-published versions; version.txt remains authoritative. Manual workflow dispatch can retry publication. A documentation-only push after publication does not replace the existing release assets or tag.

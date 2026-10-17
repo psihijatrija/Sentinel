@@ -184,14 +184,14 @@ The system must implement two correlation engines that fire composite detections
 ### FR-7: Logging
 
 - Output format: JSONL (newline-delimited JSON), `System.Text.Json` only
-- Default path: `%ProgramData%\Sentinel\events.jsonl`
+- Service path: `%ProgramData%\Sentinel\events.jsonl`; agent path: `%LocalAppData%\Sentinel\Agent\events.jsonl` by default. Custom agent destinations use an `agent` subdirectory.
 - Size-based rotation: 20 MB per file, up to 5 rotated files
 - Each entry must include: `type`, `timestamp`, `data` (with `ruleName`, `evidence`, `reasoning`, `confidence`, `tier`, `processName`, `processId`, `metadata`)
 - Rate limiting: max **1000** entries/second, burst of **5000**
-- File sharing: `FileShare.ReadWrite` - concurrent readers must not be blocked
+- Writer sharing: `FileShare.Read | FileShare.Delete`; concurrent readers are permitted, competing writers are rejected.
 - Graceful degradation: log file access failure must NOT crash the service
 - Self-healing: writer must retry opening the file on each write if the initial open failed
-- Stale file handling: locked/inaccessible files renamed to `.stale.<timestamp>` and fresh file created
+- Contention handling: retain the active file, retry opening later and count dropped events; never rename a live writer's destination.
 - **Windows Event Log trail (v1.9.5):** critical events additionally written to Application log / source `Sentinel` (IDs 1000-1500) when available. Self-disables on barebone Windows. Config: `Sentinel:WindowsEventLog`. Never replaces JSONL as primary.
 
 ### FR-8: Explainability
