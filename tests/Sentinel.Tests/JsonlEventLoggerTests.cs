@@ -31,6 +31,19 @@ namespace Sentinel.Tests
         }
 
         [Fact]
+        public async Task DnsRepairAuditRequiresAnActualDurableCheckpoint()
+        {
+            var audit = new DnsRepairAudit(_logger);
+            await audit.WriteBeforeAsync(new DnsRepairRecord { Id = Guid.NewGuid().ToString("N") }, "Repair", default);
+            var checkpoint = _logger.GetAuditCheckpoint();
+            Assert.NotNull(checkpoint);
+            Assert.True(checkpoint!.Sequence > 0);
+            await _logger.DisposeAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => audit.WriteBeforeAsync(
+                new DnsRepairRecord { Id = Guid.NewGuid().ToString("N") }, "Repair", default));
+        }
+
+        [Fact]
         public async Task CompetingWriterCannotRenameOrCorruptTheActiveLog()
         {
             await _logger.LogEventAsync("first", new { Id = 1 });
