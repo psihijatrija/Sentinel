@@ -37,3 +37,5 @@ By installing or using this software you agree to the following:
 5. This software is provided **"as is"**, without warranty of any kind, express or implied.
 
 Use responsibly and in compliance with all applicable local, national, and international laws. Released under the MIT License - see [LICENSE](LICENSE).
+
+See the [documentation index](docs/README.md) for current guidance, validation limits and historical records.

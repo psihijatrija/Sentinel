@@ -1,5 +1,7 @@
 # VirusTotal / AV false-positive notes
 
+These are dated historical investigation/build notes. They do not establish current AV detection counts or override current response/import policy. Sentinel 3.2.3 makes no VirusTotal requests or automatic sample uploads; any external submission is a separate, explicit operator action. Current runtime behavior is documented in [design](design.md), [constraints](constraints.md) and [offline reputation](HASH_REPUTATION.md).
+
 ## Goal
 
 Installer uploads should ideally show **zero detections**. Reality for a full

@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 3.0.4**
+**Version: 3.2.3**
 
 ---
 
@@ -62,7 +62,7 @@ The system must detect the following behavioral threats:
 | T1-20 | AI agent / MCP abuse | Coding agents spawning shells, LOLBins, credential tools; burst recon patterns |
 | T1-21 | Package supply-chain runtime | Package managers spawning LOLBins; executables under package trees; AI agent config poison (CLAUDE.md, .cursorrules, MCP configs) |
 | T1-22 | Indirect syscall / Hell's Gate | Non-image executable memory containing a well-formed stub table: `mov r10,rcx; mov eax,SSN; syscall; ret` or a copied ntdll SharedUserData prologue, with 3+ distinct SSNs (loose JIT `0F 05` bytes are not a hit) |
-| T1-23 | MitM attack chain | Planted self-signed root cert removal, ghost process -> rogue Cast kill, FCM Send-Tab-to-Self block, rogue Cast firewall block (when `MitmDefense.Enabled`) |
+| T1-23 | MitM attack chain | Explicit-thumbprint-authorized root removal only; ghost process -> rogue Cast kill, FCM Send-Tab-to-Self block, rogue Cast firewall block (when `MitmDefense.Enabled`) |
 | T1-31 | Local network path MitM (v2.6.0) | >=2 distinct local-network tamper vectors (ARP poisoning, DNS hijack, route injection, adapter bridging, rogue WPAD/PAC proxy, Wi-Fi deauth flood / evil-twin BSSID) within the correlation window -> `Network Tamper: Local MitM Chain` composite -> protective VPN shield (when `VpnShield.Enabled`): raise tunnel, clean path, verify clean, drop. Fail-safe holds tunnel until verified clean |
 | T1-24 | Lazarus Dream Job (CVE-2026-68820 campaign) | SecurityPDF / FudModule names, libmupdf sideload in staging, Temp\\new.exe from PDF parent, published C2; does **not** patch afd.sys |
 | T1-25 | LegacyHive (CVE-2026-62832) | Another user's HKU hive loaded while not logged on; hive-path reparse; custom HKU names |
@@ -132,7 +132,7 @@ The system must implement two correlation engines that fire composite detections
 **WeightedCorrelationEngine (v2.0)** - explainable score cards:
 
 - Category weights summed per PID within a 90s window (Credential=50, Injection=44, Persistence=31, Network=18, BYOVD=60, etc.)
-- Emits `Weighted Correlation: Multi-Signal Threat` when total >= threshold (default 100), >=2 distinct categories, and a terminal-family contribution or high score
+- Emits `Weighted Correlation: Multi-Signal Threat` when total >= threshold (default 100), >=2 distinct categories, and independently corroborated terminal-family evidence; a high score alone is insufficient
 - Every detection receives `ScoreCardTotal`, `ScoreCardBreakdown`, `ScoreCardExplanation` metadata
 - Optional EventGraph diversity boost (0-25 pts) when `EnableGraphBoost=true`
 - Config: `Sentinel:WeightedCorrelation` (`Enabled`, `Threshold`, `MinDistinctCategories`, `EnableGraphBoost`)
@@ -148,7 +148,7 @@ The system must implement two correlation engines that fire composite detections
 | Process memory | Process.Modules enumeration + module count tracking | None |
 | Process ancestry | CreateToolhelp32Snapshot (~5s refresh) | WMI on constrained SKUs |
 | Webcam/Mic access | Process module enumeration (camera/mic DLL detection) | None |
-| Hash reputation | CIRCL + MalwareBazaar + optional VT proxy | Unknown (fail closed for Safe) |
+| Hash reputation | Offline compatibility facade; no remote lookups or legacy online cache | Always Unknown; local analysis remains separate |
 | Windows Event Log trail | Application log / source Sentinel (IDs 1000-1500) | Self-disables gracefully on stripped Windows |
 | PE / URL ML scoring | Offline FastTree models (`MlModels/pe_model.zip`, `url_model.zip`) | Skipped if models absent; soft signal only |
 | WMI-Activity ETW | Microsoft-Windows-WMI-Activity events 5859-5861 (permanent consumer / binding) | `WmiPersistenceMonitor` 30s poll of filter/consumer/binding |
@@ -262,7 +262,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 
 - Interfaces: `IDetector`, `ITelemetryProvider`, `ICorrelationRule`, `IResponsePlugin`
 - `PluginRegistry` DI singleton - register correlation rules without editing core files
-- `RulePackLoader` - loads HMAC-signed `*.pack.json` packs from `%ProgramData%\Sentinel\rules\packs\` as `FragmentCorrelationRule` plugins; fail-closed on invalid HMAC
+- `RulePackLoader` - loads RSA-SHA256-signed `*.pack.json` packs from `%ProgramData%\Sentinel\rules\packs\` as `FragmentCorrelationRule` plugins; fail-closed on missing/invalid signatures; legacy HMAC packs are rejected
 - See `docs/RULE_PACKS.md`
 
 ### FR-15: Service<->Agent IPC (v2.0)
@@ -278,44 +278,29 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 - Metrics include: telemetry/sec, detections/sec, drops, composite/weighted counts, correlation latency percentiles
 - Agent Settings -> Ops page displays live metrics (prefers IPC, falls back to file)
 
-### FR-17: Observe-first / work-first posture (v1.9.7)
+### FR-17: Always-on privileged hardening (current since v2.5.5)
 
-- Default install must **not** proactively reshape the host: no IPSec lockdown, no RPC/Cast/FCM firewall blocks, no service disable beyond Telnet + Remote Registry, no ASR Block re-arm, no RDP force-logoff, no USB auto-disable
-- Older leftover IPSec/FW/ASR lockdown rules from pre-1.9.7 builds must be **removed** on upgrade
-- Full kiosk lockdown available only via `RestrictivePortHardening: true`
-- Any new proactive host mutation must gate on `ProductPosture.TryProactiveHostLockdown` and ship unit tests that default-deny
+- Privileged Service startup applies the host hardening baseline; there is no work-first mode.
+- `RestrictivePortHardening` and `ProductPosture.AllowsProactiveHostLockdown` remain always enabled.
+- The standard-user Agent applies self-only process mitigations and delegates privileged work to the Service.
+- Inbound exception enforcement, explicit administrator approvals and rollback follow FR-11; outbound policy is preserved except Sentinel's own self-blocks.
+- The Defender ransomware ASR rule identified in `docs/constraints.md` must never be enabled in Block against the installer.
 
 ### FR-18: MitM defense suite (v2.0.1)
 
 - `Sentinel:MitmDefense` opt-in suite for post-incident MitM attack response
 - Default `Enabled: false` on clean installs
-- When enabled: `TlsCertificateMonitor` removes high-confidence planted roots immediately; `GhostProcessMonitor` kills invisible/empty-name PID -> Cast without the normal 2-scan wait; `CastDeviceGuard` auto-blocks rogue Cast by IOC MAC prefix and known IPs; `NullSessionGuard` blocks FCM TCP 5228; `AdvancedResponseEngine` applies the MITM-specific authorization checks
+- When enabled: certificate removal still requires explicit thumbprint distrust authorization; `GhostProcessMonitor` kills invisible/empty-name PID -> Cast without the normal 2-scan wait; `CastDeviceGuard` auto-blocks rogue Cast by IOC MAC prefix and known IPs; `NullSessionGuard` blocks FCM TCP 5228; `AdvancedResponseEngine` applies the MITM-specific authorization checks
 - Config fields: `Enabled`, `RemovePlantedCerts`, `BlockFcmPushChannel`, `AutoBlockRogueCast`, `RogueCastMacPrefixes`, `KnownRogueCastIps`
 
-### FR-24: Autonomous suspicious-root guard (v3.0.4)
+### FR-24: Root-store review and explicit distrust enforcement (3.2.2 / 3.2.3)
 
-- `RootStoreGuard` (SYSTEM, SystemIntegrity group; startup sweep + 90s poll) continuously detects,
-  removes, blocks, and cleans up after planted/distrusted root certificates **without a manual scan**.
-- **Detection signal (non-attacker-controllable, name-independent).** A root in a trusted store
-  (Root/CA, LocalMachine + CurrentUser) is suspicious when it carries **neither** OS-authoritative
-  stamp: it is **not** a member of the downloaded Microsoft AuthRoot CTL (`crypt32` property 98) **and
-  not** a Microsoft root-program policy root (property 105, OID `1.3.6.1.4.1.311.60.3.2`). It is in a
-  trusted store but nothing the OS trusted-root program vouches for anchors it. The explicit
-  `CertDistrustList` (thumbprint-keyed: StartCom + the three Microsoft roots from `Registry\Certificates.reg`)
-  is also always enforced. Subject/Issuer **names are ignored** (attacker-controlled).
-- **Response.** `CertRemediator` removes the cert from Root/CA/TrustedPublisher (LM+CU) and pins it to
-  the Disallowed store (thumbprint-only registry-block fallback). Then files whose Authenticode chain
-  roots at the removed cert are quarantined (`forceQuarantineSigned`, WRP-safe - never under
-  System32/WinSxS/servicing - and blast-radius capped).
-- **Hard safety floor (fail-closed, cannot self-brick).** Autonomous removal re-verifies the verdict
-  against the **live, store-connected** cert context (the CTL stamps exist only there; a detached DER
-  copy loses them). Any root carrying either stamp - every OS root (MS Root CA 2010/2011) and every
-  public CA (DigiCert, GlobalSign, ISRG, ...) - is refused unconditionally.
-- **Posture.** The whole autonomous mutation path is gated on `ActiveResponse`
-  (`ResponsePolicy.MayPerformInlineHostMutation`) and recorded as a Tier1 response; with ActiveResponse
-  off the finding is still surfaced (detection-only). The by-thumbprint `CertDistrustList` path remains
-  fail-closed (refuses any thumbprint not on the list). Detection signal reverse-engineered from the
-  Zemana AntiLogger "Suspicious Root CA" behavior and verified against a live Windows root store.
+- `RootStoreGuard` inventories Root/CA stores on startup and every 90 seconds in the SYSTEM service.
+- Missing Microsoft trust markers are uncertain Tier2 LogOnly review findings; absence is never removal, Disallowed insertion or file-quarantine authority.
+- Only a thumbprint explicitly authorized by `CertDistrustList` may enter the certificate mutation path. `CertRemediator` enforces this at its entry point; names and signature-chain shape cannot authorize it.
+- Existing protected-path, blast-radius and action-specific response safeguards still apply to associated files.
+- On net48, chain-shape enrichment that could trigger AIA downloads is omitted. Signature verification uses cached URL data; the guard does not fetch certificate material.
+- CurrentUser stores refer to the service's security context; do not infer inventory of every logged-on user's certificate store.
 
 ### FR-21: Protective VPN-shield remediation (v2.6.0)
 
@@ -371,7 +356,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 - All exceptions must be caught and logged; no silent failures
 - All `IDisposable` / `IAsyncDisposable` objects must be properly disposed
 - Telemetry queue must be **bounded** (DropOldest under flood) to prevent OOM
-- Optional features (ETW, Event Log, toast, TI proxy) must fail soft and self-disable permanently after hard failure - JSONL and core detection continue
+- Optional features (ETW and Event Log) must fail soft and self-disable permanently after hard failure - JSONL and core detection continue
 
 ### NFR-3: Performance
 - Must not materially impact system performance during normal operation
@@ -399,7 +384,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 ### NFR-7: Intentionally out of scope
 - Pre-kill offensive deception (removed for AV compatibility)
 - Kernel PPL / ELAM driver
-- Full threat-intel certificate pinning (partial: Worker HMAC path preferred)
+- Online reputation/feed/report transports (removed in 3.2.3; the standalone legacy Worker does not reconnect the endpoint)
 - Direct law enforcement API filing (no consumer EDR API exists)
 
 ---
@@ -429,3 +414,5 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 | 2.5.9 | T1-30 infostealer credential-access + collect/package/exfil; `SensitiveFileAccessMonitor` (browser cred/session stores + dev secrets + document archives, Restart-Manager PID attribution); composites C-28 Infostealer: Credential Access + Outbound, C-29 Data Staging + Exfiltration; raw file-access legs Tier2 observe, kill only via composite |
 | 2.6.0 | T1-31 local network path MitM; FR-21 protective VPN-shield remediation; `VpnShieldEngine` + `VpnShieldConfig`; `ResponseAction.VpnShieldUp` (non-kill, `ProductPosture.AllowsVpnShield` default off); composite `Network Tamper: Local MitM Chain` (>=2 distinct tamper vectors incl. WPAD + Wi-Fi deauth/evil-twin); raise userland RAS tunnel -> clean -> verify clean -> drop, fail-safe holds tunnel |
 | 2.6.3 | T2-11 update/servicing-surface abuse; `UpdateServicingMonitor` (CoreDetection group): servicing actors spawning shells/LOLBins/cred tools, CAB/MSU extraction to abnormal paths (CVE-2021-40444 `..\` class), unsigned/non-Microsoft servicing binaries via `SignerTrustService`, plain-HTTP/non-Microsoft update source; all Tier2/LogOnly observe fuel, composes with `RegistryMonitor` service-drop + `FileActivityMonitor` writes; never self-authorizes a kill |
+
+Certificate purpose/private-key classification is not implemented by the current trust-marker guard; see [certificate policy](CERTIFICATES.md).

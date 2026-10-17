@@ -45,7 +45,11 @@ These controls reduce exposure; they do not confine an already-compromised SYSTE
 
 This document assumes the attacker has read the source code.
 
-### v3.0.4 - autonomous removal of planted / unvouched-for root CAs
+## Historical implementation notes
+
+Versioned subsections below record earlier behavior, not additional current response authority. In 3.2.2, certificate trust-marker absence became Tier2 review-only; only explicit thumbprint distrust authorizes certificate mutation. In 3.2.3, online transports and automatic off-host mirroring were removed. The current controls above and [requirements](requirements.md) take precedence.
+
+### v3.0.4 - autonomous removal of planted / unvouched-for root CAs (superseded in 3.2.2)
 
 Answers the attack the user actually experienced: a root certificate planted in the trusted store to
 enable TLS interception (MITM) and to vouch for malicious signed code. The pre-existing
@@ -198,7 +202,7 @@ Work-first defaults: HID auto-disable is kiosk-only; Steam/Xbox/Store/DirectX/OB
 
 ### v2.2.4 - generic CVE-class (userland)
 
-Named campaigns lag. New sensors hunt exploit-host / MOTW / MSI / winget / VS Code / isolation-FS *shape* so the next AFD sibling does not require a new Dream Job pack. CISA KEV Windows OS entries match this workstation. Missed Patch Tuesday is LogOnly + toast. Kernel races still need the OS CU.
+Named campaigns lag. New sensors hunt exploit-host / MOTW / MSI / winget / VS Code / isolation-FS *shape* so the next AFD sibling does not require a new Dream Job pack. Local/cached CISA KEV entries produce asset-match candidates, without verified affected-version applicability. Missing or stale catalogs are not proof of patch compliance. Kernel races still need the OS CU.
 
 ### v2.8.6 - CLFS + token-integrity-jump LPE, kill-on-success
 
@@ -277,8 +281,8 @@ Composites: `LPE Campaign Scaffold`, `Initial Access Execution Chain`, `Persiste
 
 ### Audience (v2.0.8+)
 
-- **Gamers / creators:** Work-first defaults; game and anti-cheat paths are not reputation-kill fuel; memory handles skipped on known game trees. Real terminal chains (C2/exfil/token/cred-dump/BYOVD) still authorize response.
-- **High-profile targets:** Dual audit trail + sealed incident packs. Userland limits still apply: local admin / novel kernel implants can win. Pair with Defender, Secure Boot, HVCI, unique proxy secret, and off-host evidence backup.
+- **Gamers / creators:** Always-on hardening; game and anti-cheat paths are not reputation-kill fuel; memory handles skipped on known game trees. Real terminal chains (C2/exfil/token/cred-dump/BYOVD) still authorize response.
+- **High-profile targets:** Dual audit trail + sealed incident packs. Userland limits still apply: local admin / novel kernel implants can win. Pair with Defender, Secure Boot, HVCI and operator-controlled independent/offline evidence copies; no endpoint proxy connection remains.
 - **Honest battle stance:** Sentinel is meant to fight real operators on real desktops - not to market "unhackable."
 
 ---
@@ -320,8 +324,8 @@ Composites: `LPE Campaign Scaffold`, `Initial Access Execution Chain`, `Persiste
 | JSONL `events.jsonl` | Primary trail | Primary trail (required) |
 | Windows Event Log Application/Sentinel | Secondary trail (critical IDs) | **Auto-disabled** if create/write fails |
 | Unified ETW | ~50 ms sensors | Falls back to WMI/poll |
-| Toasts | Best effort | Skip if no session / AppId |
-| TI proxy / feeds | Optional | Fail closed without secret |
+| User alerts | Local dashboard/tray state; no Win32 toast calls | Local JSONL/dashboard where available |
+| Online TI proxy / feeds | Removed in 3.2.3 | Removed; local/cached data only, potentially stale |
 
 Attacker wiping only Event Log does not erase JSONL packs. Attacker wiping JSONL may still leave Event Log IDs 1100/1200 if the service was up. Neither is a substitute for offline backups of packs.
 
@@ -421,8 +425,8 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 | Monitor | Purpose |
 |---------|---------|
 | ArpSpoofMonitor | Detects ARP cache poisoning |
-| DnsResponseValidationMonitor | Detects DNS poisoning via TTL anomalies |
-| PublicIpMonitor | Detects VPN/proxy changes |
+| DnsResponseValidationMonitor | Retired in 3.2.3; no active DNS validation |
+| PublicIpMonitor | Retired in 3.2.3; no public-IP queries |
 | WifiSecurityMonitor | Detects open/WEP networks |
 | RemoteAccessMonitor | Detects RAT indicators (RDP, VNC, etc.) |
 | PhantomDeviceMonitor | Detects unauthorized network devices |
@@ -509,9 +513,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 **Residual risk:** HIGH. A local administrator can suppress the service and delete local evidence. Firewall self-blocks do not prevent an already-compromised SYSTEM process from changing host policy.
 
 **Honest assessment:** If the attacker has admin and knows Sentinel is running, they can kill it.
-The watchdog adds seconds of delay, not real protection. What changed in v2.5.8 is durability of
-*evidence*, not invincibility: an unexpected stop is now logged as suspected tampering, and (when
-opted in) confirmed-attack evidence is mirrored off-box before suppression.
+The watchdog adds seconds of delay, not a security boundary. Unexpected stops can leave local tamper evidence, but 3.2.3 does not mirror it off-box. An administrator can erase every local copy.
 
 ---
 
@@ -732,29 +734,11 @@ signature anchor and fail closed.
 
 ---
 
-### B13: Threat proxy forgery (FIXED in v1.6.0)
+### B13: Legacy standalone proxy forgery
 
-**Attack:** Unauthenticated or client-key HMAC on the Cloudflare Worker allowed anyone to forge threat reports / burn VT quota.
+The historical Worker used shared-secret HMAC, timestamp/nonce checks and rate limiting. Current endpoint transports, client credentials and automatic evidence mirroring were removed in 3.2.3, so the endpoint does not expose this connection.
 
-**`/report/evidence` route (v2.5.8 - off-host evidence mirror, deployed out-of-band):**
-- Accepts the signed `EvidenceSummary` JSON (report id, version, host, detection metadata,
-  indicators, machine-bound manifest `sha256` + `hmac`). Verifies the client HMAC exactly like the
-  other `/report/*` routes (same `X-Sentinel-Timestamp` / `-Nonce` / `-Signature` scheme, nonce
-  consumed after verification, per-IP rate limit) and stores the summary.
-- The summary carries the machine-bound manifest HMAC as an **origin proof** only (it re-verifies on
-  the source host). For portable verification, the Worker MAY return a **server-signed receipt**
-  (server key, no host secret ever leaves the box). The Worker is deployed separately and is not in
-  this repo; the client never depends on the receipt for correctness.
-
-**Mitigation (v1.6.0+):**
-- Worker requires `SENTINEL_SHARED_SECRET` (fail closed with 503 if missing)
-- HMAC uses server-side secret only - `X-Sentinel-Key` removed
-- Agent signs with `ThreatReporting:ProxySharedSecret`; reporting skipped if secret unset
-- Per-IP rate limit (60/min) on the Worker
-
-**Residual risk:** LOW if secret is strong and not committed. Shared secret in open-source configs must be set per-deployment.
-
----
+The retained `worker/` server is deployed independently. Its evidence route stores minimal manifest/checkpoint anchors, not raw incident summaries or host/process details; it returns a storage receipt, not an independently trusted origin signature. Local Worker tests do not establish a live deployment. A separately deployed server and its account administrator remain outside the endpoint's trust boundary. See [Worker documentation](../worker/README.md).
 
 ### B14: Kill-storm / response weaponization (FIXED in v1.6.0)
 

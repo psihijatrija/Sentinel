@@ -120,7 +120,7 @@ namespace Sentinel.Core.Monitors
             if (suspicious.Count == 0) return;
 
             // Autonomous removal is a host mutation - gate on ActiveResponse. If disabled, we
-            // still surface the detection (Tier1 LogOnly) so the operator sees it.
+            // still surface a log-only finding. Heuristic-only findings remain Tier2.
             bool mayAct = ResponsePolicy.MayPerformInlineHostMutation(_config);
 
             foreach (var kvp in suspicious)

@@ -5,28 +5,13 @@ using System.Security.Cryptography.X509Certificates;
 namespace Sentinel.Core
 {
     /// <summary>
-    /// Decides whether a root certificate sitting in a trusted store is "suspicious" using
-    /// the two authoritative, non-attacker-controllable stamps Windows itself attaches to
-    /// legitimate trust anchors - reverse-engineered from the Zemana AntiLogger "Suspicious
-    /// Root CA" behavior and verified against a live Windows root store:
-    ///
-    ///   - <b>prop 98</b> (<c>CERT_AUTH_ROOT_SHA256_HASH_PROP_ID</c>): set on roots that are
-    ///     members of the downloaded Microsoft AuthRoot CTL - i.e. public CAs in the OS
-    ///     Trusted Root Program (DigiCert, GlobalSign, ISRG/Let's Encrypt, ...).
-    ///   - <b>prop 105</b> (the Microsoft root-program policy marker carrying OID
-    ///     <c>1.3.6.1.4.1.311.60.3.2</c>): set on the Microsoft OS program roots that sign
-    ///     Windows itself (Microsoft Root CA 2010/2011, etc.).
-    ///
-    /// A legitimate root carries at least ONE of these stamps. A planted MITM root, an
-    /// orphaned/legacy root, or a root Windows has stopped vouching for carries <b>neither</b> -
-    /// it is physically in the trusted store but nothing authoritative anchors it.
-    ///
-    /// Both signals come from the OS CTL/authroot mechanism, not from anything the certificate
-    /// itself claims (Subject/Issuer are attacker-controlled and are deliberately ignored).
-    ///
-    /// SAFETY FLOOR: because this drives autonomous removal, <see cref="IsSuspicious"/> is the
-    /// hard gate - a root with EITHER stamp is never suspicious, which is what protects the
-    /// load-bearing OS roots and every public CA from being auto-removed.
+    /// Reviews live Windows root-store contexts for AuthRoot CTL (property 98) and
+    /// Microsoft root-program (property 105) markers. Missing markers can represent
+    /// private/enterprise roots or an unsuccessful property read; they do not prove
+    /// planting, malicious use or possession of a private key.
+    /// This observer does not assess EKU/all-purpose usability and never authorizes
+    /// removal. CertRemediator requires independent explicit thumbprint distrust.
+    /// A present marker is not a guarantee against certificate or process abuse.
     /// </summary>
     public static class CertSuspicionAnalyzer
     {
@@ -74,12 +59,8 @@ namespace Sentinel.Core
             => cert != null && HasProp(cert.Handle, MS_ROOT_PROGRAM_POLICY_PROP_ID);
 
         /// <summary>
-        /// The core verdict. A root is suspicious iff it carries NEITHER authoritative stamp.
-        ///
-        /// This is deliberately conservative: if either crypt32 read succeeds and reports a
-        /// stamp, the cert is trusted and left alone. A cert is only ever flagged when BOTH
-        /// reads come back empty, which on a healthy machine is true solely for orphaned /
-        /// planted / de-vouched roots.
+        /// True when neither marker can be confirmed. This is review-only context,
+        /// including property-read failures, not an autonomous removal verdict.
         /// </summary>
         public static bool IsSuspicious(X509Certificate2 cert)
         {

@@ -1,5 +1,13 @@
 # Sentinel engineering assessment and improvement record
 
+## Current addendum: 3.2.3 (2026-10-17)
+
+The 2026-10-15 scores and implementation log below are a historical assessment, not current ratings. Online reputation/reporting and evidence mirroring have since been removed; no live Worker integration or independent evidence survival is claimed. The Agent is unprivileged, while the service still holds SYSTEM sensors/response. Local and supported local-GPO inbound rules are reconciled with journaled rollback and exact-filter administrator approvals. Certificate mutation requires explicit thumbprint distrust; missing trust markers are review-only.
+
+Windows CI now passes all 2,852 Framework tests and a zero-warning Release build. Real disposable Windows firewall tests pass effective self-blocks, external IPv4 TCP blocking with an identical connected control, preserved loopback/outbound traffic, local/GPO inbound disabling, re-enable reconciliation, approval persistence and rollback. Pipeline tests use bounded output waits for the corrected LSASS/ransomware/evasive-script cases. Domain/reboot/interactive-token/installer lifecycle checks remain distinct; see [validation](OFFLINE_VALIDATION.md). These results do not justify new numeric detection scores.
+
+## Historical assessment (2026-10-15)
+
 Assessment date: 2026-10-15. These are provisional engineering judgments of this
 checkout, not malware-detection percentages, certification, or competitor rankings.
 The owner's deployment target is custom/debloated Windows. The coding workspace

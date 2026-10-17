@@ -14,6 +14,10 @@ version numbers. Pick from the top of a theme when you want to move the needle.
 
 ---
 
+## Current baseline (3.2.3)
+
+The endpoint is offline, the Agent is unprivileged, the SYSTEM service retains sensors/response, and local/GPO inbound exceptions are reconciled with explicit approvals. A smaller privileged broker is future work. Domain-policy, reboot and interactive-token validation remain distinct from passing hosted Windows tests. See [validation](OFFLINE_VALIDATION.md).
+
 ## Guiding principles (do not drift from these)
 
 - **Honest over "unhackable."** Every capability states what it is *not* a substitute for.
@@ -35,8 +39,8 @@ higher. Each is about *narrowing the race*, not claiming to eliminate it.
 
 | Priority | Gap (source) | Direction | Honest ceiling |
 |----------|--------------|-----------|----------------|
-| High | **Local admin can stop the service** (B1, residual HIGH) | Faster watchdog re-arm, richer SCM-tamper telemetry, off-host alert-before-suppression so the *evidence* survives even if the service dies | Cannot beat admin in userland; goal is durable evidence + fast detection, not invincibility |
-| High | **BYOVD race** (B2, residual MEDIUM) | Tighten prerequisite detection (priv-esc -> cert plant -> .sys drop -> service create), expand LOLDrivers/WDBL blocklist refresh, shrink the 15s poll where cheap | Kernel driver already loaded still wins; win the race earlier, alert before suppression |
+| High | **Local admin can stop the service** (B1, residual HIGH) | Faster watchdog re-arm, richer SCM-tamper telemetry and operator-controlled offline evidence preservation; no automatic endpoint uploads | Cannot beat admin in userland; goal is durable evidence + fast detection, not invincibility |
+| High | **BYOVD race** (B2, residual MEDIUM) | Tighten prerequisite detection (priv-esc -> cert plant -> .sys drop -> service create), maintain trusted local LOLDrivers/WDBL snapshots, shrink the 15s poll where cheap | Kernel driver already loaded still wins; win the race earlier, alert before suppression |
 | Medium | **ETW blinding is post-hoc** (B3, residual MEDIUM) | Keep prologue-diff detection; add corroborating "telemetry went quiet" heuristics (events/sec floor already exists in EtwSessionGuard - extend to per-provider) | Cannot prevent in-process patch; detect-after-the-fact + correlate the silence |
 | Medium | **Command-line-free tradecraft** (B6, residual MEDIUM) | Lean harder on ETW ThreatIntel + MemoryBehaviorAnalyzer so detection does not depend on cmdline exposure | Sophisticated in-memory-only tradecraft remains hard |
 | Medium | **In-memory inject into a live game** (v2.2.5 note) | Explore safe, fail-closed ways to inspect game processes without tripping Denuvo (handle-safety-preserving telemetry) | Anti-cheat self-terminates on VM_READ; stays a residual gap unless a safe signal is found |
@@ -52,7 +56,7 @@ doesn't need a new campaign pack. Keep extending shapes, not one-offs.
 - New delivery vectors as they emerge (the MOTW script-dropper + WPAD/PAC work in v2.3.5 is the
   model: find the *class* of the vector, emit LogOnly observe fuel, let it feed existing
   composites).
-- Keep CISA KEV matching current for this workstation's actual asset list.
+- Maintain trusted local CISA KEV snapshots for this workstation's actual asset list; report snapshot age and unverified version applicability. No live feed downloads.
 - Add composite chains only where a real multi-signal terminal exists - avoid detector sprawl.
 
 ---
@@ -72,7 +76,7 @@ The v2.0 WeightedCorrelationEngine + score cards + MITRE mapping is the foundati
 
 "Bulletproof" for a high-profile target is as much about *surviving evidence* as prevention.
 
-- Off-host / append-only evidence-pack backup so B1/B2 suppression can't erase the trail.
+- Operator-controlled export to independent/offline storage. Automatic endpoint reporting/mirroring was removed in 3.2.3; it is not an implied roadmap commitment.
 - Strengthen the dual audit trail (JSONL primary + Event Log critical) already in v1.9.5.
 - Keep evidence packs honest and reportable-grade; never overclaim.
 

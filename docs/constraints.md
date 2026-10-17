@@ -1,6 +1,6 @@
 # Sentinel - Constraints
 
-**Version: 3.0.4**
+**Version: 3.2.3**
 
 ---
 
@@ -15,7 +15,7 @@
 | No string-built JSON | All JSON output via `System.Text.Json` serialization only " no concatenation |
 | No `Thread.Sleep` without cancellation | All waits must respect `CancellationToken` |
 | No static mutable state | All shared state via `ConcurrentDictionary`, `Channel<T>`, or `SemaphoreSlim` |
-| No shelling out to system tools | No `Process.Start("cmd.exe", ...)` for detection or response logic |
+| System-tool boundary | No `Process.Start("cmd.exe", ...)` for detection/response logic. Local/GPO firewall management uses fixed embedded NetSecurity code via absolute native Windows PowerShell, encoded bootstrap and JSON request data; execution and output are bounded. |
 | Tier2 can never trigger action | Enforced unconditionally in `AdvancedResponseEngine.HandleAsync` " no exceptions, no config override |
 | Immediate authorized Tier1 response | `ActiveResponse` is always armed. High-confidence Tier1 kill-grade signals may authorize response without waiting for a second signal. Tier2 always remains LogOnly; action-specific protections and budgets still apply. |
 | Tier1 = kill-grade only | `ResponsePolicy.ApplyTierLaw`: Tier1 only for high-confidence (>=`MinTier1Confidence`, default 0.85) token theft / cred dump / reverse shell / C2, or multi-signal composites that prove those. **Exception:** `DLL Injection: Foreign Module Unloaded` is permanent Tier1 LogOnly (already unloaded; never demote, never kill-promote). All other monitor signals are Tier2 + LogOnly observe fuel. Critical score alone must not promote noise to Tier1. |
@@ -24,7 +24,7 @@
 | Weak observe seeds never chain-nuke (v1.9.3) | Cast observe, module-count growth, screen/UX heuristics, outbound-whitelist noise (`IsWeakObserveSeed` / `IsPureUxObserveNoise`) never classify as terminal and never fill the PID chain buffer. Pure UX also skips composites. Attack-adjacent weak signals (SeImpersonate, PPID) may still feed composites but not alone complete a chain nuke. Terminal chain legs require conf >= `MinTier1Confidence`. |
 | Chain-confirmed packs always (v1.9.3) | When a chain-confirmed nuke fires, `AutoIncidentReporter` MUST write a sealed evidence pack. Do not drop packs because the seed rule had low confidence or local-only kill flags. |
 | Digital coercion toolkit = host tools only (v1.9.4) | Defend remote-control, stalkerware, session-theft, exfil toolkits used in online harassment/sexual coercion. NEVER claim chat moderation, offender identity, or offline sexual assault detection. Marketing and packs must stay technical. |
-| Graceful degradation on barebone Windows (v1.9.5) | Optional features (Windows Event Log, ETW, toast, TI proxy, custom channels) MUST fail soft: disable permanently for the process after hard failure, keep JSONL + core detection, never throw out of response/pack/service paths. Prefer Application log over custom Event Log channels. |
+| Graceful degradation on barebone Windows (v1.9.5) | Optional features (Windows Event Log, ETW, custom channels) MUST fail soft: disable permanently for the process after hard failure, keep JSONL + core detection, never throw out of response/pack/service paths. Prefer Application log over custom Event Log channels. |
 | Windows Event Log = critical only (v1.9.5) | When Event Log is available, write lifecycle + chain response + pack + heartbeat only. Never flood with Tier2 observe. Rate-limit writes. |
 | Never ASR-block our own installer (v1.9.6) | Do not enforce Defender ASR `c1db55ab` (advanced ransomware protection) in Block - it breaks Inno TEMP extract and is not "Sentinel is ransomware". Delete if present; keep ASROnlyExclusions for install dir. |
 | **HARDENING IS ALWAYS-ON (v2.5.5)** | IPSec port lockdown, ASR Block rules, RPC/DCOM firewall, remote session guard, registry hardening, credential hardening (LSASS PPL, WDigest off), browser hardening, and LGPO security policy run on every privileged Service startup; the unprivileged Agent applies self-only process mitigations. `RestrictivePortHardening` is always `true`; the setter is a no-op. `ProductPosture.AllowsProactiveHostLockdown` always returns `true`. There is no work-first mode. **`IsAttackClassTerminal` exceptions:** Campaign-IOC filename carve-out  `SecurityPDF.exe` / `Afd4Eop12_x64.dll` are excluded from skip lists. |
@@ -43,10 +43,10 @@
 | No async/await on STA thread | The Agent's WinForms STA message pump MUST NOT have async continuations posted to its SynchronizationContext. All background work (log tailing, file I/O, network) MUST run on dedicated `Thread` instances or `Task.Run` with `ConfigureAwait(false)`. Violations freeze the tray icon. |
 | No Win32 notification API calls | `ShowBalloonTip` and toast notification APIs MUST NOT be called - `WpnService` is removed by hardening. These calls silently deadlock the STA pump without throwing. |
 | Critical group: no heavy I/O at startup | Monitors in the Critical group (0ms start delay) MUST NOT perform registry enumeration, subprocess spawning, or disk-wide scanning in their constructor or early `ExecuteAsync`. Heavy-I/O monitors belong in SystemIntegrity (10s delay) or later groups. |
-| Absence != safety in reputation | Hash reputation services MUST return `Unknown` (not `Safe`) when a hash is absent from all databases. Only a positive trust signal (e.g., CIRCL trust > 60) can confirm Safe. |
+| Absence != safety in reputation | Offline hash reputation is always `Unknown`; legacy online cache entries and synthetic hashes cannot grant trust. Local signature/static/ML context is evaluated separately and is not kill authority. |
 | No string interpolation into shell commands | All PowerShell/cmd invocations MUST use `-EncodedCommand` or `ArgumentList` - never string-interpolate untrusted data into `-Command` strings. |
 | Minimum-privilege process handles | `OpenProcess` calls MUST request only the access rights actually used. Never open with `PROCESS_ALL_ACCESS` unless every right is exercised. |
-| Signed threat report requests | All outbound threat intelligence reports MUST be HMAC-signed with the installation entropy key. Unsigned requests to the proxy are forbidden. |
+| No outbound threat reporting (3.2.3) | Product reporting/mirroring transports are removed and legacy settings cannot restore them. The retained standalone Worker is outside the endpoint runtime. |
 | Validate all external process output | Data from `Process.Start` stdout (docker inspect, netsh, sc.exe, etc.) is untrusted. MUST be validated before use in subsequent commands or logic. |
 | Compiled config only | Operational defaults live in the binary. Disk JSON is not loaded. Online transports and their embedded credential were removed in 3.2.3; legacy overrides cannot restore them. |
 

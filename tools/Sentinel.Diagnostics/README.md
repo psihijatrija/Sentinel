@@ -45,7 +45,7 @@ chain or deleting a valid suffix is not detectable. Checkpoints cover the named 
 ledger only; retention is 90 days and each daily chain is capped at 20 MB. Overflow or
 write/verification failure degrades integrity reporting while the original audit path
 remains available. This is not protection against an administrator who controls every
-copy and key. The Worker can retain incident-summary checkpoints when configured.
+copy and key. Sentinel 3.2.3 does not upload checkpoints to the legacy Worker; retain trusted copies independently through an operator-controlled process.
 
 Restore journals live in the vault's `RestoreJournal` subdirectory and contain destination paths. Production
 vault ACLs protect them; protect custom test/export directories yourself. Inspection
