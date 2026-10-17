@@ -129,16 +129,17 @@ namespace Sentinel.Tests
             return reader.ReadToEnd();
         }
 
-        /// <summary>Poll until the log contains every needle (CI runners need more than a fixed 500ms).</summary>
+        /// <summary>Wait for pipeline output with a bounded deadline, without assuming runner speed.</summary>
         private async Task<string> WaitForLogAsync(params string[] needles)
         {
             string log = string.Empty;
-            for (int i = 0; i < 40; i++)
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (elapsed.Elapsed < TimeSpan.FromSeconds(10))
             {
-                await Task.Delay(100);
                 log = ReadLogFile();
                 if (needles.All(n => log.Contains(n)))
                     return log;
+                await Task.Delay(25);
             }
             return log;
         }
@@ -294,7 +295,8 @@ namespace Sentinel.Tests
 
             var ctx1 = _fusionEngine.FeedEvent(telemetry1);
             _detectionEngine.SubmitTelemetry(ctx1);
-            await Task.Delay(300);
+            var firstLog = await WaitForLogAsync("ReverseShellRule");
+            Assert.Contains("ReverseShellRule", firstLog);
 
             // Second signal: file rename to ransomware extension (Ransomware category)
             var telemetry2 = new FileActivityTelemetry
@@ -309,13 +311,18 @@ namespace Sentinel.Tests
 
             var ctx2 = _fusionEngine.FeedEvent(telemetry2);
             _detectionEngine.SubmitTelemetry(ctx2);
-            await Task.Delay(500);
+            // Detection logging follows scoring. Wait for BOTH rule outputs before reading
+            // the profile; submitting telemetry only enqueues work on the background pipeline.
+            var completedLog = await WaitForLogAsync("ReverseShellRule", "RansomwareDetectionRule");
+            Assert.Contains("RansomwareDetectionRule", completedLog);
 
             // Verify: scoring engine should show multiple categories for PID 5555
             var profile = _scoringEngine.GetProcessProfile(5555);
             Assert.NotNull(profile);
             Assert.True(profile!.DetectedCategories.Count >= 2,
                 $"Expected 2+ categories but got {profile.DetectedCategories.Count}: [{string.Join(", ", profile.DetectedCategories)}]");
+            Assert.Contains(DetectionCategory.ReverseShell, profile.DetectedCategories);
+            Assert.Contains(DetectionCategory.Ransomware, profile.DetectedCategories);
             Assert.True(profile.DetectionCount >= 2);
         }
 
