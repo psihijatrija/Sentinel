@@ -1,6 +1,7 @@
 # Changelog
 ## [3.2.2] - 2026-10-17
 ### Fixed
+- Release publication now follows a successful trusted Build & Test push on main/master and pins checkout and release tagging to that tested commit. Successful fixes no longer miss publication because version.txt was unchanged; existing versions remain protected from republishing.
 - Multi-signal integration assertions now wait for both detection outputs before inspecting the scored categories, rather than assuming the queued pipeline completes within 500ms. Both expected categories remain required.
 - Build CI cancels superseded runs for the same branch or pull request and produces test results plus coverage from one test execution.
 - The one-shot legacy-sidecar purge regression now scans only its temporary fixture, rather than every fixed drive on the runner. It verifies marker skipping, forced removal, repeat-call idempotence and preservation of original/out-of-scope files.

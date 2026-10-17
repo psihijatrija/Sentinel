@@ -1,25 +1,14 @@
 name: Release
 
-# Publishes a GitHub release with the compiled installer whenever the released
-# version changes on main.
-#
-# Why "on version.txt change" instead of auto-bumping in CI:
-# Sentinel's versioning policy (see .kiro/steering/workflow.md) is strict - the version
-# is bumped by exactly one patch, locally, by installer/release.ps1, and version.txt is the
-# single source of truth. Having CI bump the version would fight that policy and cause
-# divergence. Instead CI reacts to a version.txt change: it builds the installer for the
-# version already committed and publishes it, but only if the v<version> tag/release does
-# not already exist. That makes it a safe no-op when a local `release.ps1` / `push.ps1`
-# run already published the same version, and it fills in the release when only the commit
-# was pushed (e.g. a plain `git push`).
-
+# Publish an unreleased version after its exact commit passes Build & Test.
+# Only successful push builds on trusted release branches may enter the publishing job.
+# Existing releases remain immutable; version.txt is still the single version source.
 on:
-  push:
+  workflow_run:
+    workflows: [ "Build & Test" ]
+    types: [ completed ]
     branches: [ main, master ]
-    paths:
-      - 'version.txt'
-      - '.github/workflows/release.yml'
-  workflow_dispatch: {}   # allow manual re-run for the current version.txt
+  workflow_dispatch: {}   # manually retry the current branch when necessary
 
 permissions:
   contents: write         # required to create tags and releases
@@ -30,10 +19,17 @@ concurrency:
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Read version
         id: ver
@@ -249,5 +245,5 @@ jobs:
           gh release create "v$v" "${{ steps.artifact.outputs.path }}" "releases/$v/SentinelWorker-$v.js" "releases/$v/SentinelDiagnostics-$v.zip" "releases/$v/SHA256SUMS.txt" `
             --title "Sentinel $v" `
             --notes-file release-notes.md `
-            --target ${{ github.sha }}
+            --target ${{ github.event.workflow_run.head_sha || github.sha }}
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }

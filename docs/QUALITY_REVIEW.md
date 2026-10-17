@@ -139,3 +139,8 @@ an installer release exists.
 Build & Test uses a concurrency group per branch or pull request with cancellation of superseded runs. Its single coverage-enabled Framework test invocation emits both the TRX result and Cobertura report; it does not run the suite a second time for coverage. Release validation remains independent.
 
 The legacy-sidecar one-shot marker regression supplies a temporary scan root through an internal overload of the production cleanup path. The public production overload retains its fixed-drive scope. The regression verifies actual deletion counts and preserved files without scanning or deleting sidecars elsewhere on the runner. No tests are skipped or filtered out of the normal suite. Windows CI must confirm the resulting wall-clock improvement; Linux cross-builds do not measure it.
+
+
+## Release trigger
+
+Release is triggered by successful Build & Test workflow completion for push events on main/master, or by manual dispatch. Pull-request completions and unsuccessful builds cannot publish. The publishing job checks that the source repository matches this repository and pins both checkout and release target to the successful run's head SHA. An existing release is a no-op; version.txt remains authoritative. Independent Windows release checks still run before packaging.
