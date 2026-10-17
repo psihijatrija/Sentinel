@@ -300,9 +300,10 @@ namespace Sentinel.Agent
                     break;
                 case "/api/dns/repair":
                 case "/api/dns/restore":
+                case "/api/dns/recover":
                     if (method != "POST") { response.StatusCode = 405; response.Close(); return; }
                     if (!ValidateCsrf(request, response)) return;
-                    await HandleDnsApproval(request, response, path.EndsWith("/restore", StringComparison.Ordinal)).ConfigureAwait(false);
+                    await HandleDnsApproval(request, response, path.EndsWith("/restore", StringComparison.Ordinal), path.EndsWith("/recover", StringComparison.Ordinal)).ConfigureAwait(false);
                     break;
                 case "/api/cert/distrust":
                     if (method != "POST") { response.StatusCode = 405; response.Close(); return; }
@@ -414,7 +415,7 @@ namespace Sentinel.Agent
             await WriteJson(response, document.RootElement.Clone()).ConfigureAwait(false);
         }
 
-        private async Task HandleDnsApproval(HttpListenerRequest request, HttpListenerResponse response, bool restore)
+        private async Task HandleDnsApproval(HttpListenerRequest request, HttpListenerResponse response, bool restore, bool recover)
         {
             if (request.ContentLength64 <= 0 || request.ContentLength64 > 4096)
             {
@@ -441,7 +442,7 @@ namespace Sentinel.Agent
                 using var helper = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = executable,
-                    Arguments = (restore ? "--restore-dns " : "--repair-dns ") + encoded,
+                    Arguments = (recover ? "--recover-dns " : restore ? "--restore-dns " : "--repair-dns ") + encoded,
                     UseShellExecute = true, Verb = "runas"
                 }) ?? throw new InvalidOperationException("Administrator approval helper could not start.");
                 bool exited = await Task.Run(() => helper.WaitForExit(55000)).ConfigureAwait(false);

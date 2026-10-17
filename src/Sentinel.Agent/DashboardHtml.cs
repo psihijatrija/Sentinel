@@ -327,6 +327,8 @@ select.rp-input {{ font-family: 'Segoe UI', sans-serif; }}
                     <button class=""btn btn-primary"" id=""dns-repair"" disabled onclick=""approveDnsRepair(false)"">Review and repair DNS</button>
                     <label>Rollback snapshot <select id=""dns-transaction""></select></label>
                     <button class=""btn"" id=""dns-restore"" disabled onclick=""approveDnsRepair(true)"">Restore previous DNS</button>
+                    <select id=""dns-recovery-transaction""></select>
+                    <button class=""btn"" id=""dns-recover"" disabled onclick=""approveDnsRepair(false, true)"">Recover interrupted DNS operation</button>
                     <p id=""dns-message"">No inspection performed.</p><pre id=""dns-detail"" style=""white-space:pre-wrap""></pre>
                 </div>
             </div>
@@ -1321,6 +1323,7 @@ function loadDnsRepair() {{
             dnsInspection = null;
             document.getElementById('dns-repair').disabled = true;
             document.getElementById('dns-restore').disabled = true;
+            document.getElementById('dns-recover').disabled = true;
             document.getElementById('dns-message').textContent = (res && res.error) || 'DNS service unavailable'; return;
         }}
         dnsInspection = res.data;
@@ -1335,29 +1338,40 @@ function loadDnsRepair() {{
 function showDnsAdapter() {{
     var index = Number(document.getElementById('dns-adapter').value);
     var adapter = dnsInspection && dnsInspection.Adapters[index];
-    document.getElementById('dns-detail').textContent = adapter ? JSON.stringify(adapter, null, 2) : 'No adapters available.';
-    document.getElementById('dns-repair').disabled = !adapter || !adapter.Eligible;
+    document.getElementById('dns-detail').textContent = adapter ?
+        'Adapter: ' + adapter.Name + '\nIPv4 DNS: ' + (adapter.Ipv4Static || 'Automatic/DHCP') +
+        '\nIPv6 DNS: ' + (adapter.Ipv6Static || 'Automatic/DHCP') + '\nEffective resolvers: ' + (adapter.EffectiveServers || []).join(', ') +
+        '\n' + adapter.Detail + (adapter.ApprovedProfile ? '\nLast approved profile: ' + adapter.ApprovedProfile +
+        (adapter.ApprovedConfigurationMatches ? ' (matches)' : ' (configuration changed)') : '') : 'No adapters available.';
+    var pending = dnsInspection ? (dnsInspection.Transactions || []).filter(function(r) {{ return adapter && r.AdapterId.toLowerCase() === adapter.Id.toLowerCase() && ['Prepared', 'RestorePrepared', 'RecoveryPrepared', 'RecoveryRequired', 'RollbackFailed'].indexOf(r.Phase) >= 0; }}) : [];
+    document.getElementById('dns-repair').disabled = !adapter || !adapter.Eligible || pending.length > 0;
+    if (pending.length) document.getElementById('dns-detail').textContent += '\nInterrupted transaction requires explicit recovery or administrator review before another repair.';
+    var recovery = pending.filter(function(r) {{ return r.RecoveryAvailable; }});
+    document.getElementById('dns-recovery-transaction').innerHTML = recovery.map(function(r) {{ return '<option value=""' + esc(r.Id) + '"">' + esc(r.Profile + ' — ' + r.Phase + ' — ' + r.CreatedAt) + '</option>'; }}).join('');
+    document.getElementById('dns-recover').disabled = !adapter || !adapter.Eligible || recovery.length === 0;
     var records = dnsInspection ? (dnsInspection.Transactions || []).filter(function(r) {{ return adapter && r.AdapterId.toLowerCase() === adapter.Id.toLowerCase() && r.Phase === 'Verified'; }}) : [];
     document.getElementById('dns-transaction').innerHTML = records.map(function(r) {{ return '<option value=""' + esc(r.Id) + '"">' + esc(r.Profile + ' — ' + r.CreatedAt) + '</option>'; }}).join('');
-    document.getElementById('dns-restore').disabled = !adapter || !adapter.Eligible || records.length === 0;
+    document.getElementById('dns-restore').disabled = !adapter || !adapter.Eligible || pending.length > 0 || records.length === 0;
 }}
-function approveDnsRepair(restore) {{
+function approveDnsRepair(restore, recover) {{
     var adapter = dnsInspection && dnsInspection.Adapters[Number(document.getElementById('dns-adapter').value)];
     if (!adapter || !adapter.Eligible) return;
     var profile = document.getElementById('dns-profile').value;
-    var selected = restore ? (dnsInspection.Transactions || []).filter(function(r) {{ return r.Id === document.getElementById('dns-transaction').value; }})[0] :
+    var snapshotElement = recover ? 'dns-recovery-transaction' : 'dns-transaction';
+    var selected = (restore || recover) ? (dnsInspection.Transactions || []).filter(function(r) {{ return r.Id === document.getElementById(snapshotElement).value; }})[0] :
         (dnsInspection.Profiles || []).filter(function(p) {{ return p.Name === profile; }})[0];
     if (!selected) return;
-    var target = restore ? 'Previous IPv4: ' + (selected.PreviousIpv4 || 'automatic/DHCP') + '; IPv6: ' + (selected.PreviousIpv6 || 'automatic/DHCP') :
+    var target = (restore || recover) ? 'Previous IPv4: ' + (selected.PreviousIpv4 || 'automatic/DHCP') + '; IPv6: ' + (selected.PreviousIpv6 || 'automatic/DHCP') :
         'IPv4: ' + selected.Ipv4 + '; IPv6: ' + selected.Ipv6;
-    if (!confirm((restore ? 'Restore the saved previous DNS settings' : 'Set DNS to ' + profile) + ' for ' + adapter.Name + '? ' + target + '. Windows will request administrator approval. Configuration verification does not prove the network is clean.')) return;
+    if (!confirm((recover ? 'Recover the interrupted operation to its original DNS settings' : restore ? 'Restore the saved previous DNS settings' : 'Set DNS to ' + profile) + ' for ' + adapter.Name + '? ' + target + '. Windows will request administrator approval. Configuration verification does not prove the network is clean.')) return;
     var body = JSON.stringify({{ AdapterId: adapter.Id, Profile: profile, ExpectedFingerprint: adapter.Fingerprint,
-        TransactionId: restore ? document.getElementById('dns-transaction').value : '' }});
+        TransactionId: (restore || recover) ? document.getElementById(snapshotElement).value : '' }});
     ensureCsrf(function(csrf) {{
         document.getElementById('dns-repair').disabled = true;
         document.getElementById('dns-restore').disabled = true;
+        document.getElementById('dns-recover').disabled = true;
         document.getElementById('dns-message').textContent = 'Waiting for administrator approval and verified result…';
-        apiCall(restore ? '/api/dns/restore' : '/api/dns/repair', {{ method: 'POST',
+        apiCall(recover ? '/api/dns/recover' : restore ? '/api/dns/restore' : '/api/dns/repair', {{ method: 'POST',
             headers: {{ 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' }}, body: body }}, function(res) {{
             if (!res || !res.ok) alert((res && res.error) || 'DNS operation failed');
             loadDnsRepair();

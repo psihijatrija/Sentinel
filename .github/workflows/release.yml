@@ -89,9 +89,9 @@ jobs:
           dotnet build Sentinel.sln -c Release -warnaserror
           if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
           # Check import boundaries and log-derived safety regressions before the longer suite.
-          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~DnsRepairServiceTests|FullyQualifiedName~DnsRepairAuthorizationTests|FullyQualifiedName~NativeResolverCompletenessTests|FullyQualifiedName~NativeProcessExitVerifierTests|FullyQualifiedName~ProcessTreeWindowsTests|FullyQualifiedName~MonitorGroupTests|FullyQualifiedName~JsonlEventLoggerTests|FullyQualifiedName~RootStoreGuardTests|FullyQualifiedName~NamedPipeMonitorTests|FullyQualifiedName~CveApplicabilityRegressionTests"
+          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 3m --blame-hang-dump-type none --logger "trx;LogFileName=safety-tests.trx" --results-directory TestResults/Safety --filter "FullyQualifiedName~DnsRepairServiceTests|FullyQualifiedName~DnsRepairAuthorizationTests|FullyQualifiedName~NativeResolverCompletenessTests|FullyQualifiedName~NativeProcessExitVerifierTests|FullyQualifiedName~ProcessTreeWindowsTests|FullyQualifiedName~MonitorGroupTests|FullyQualifiedName~JsonlEventLoggerTests|FullyQualifiedName~RootStoreGuardTests|FullyQualifiedName~NamedPipeMonitorTests|FullyQualifiedName~CveApplicabilityRegressionTests"
           if ($LASTEXITCODE -ne 0) { throw "Release safety regression checks failed; release blocked" }
-          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --logger "trx;LogFileName=release-tests.trx" --results-directory TestResults
+          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 3m --blame-hang-dump-type none --logger "trx;LogFileName=release-tests.trx" --results-directory TestResults
           if ($LASTEXITCODE -ne 0) { throw "Windows regression tests failed; release blocked" }
           [xml]$trx = Get-Content TestResults/release-tests.trx -Raw
           if ([int]$trx.TestRun.ResultSummary.Counters.executed -lt 1) { throw "No Windows tests executed; release blocked" }
@@ -135,23 +135,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-test-results
-          path: TestResults/*.trx
+          path: |
+            TestResults/**/*.trx
+            TestResults/**/*Sequence*.xml
           if-no-files-found: ignore
 
       - name: Summarize Windows test results
         if: always()
         shell: pwsh
-        run: |
-          if (Test-Path TestResults/release-tests.trx) {
-            [xml]$trx = Get-Content TestResults/release-tests.trx -Raw
-            $c = $trx.TestRun.ResultSummary.Counters
-            "Windows Framework tests: executed=$($c.executed), passed=$($c.passed), failed=$($c.failed), notExecuted=$($c.notExecuted)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
-            foreach ($result in $trx.SelectNodes("//*[local-name()='UnitTestResult'][@outcome='Failed']")) {
-              "Failed: $($result.testName)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
-              $message = $result.SelectSingleNode(".//*[local-name()='Message']")
-              if ($message) { $message.InnerText | Out-File $env:GITHUB_STEP_SUMMARY -Append }
-            }
-          }
+        run: ./tools/validation/SummarizeWindowsTests.ps1
 
       # build.ps1 requires the Inno Setup compiler (ISCC.exe). The Chocolatey package
       # installs it to C:\Program Files (x86)\Inno Setup 6\ - one of the paths build.ps1

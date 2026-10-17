@@ -1,6 +1,6 @@
 # Sentinel documentation
 
-Current documentation baseline: **3.2.4**, reviewed 2026-10-17. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
+Current documentation baseline: **3.2.5**, reviewed 2026-10-17. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
 
 ## Current guidance
 

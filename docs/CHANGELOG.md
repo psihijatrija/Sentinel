@@ -1,4 +1,15 @@
 # Changelog
+## [3.2.5] - 2026-10-17
+### Added
+- Explicit administrator-approved recovery of interrupted DNS transactions, backed by durable starting/target states. Stale previews, unrelated DNS changes, changed protocol support, missing legacy plans and newer transactions are refused. Unresolved transactions block stacking new repairs.
+- Dashboard recovery selection and original-state preview through the existing UAC and actual IPC administrator-token checks. Failed recovery preserves the original target and attempts rollback to the newly approved state.
+- Separate disposable Windows DNS mutation job covering actual resolver writes, original/automatic restoration, cancellation rollback and disk-backed recovery with a new service instance. The wrapper retains an independent Windows-cmdlet restore and kills the test process tree on timeout. Regular test runs skip this guarded mutation fixture.
+### Fixed
+- Recheck the DNS preview after snapshot/audit persistence, before the first mutation. Allow guest hardware-facing Ethernet adapters while continuing to exclude known host virtual switches and tunnels.
+- Bound stalled Windows tests with hang diagnostics, retain sequence files, and annotate failed/incomplete tests rather than letting a hung host silently delay release.
+### Validation
+- Zero-warning/error solution cross-build, 87 portable production response/transaction regressions and 16 dashboard checks pass locally. PowerShell syntax, fail-closed runner guards and failure/hang summaries are checked locally; full Windows and live DNS results remain required in CI. Interactive UAC, SYSTEM-only journal ACL integration, reboot/power-loss, IPv6-only hardware and changing DHCP leases remain separate validation scopes.
+
 ## [3.2.4] - 2026-10-17
 ### Added
 - Dashboard DNS inspection and administrator-approved fixed resolver profiles for eligible unmanaged Ethernet/Wi-Fi adapters, using authenticated IPC and actual caller-token authorization. Agent remains unprivileged.

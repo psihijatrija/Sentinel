@@ -1,10 +1,10 @@
 # Detection and remediation coverage
 
-This is an engineering scope inventory for 3.2.4, not a commercial-product parity claim. Vendor features vary and require independent comparative testing.
+This is an engineering scope inventory for 3.2.5, not a commercial-product parity claim. Vendor features vary and require independent comparative testing.
 
 | Area | Current capability | Remaining work / limits |
 | --- | --- | --- |
-| DNS configuration | Passive IPv4/IPv6/effective resolver drift; explicit administrator profile repair, snapshots, read-back and rollback | Disposable Windows adapter mutation/reset validation; authenticated answers, DHCP/router diagnosis, profile overrides and enterprise policy coverage |
+| DNS configuration | Passive IPv4/IPv6/effective resolver drift; explicit administrator profile repair, snapshots, read-back, rollback and explicit interrupted-operation recovery | New disposable Windows DNS job must pass; authenticated answers, DHCP/router diagnosis, profile overrides and enterprise policy coverage |
 | Process containment | Authorized behavioral responses terminate a pinned, rescanned process tree and report refused/failed descendants | Continuous race/privilege testing; no kernel enforcement or guarantee against administrator attackers |
 | Files and DLLs | Quarantine/containment outcomes distinguish verified effects, absent, deferred and failed files | Locked-module recovery and reinfection scenarios need continuing integration coverage; detection is not proof every file was removed |
 | Firewall | Local/eligible local-GPO inbound reconciliation, approvals, rollback and effective-state reporting; endpoint external self-block | Domain GPO requires domain administration; see Windows validation checklist for reboot/interactive gaps |
@@ -16,7 +16,7 @@ This is an engineering scope inventory for 3.2.4, not a commercial-product parit
 
 ## Next priorities
 
-1. Validate DNS repair, automatic-mode restoration, failures and restart recovery on disposable Windows adapters, including IPv6-only and DHCP changes. Add explicit recovery for interrupted transactions before claiming crash-safe restoration.
+1. Complete native DNS validation using the new disposable Windows job. Explicit recovery now uses durable starting/target states and fresh administrator approval; legacy or unrelated states are refused. Continue SYSTEM-journal ACL, interactive UAC, real reboot/power-loss, IPv6-only and DHCP-change scenarios before claiming universal crash-safe restoration.
 2. Build the same preview, administrator approval, protected snapshot, bounded action and verified receipt contract for hosts-file and proxy/PAC recovery. Preserve legitimate enterprise configuration and show unsupported policy scopes.
 3. Add targeted browser and persistence recovery only where ownership and the intended restored state can be established. Avoid a blanket reset that destroys legitimate configuration.
 4. Run an independent adversarial review of privileged IPC, repair snapshots, containment races and false positives, then publish a repeatable scenario-based coverage report. A passing unit suite does not establish commercial detection parity.

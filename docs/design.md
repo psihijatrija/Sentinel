@@ -1,3 +1,7 @@
+## Interrupted DNS recovery (3.2.5)
+
+`DnsRepairRecord` saves PendingFrom/PendingTarget alongside the original snapshot before mutation. The explicit dns_recover operation shares the real administrator-token/UAC boundary. Recovery accepts only saved static family combinations, unchanged protocol support, a fresh fingerprint and no newer transaction; it never runs automatically at startup. Failed recovery rolls back to the newly approved current state while retaining the original target. A disposable Windows job tests the production native backend/audit/transaction code with a temporary fixture journal and an independent emergency restore; it does not claim production SYSTEM-journal ACL or reboot/power-loss validation.
+
 ## DNS repair and observation (3.2.4)
 
 `DnsRepairService` coordinates injected configuration, protected journal and audit backends. The dashboard previews fixed resolver profiles, then a short-lived UAC helper sends an authenticated operation to the service; the service validates the actual caller token and the preview fingerprint. Snapshots and audit acceptance precede native Windows DNS settings changes. Static/effective read-back, cache flushing, rollback and explicit receipts prevent attempted changes from appearing verified. IPv4/IPv6/DHCP drift stays Tier2 LogOnly; startup observations never authorize DNS restoration. See [DNS repair](DNS_REPAIR.md) and its live-Windows validation limits. These controls supersede historical DNS-lock descriptions below.
@@ -45,7 +49,7 @@ The privileged service still contains system sensors and the response engine: th
 These controls reduce exposure; they do not confine an already-compromised SYSTEM process. Such a process can potentially alter firewall rules or use other processes/OS services. Malicious local files, telemetry, dependencies, and IPC remain attack surfaces. The localhost dashboard is still active and authenticated. There is no longer an off-host evidence mirror; administrators can destroy local evidence. No kernel/PPL boundary is claimed.
 
 
-**Version: 3.2.4**
+**Version: 3.2.5**
 
 ---
 

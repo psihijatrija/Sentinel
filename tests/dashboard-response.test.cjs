@@ -99,7 +99,7 @@ test('verified offline firewall policy can display active protection', () => {
 
 function dnsContext(eligible = true) {
   const elements = {
-    'dns-adapter': { value: '0' }, 'dns-profile': { value: 'Quad9' }, 'dns-transaction': { value: 'snapshot' }
+    'dns-adapter': { value: '0' }, 'dns-profile': { value: 'Quad9' }, 'dns-transaction': { value: 'snapshot' }, 'dns-recovery-transaction': { value: 'snapshot' }
   };
   const calls = [];
   const context = vm.createContext({
@@ -140,4 +140,32 @@ test('DNS restoration identifies the snapshot and displays automatic configurati
   assert.match(calls[0].confirmation, /automatic\/DHCP/);
   assert.equal(calls[1].endpoint, '/api/dns/restore');
   assert.equal(JSON.parse(calls[1].options.body).TransactionId, 'snapshot');
+});
+
+
+test('interrupted DNS recovery previews the original settings and uses its own approved operation', () => {
+  const { context, calls } = dnsContext();
+  context.approveDnsRepair(false, true);
+  assert.match(calls[0].confirmation, /Recover the interrupted operation/);
+  assert.match(calls[0].confirmation, /automatic\/DHCP/);
+  assert.equal(calls[1].endpoint, '/api/dns/recover');
+  assert.equal(calls[1].options.headers['X-CSRF-Token'], 'csrf-fixture');
+  assert.equal(JSON.parse(calls[1].options.body).TransactionId, 'snapshot');
+});
+
+
+test('pending DNS operations block new repairs and expose only recoverable snapshots', () => {
+  const { context, elements } = dnsContext();
+  context.esc = String;
+  context.dnsInspection.Transactions = [{ Id: 'pending', AdapterId: 'adapter', Phase: 'Prepared', RecoveryAvailable: true }];
+  vm.runInContext(sourceOf('showDnsAdapter'), context);
+  context.showDnsAdapter();
+  assert.equal(elements['dns-repair'].disabled, true);
+  assert.equal(elements['dns-restore'].disabled, true);
+  assert.equal(elements['dns-recover'].disabled, false);
+  assert.match(elements['dns-detail'].textContent, /Interrupted transaction/);
+  assert.doesNotMatch(elements['dns-detail'].textContent, /preview/);
+  context.dnsInspection.Transactions[0].RecoveryAvailable = false;
+  context.showDnsAdapter();
+  assert.equal(elements['dns-recover'].disabled, true);
 });

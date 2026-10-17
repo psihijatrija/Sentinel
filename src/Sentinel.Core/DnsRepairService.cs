@@ -57,6 +57,9 @@ namespace Sentinel.Core
         public string Phase { get; set; } = "Prepared";
         public DnsAdapterState Before { get; set; } = new();
         public DnsAdapterState? Applied { get; set; }
+        // Written before mutation; constrains explicit recovery after a process crash.
+        public DnsAdapterState? PendingFrom { get; set; }
+        public DnsAdapterState? PendingTarget { get; set; }
     }
 
     public sealed class DnsRepairReceipt
@@ -120,11 +123,12 @@ namespace Sentinel.Core
             }
             return new
             {
-            Adapters = adapters, LastResult = _last,
-            Transactions = records.Select(r => new { r.Id, r.CreatedAt, r.Profile, r.Phase, AdapterId = r.Before.Id,
-                PreviousIpv4 = r.Before.Ipv4Static, PreviousIpv6 = r.Before.Ipv6Static, PreviousEffectiveServers = r.Before.EffectiveServers }).ToArray(),
-            Profiles = new[] { "Quad9", "Cloudflare", "Google" }.Select(name => new { Name = name, Ipv4 = Profile(name).V4, Ipv6 = Profile(name).V6 }).ToArray(),
-            Scope = "Offline configuration inspection. An unknown resolver is not proof of hijacking. Managed policies and VPN/tunnel adapters require separate administration."
+                Adapters = adapters, LastResult = _last,
+                Transactions = records.Select(r => new { r.Id, r.CreatedAt, r.Profile, r.Phase, AdapterId = r.Before.Id,
+                PreviousIpv4 = r.Before.Ipv4Static, PreviousIpv6 = r.Before.Ipv6Static, PreviousEffectiveServers = r.Before.EffectiveServers,
+                RecoveryAvailable = IsPending(r) && r.PendingFrom != null && r.PendingTarget != null }).ToArray(),
+                Profiles = new[] { "Quad9", "Cloudflare", "Google" }.Select(name => new { Name = name, Ipv4 = Profile(name).V4, Ipv6 = Profile(name).V6 }).ToArray(),
+                Scope = "Offline configuration inspection. An unknown resolver is not proof of hijacking. Managed policies and VPN/tunnel adapters require separate administration."
             };
         }
         internal static (string V4, string V6) Profile(string profile) => profile switch
@@ -144,6 +148,26 @@ namespace Sentinel.Core
         {
             if (!state.InspectionComplete || !state.Eligible || state.PolicyManaged || !(state.SupportsIpv4 || state.SupportsIpv6))
                 throw new InvalidOperationException("Adapter is unavailable, policy-managed or outside the supported repair scope.");
+        }
+        private static bool IsPending(DnsRepairRecord record) => record.Phase == "Prepared" || record.Phase == "RestorePrepared"
+            || record.Phase == "RecoveryPrepared" || record.Phase == "RecoveryRequired" || record.Phase == "RollbackFailed";
+        private static DnsAdapterState Target(DnsAdapterState current, string v4, string v6, string[] effective) => new()
+        {
+            Id = current.Id, Name = current.Name, SupportsIpv4 = current.SupportsIpv4, SupportsIpv6 = current.SupportsIpv6,
+            Eligible = current.Eligible, InspectionComplete = current.InspectionComplete, PolicyManaged = current.PolicyManaged,
+            Ipv4Static = v4, Ipv6Static = v6, EffectiveServers = effective
+        };
+        private static bool WithinPendingOperation(DnsAdapterState current, DnsRepairRecord record)
+        {
+            var from = record.PendingFrom; var target = record.PendingTarget;
+            if (from == null || target == null || current.SupportsIpv4 != from.SupportsIpv4 || current.SupportsIpv6 != from.SupportsIpv6)
+                return false;
+            // Either family may have changed before the crash or during rollback. Anything
+            // outside those exact saved static values is newer/unexplained state: refuse.
+            bool FamilyMatches(string value, string before, string after)
+                => SameServers(Servers(value), Servers(before)) || SameServers(Servers(value), Servers(after));
+            return (!current.SupportsIpv4 || FamilyMatches(current.Ipv4Static, from.Ipv4Static, target.Ipv4Static))
+                && (!current.SupportsIpv6 || FamilyMatches(current.Ipv6Static, from.Ipv6Static, target.Ipv6Static));
         }
         private void Apply(DnsAdapterState before, string v4, string v6, CancellationToken ct)
         {
@@ -170,12 +194,13 @@ namespace Sentinel.Core
             throw new InvalidOperationException("Configured and effective DNS read-back did not match within the verification budget.");
         }
 
-        public async Task<DnsRepairReceipt> ExecuteAsync(DnsRepairRequest request, bool restore, CancellationToken ct)
+        public async Task<DnsRepairReceipt> ExecuteAsync(DnsRepairRequest request, bool restore, CancellationToken ct, bool recover = false)
         {
-            var receipt = new DnsRepairReceipt { Operation = restore ? "Restore" : "Repair" };
+            var receipt = new DnsRepairReceipt { Operation = recover ? "Recover" : restore ? "Restore" : "Repair" };
             await _gate.WaitAsync(ct).ConfigureAwait(false);
             DnsRepairRecord? record = null;
             bool mutationStarted = false;
+            string? priorPhase = null;
             try
             {
                 if (!Guid.TryParse(request.AdapterId, out _)) throw new ArgumentException("Invalid adapter identity.");
@@ -187,19 +212,32 @@ namespace Sentinel.Core
                     throw new InvalidOperationException("Network configuration changed. Inspect again before approving.");
                 string v4, v6;
                 string[] effective;
-                if (restore)
+                if (restore || recover)
                 {
                     record = _journal.ReadAll().SingleOrDefault(r => r.Id == request.TransactionId && r.Before.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase));
-                    if (record == null || record.Phase != "Verified" || record.Applied == null)
-                        throw new InvalidOperationException("No verified repair snapshot is available for restoration.");
-                    if (record.Applied.Fingerprint != current.Fingerprint)
-                        throw new InvalidOperationException("DNS changed since repair. Restoration would overwrite newer configuration; inspect it first.");
+                    if (record == null) throw new InvalidOperationException("No matching DNS snapshot is available.");
+                    if (recover)
+                    {
+                        if (_journal.ReadAll().Any(r => r.Id != record.Id && r.CreatedAt > record.CreatedAt && r.Before.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase))
+                            || !IsPending(record) || !WithinPendingOperation(current, record))
+                            throw new InvalidOperationException("Interrupted DNS recovery refused: current settings are outside the saved operation, or its recovery plan is unavailable.");
+                    }
+                    else
+                    {
+                        if (record.Phase != "Verified" || record.Applied == null)
+                            throw new InvalidOperationException("No verified repair snapshot is available for restoration.");
+                        if (record.Applied.Fingerprint != current.Fingerprint)
+                            throw new InvalidOperationException("DNS changed since repair. Restoration would overwrite newer configuration; inspect it first.");
+                    }
                     v4 = record.Before.Ipv4Static; v6 = record.Before.Ipv6Static; effective = record.Before.EffectiveServers;
                     receipt.TransactionId = record.Id;
-                    record.Phase = "RestorePrepared";
+                    priorPhase = record.Phase;
+                    record.Phase = recover ? "RecoveryPrepared" : "RestorePrepared";
                 }
                 else
                 {
+                    if (_journal.ReadAll().Any(r => IsPending(r) && r.Before.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException("An unresolved DNS transaction requires recovery or administrator review before another repair.");
                     var profile = Profile(request.Profile);
                     v4 = profile.V4; v6 = profile.V6;
                     effective = (current.SupportsIpv4 ? Servers(v4) : Array.Empty<string>())
@@ -208,21 +246,26 @@ namespace Sentinel.Core
                         Profile = request.Profile, Before = current };
                     receipt.TransactionId = record.Id;
                 }
+                record.PendingFrom = current;
+                record.PendingTarget = Target(current, v4, v6, effective);
                 // Durable rollback evidence and audit acceptance are required before mutation.
                 _journal.Save(record);
                 await _audit.WriteBeforeAsync(record, receipt.Operation, ct).ConfigureAwait(false);
                 ct.ThrowIfCancellationRequested();
+                if (Read(current.Id).Fingerprint != current.Fingerprint)
+                    throw new InvalidOperationException("DNS changed while the snapshot/audit was being saved. Inspect again before approving.");
                 mutationStarted = true;
                 Apply(current, v4, v6, ct);
                 receipt.After = await Verify(current.Id, v4, v6, effective, ct).ConfigureAwait(false);
                 receipt.ConfigurationVerified = true;
                 receipt.CacheFlushed = _backend.FlushCache();
                 if (!receipt.CacheFlushed) throw new InvalidOperationException("DNS configuration matched, but cache flushing failed.");
-                record.Phase = restore ? "Restored" : "Verified";
-                if (!restore) record.Applied = receipt.After;
+                record.Phase = recover ? "Recovered" : restore ? "Restored" : "Verified";
+                if (!restore && !recover) record.Applied = receipt.After;
                 _journal.Save(record);
                 receipt.Status = "Verified";
-                receipt.Detail = restore ? "Previous DNS configuration restored and read back; this does not establish it was trustworthy."
+                receipt.Detail = recover ? "Interrupted operation recovered to its original DNS settings and read back; resolver trust remains unverified."
+                    : restore ? "Previous DNS configuration restored and read back; this does not establish it was trustworthy."
                     : "Selected resolver configuration read back and cache flushed. No DNS-answer or router verification was performed.";
             }
             catch (Exception ex)
@@ -231,9 +274,9 @@ namespace Sentinel.Core
                 receipt.ConfigurationVerified = false;
                 receipt.CacheFlushed = false;
                 receipt.Detail = ex.Message;
-                if (!mutationStarted && restore && record != null && record.Phase == "RestorePrepared")
+                if (!mutationStarted && priorPhase != null && record != null)
                 {
-                    record.Phase = "Verified";
+                    record.Phase = priorPhase;
                     try { _journal.Save(record); }
                     catch (Exception journalError) { receipt.Detail += " Journal requires review: " + journalError.Message; }
                 }
@@ -246,7 +289,7 @@ namespace Sentinel.Core
                             receipt.Before.EffectiveServers, CancellationToken.None).ConfigureAwait(false);
                         receipt.RollbackVerified = _backend.FlushCache();
                         if (!receipt.RollbackVerified) throw new InvalidOperationException("Rollback cache flush failed.");
-                        record.Phase = restore ? "Verified" : "RolledBack";
+                        record.Phase = recover ? "RecoveryRequired" : restore ? "Verified" : "RolledBack";
                     }
                     catch (Exception rollbackError)
                     {

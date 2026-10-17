@@ -55,9 +55,10 @@ namespace Sentinel.Tests
         private sealed class Audit : IDnsRepairAudit
         {
             public bool FailBefore, FailResult;
+            public Action? OnBefore;
             public List<string> Order = new();
             public Task WriteBeforeAsync(DnsRepairRecord record, string operation, CancellationToken ct)
-            { Order.Add("audit"); if (FailBefore) throw new InvalidOperationException("Audit unavailable"); return Task.CompletedTask; }
+            { Order.Add("audit"); OnBefore?.Invoke(); if (FailBefore) throw new InvalidOperationException("Audit unavailable"); return Task.CompletedTask; }
             public Task WriteResultAsync(DnsRepairReceipt receipt, CancellationToken ct)
             { if (FailResult) throw new InvalidOperationException("Final audit unavailable"); return Task.CompletedTask; }
         }
@@ -201,6 +202,116 @@ namespace Sentinel.Tests
             using var drift = JsonDocument.Parse(JsonSerializer.Serialize(service.Inspect()));
             Assert.False(drift.RootElement.GetProperty("Adapters")[0].GetProperty("ApprovedConfigurationMatches").GetBoolean());
             Assert.Equal(2, b.Sets); // inspection never remediates on its own
+        }
+
+        [Fact]
+        public async Task ConfigurationChangeDuringDurablePreparationRefusesBeforeMutation()
+        {
+            var b = new Backend(); var j = new Journal();
+            var result = await Service(b, j, new Audit { OnBefore = () => b.State.Ipv4Static = "203.0.113.53" })
+                .ExecuteAsync(Request(b), false, default);
+            Assert.Equal("Refused", result.Status); Assert.Equal(0, b.Sets);
+            Assert.Equal("203.0.113.53", b.State.Ipv4Static);
+        }
+
+        private static async Task<DnsRepairRecord> Prepared(Backend backend, Journal journal)
+        {
+            var receipt = await Service(backend, journal, new Audit { FailBefore = true }).ExecuteAsync(Request(backend), false, default);
+            Assert.Equal("Refused", receipt.Status);
+            return Assert.Single(journal.Records);
+        }
+
+        [Theory]
+        [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)]
+        public async Task FreshServiceRecoversEachInterruptedFamilyCombinationToTheOriginalSnapshot(int changed)
+        {
+            var b = new Backend(); var j = new Journal(); string before = b.State.Fingerprint;
+            var pending = await Prepared(b, j);
+            if ((changed & 1) != 0) b.SetServers(b.State.Id, AddressFamily.InterNetwork, pending.PendingTarget!.Ipv4Static);
+            if ((changed & 2) != 0) b.SetServers(b.State.Id, AddressFamily.InterNetworkV6, pending.PendingTarget!.Ipv6Static);
+            var request = Request(b); request.TransactionId = pending.Id;
+            var restarted = Service(b, j, new Audit());
+            using var inspection = JsonDocument.Parse(JsonSerializer.Serialize(restarted.Inspect()));
+            Assert.True(inspection.RootElement.GetProperty("Transactions")[0].GetProperty("RecoveryAvailable").GetBoolean());
+            var result = await restarted.ExecuteAsync(request, false, default, recover: true);
+            Assert.Equal("Recover", result.Operation); Assert.Equal("Verified", result.Status);
+            Assert.Equal(before, b.State.Fingerprint);
+            Assert.Equal("Recovered", Assert.Single(j.Records).Phase);
+            Assert.Equal("Verified", (await restarted.ExecuteAsync(Request(b), false, default)).Status);
+        }
+
+        [Theory]
+        [InlineData("RestorePrepared")] [InlineData("RecoveryPrepared")]
+        [InlineData("RecoveryRequired")] [InlineData("RollbackFailed")]
+        public async Task RecoveryHandlesInterruptedRestoreAndRollbackPhases(string phase)
+        {
+            var b = new Backend(); var j = new Journal(); string original = b.State.Fingerprint;
+            await Service(b, j, new Audit()).ExecuteAsync(Request(b), false, default);
+            var record = Assert.Single(j.Records);
+            record.Phase = phase; record.PendingFrom = Copy(b.State); record.PendingTarget = Copy(record.Before);
+            b.SetServers(b.State.Id, AddressFamily.InterNetwork, record.Before.Ipv4Static);
+            var request = Request(b); request.TransactionId = record.Id;
+            var result = await Service(b, j, new Audit()).ExecuteAsync(request, false, default, recover: true);
+            Assert.Equal("Verified", result.Status); Assert.Equal(original, b.State.Fingerprint);
+        }
+
+        [Theory]
+        [InlineData("unrelated")] [InlineData("legacy")] [InlineData("protocol")]
+        [InlineData("newer")] [InlineData("stale")] [InlineData("wrong-snapshot")]
+        public async Task RecoveryRefusesUnexplainedOrUnapprovedStateWithoutMutation(string scenario)
+        {
+            var b = new Backend(); var j = new Journal(); var record = await Prepared(b, j);
+            var request = Request(b); request.TransactionId = record.Id;
+            if (scenario == "unrelated") b.State.Ipv4Static = "203.0.113.53";
+            if (scenario == "legacy") record.PendingTarget = null;
+            if (scenario == "protocol") b.State.SupportsIpv6 = false;
+            if (scenario == "newer") j.Records.Add(new DnsRepairRecord { Id = Guid.NewGuid().ToString("N"),
+                CreatedAt = record.CreatedAt.AddSeconds(1), Before = Copy(b.State), Phase = "Verified" });
+            if (scenario == "wrong-snapshot") request.TransactionId = Guid.NewGuid().ToString("N");
+            if (scenario != "stale") request.ExpectedFingerprint = b.State.Fingerprint;
+            else b.State.EffectiveServers = new[] { "192.0.2.53" };
+            var result = await Service(b, j, new Audit()).ExecuteAsync(request, false, default, recover: true);
+            Assert.Equal("Refused", result.Status); Assert.Equal(0, b.Sets);
+        }
+
+        [Fact]
+        public async Task PendingTransactionBlocksNewRepairAndCannotBeUsedAsOrdinaryRestore()
+        {
+            var b = new Backend(); var j = new Journal(); var pending = await Prepared(b, j);
+            var service = Service(b, j, new Audit()); var request = Request(b); request.TransactionId = pending.Id;
+            Assert.Equal("Refused", (await service.ExecuteAsync(request, false, default)).Status);
+            Assert.Equal("Refused", (await service.ExecuteAsync(request, true, default)).Status);
+            Assert.Equal(0, b.Sets);
+        }
+
+        [Fact]
+        public async Task FailedRecoveryRollsBackToFreshlyApprovedStateAndRetainsOriginalRecoveryTarget()
+        {
+            var b = new Backend(); var j = new Journal(); var pending = await Prepared(b, j);
+            b.SetServers(b.State.Id, AddressFamily.InterNetwork, pending.PendingTarget!.Ipv4Static);
+            string interrupted = b.State.Fingerprint;
+            b.FailSetAt = b.Sets + 2;
+            var request = Request(b); request.TransactionId = pending.Id;
+            var failed = await Service(b, j, new Audit()).ExecuteAsync(request, false, default, recover: true);
+            Assert.Equal("Failed", failed.Status); Assert.True(failed.RollbackVerified);
+            Assert.Equal(interrupted, b.State.Fingerprint);
+            Assert.Equal("RecoveryRequired", Assert.Single(j.Records).Phase);
+            Assert.Empty(Assert.Single(j.Records).Before.Ipv4Static);
+            var retried = await Service(b, j, new Audit()).ExecuteAsync(RequestForRecovery(b, pending.Id), false, default, recover: true);
+            Assert.Equal("Verified", retried.Status); Assert.Empty(b.State.Ipv4Static); Assert.Empty(b.State.Ipv6Static);
+        }
+
+        private static DnsRepairRequest RequestForRecovery(Backend backend, string id)
+        { var request = Request(backend); request.TransactionId = id; return request; }
+
+        [Fact]
+        public async Task RecoveryAuditRefusalKeepsThePendingTransactionAndNeverMutates()
+        {
+            var b = new Backend(); var j = new Journal(); var pending = await Prepared(b, j);
+            var result = await Service(b, j, new Audit { FailBefore = true }).ExecuteAsync(
+                RequestForRecovery(b, pending.Id), false, default, recover: true);
+            Assert.Equal("Refused", result.Status); Assert.Equal("Prepared", Assert.Single(j.Records).Phase);
+            Assert.Equal(0, b.Sets);
         }
 
         [Fact]

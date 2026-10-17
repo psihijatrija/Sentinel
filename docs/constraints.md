@@ -1,6 +1,6 @@
 # Sentinel - Constraints
 
-**Version: 3.2.4**
+**Version: 3.2.5**
 
 ---
 

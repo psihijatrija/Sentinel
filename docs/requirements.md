@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 3.2.4**
+**Version: 3.2.5**
 
 ---
 
@@ -420,3 +420,7 @@ Certificate purpose/private-key classification is not implemented by the current
 ### FR-35: Administrator-approved DNS repair (3.2.4)
 
 Eligible unmanaged adapters support fixed public-resolver profiles and saved-state restoration through authenticated IPC with a real elevated administrator caller. A fresh configuration fingerprint, protected durable snapshot and accepted pre-action audit are required before mutation. Both enabled address families, effective resolver read-back and cache flushing contribute to verification; failure/cancellation attempts bounded rollback. Partial and refused outcomes remain visible. No external DNS queries, automatic Tier2 repair, router-clean verdict or commercial-product parity is implied. See [DNS repair](DNS_REPAIR.md) for platform validation and recovery limits.
+
+### FR-36: Interrupted DNS recovery (3.2.5)
+
+Persist starting and intended states before each DNS mutation. After restart, an administrator may explicitly recover an unresolved transaction to its original snapshot using a fresh preview. Only static values within the saved family states, unchanged protocol support and no newer transaction permit recovery; legacy/missing plans and unrelated settings are refused. An unresolved transaction blocks stacking a new repair. Recovery failures roll back to the freshly approved state and retain the original recovery target. No startup auto-mutation is permitted. Native validation runs only under the guarded disposable Windows fixture, with independent emergency restoration.

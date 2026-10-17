@@ -53,7 +53,7 @@ namespace Sentinel.Service
         public static async Task Main(string[] args)
         {
             // Short-lived elevated client: privileged mutation still occurs inside the service.
-            if (args.Length == 2 && (args[0] == "--repair-dns" || args[0] == "--restore-dns"))
+            if (args.Length == 2 && (args[0] == "--repair-dns" || args[0] == "--restore-dns" || args[0] == "--recover-dns"))
             {
                 if (UserSessionPrivilege.IsCurrentProcessUnprivileged()) { Environment.ExitCode = 5; return; }
                 try
@@ -61,7 +61,7 @@ namespace Sentinel.Service
                     if (args[1].Length > 8192) throw new ArgumentException("DNS request is too large.");
                     string body = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
                     _ = System.Text.Json.JsonSerializer.Deserialize<DnsRepairRequest>(body) ?? throw new ArgumentException("Invalid request.");
-                    string? result = await ServiceAgentIpcClient.RequestAsync(args[0] == "--restore-dns" ? "dns_restore" : "dns_repair", body, 45000);
+                    string? result = await ServiceAgentIpcClient.RequestAsync(args[0] == "--recover-dns" ? "dns_recover" : args[0] == "--restore-dns" ? "dns_restore" : "dns_repair", body, 45000);
                     if (result == null) { Environment.ExitCode = 1; return; }
                     Console.WriteLine(result);
                     using var document = System.Text.Json.JsonDocument.Parse(result);

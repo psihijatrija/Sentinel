@@ -116,3 +116,7 @@ post-task test hook verifies it before it's called done.
 ## Remediation expansion (3.2.4)
 
 Administrator-approved DNS profile repair is implemented with explicit verification limits. The [capability matrix](CAPABILITY_MATRIX.md) prioritizes disposable-adapter validation, interrupted transaction recovery, hosts/proxy recovery, browser/persistence recovery and an independent adversarial review. These are separate deliverables, not a claim of commercial parity.
+
+## DNS recovery and validation (3.2.5)
+
+New DNS transactions save intended/start states before mutation. Explicit administrator recovery handles interrupted family changes and refuses unrelated/newer settings. A dedicated disposable Windows job exercises actual native changes and independent emergency restoration; its successful execution is required before native validation is claimed. The regular suite has bounded hang diagnostics so an incomplete Windows test remains a visible failure. Hosts/proxy recovery follows this validation work.

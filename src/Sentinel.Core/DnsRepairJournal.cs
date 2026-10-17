@@ -43,7 +43,9 @@ namespace Sentinel.Core
                 var info = new FileInfo(file);
                 if (info.Length > 65536 || (info.Attributes & FileAttributes.ReparsePoint) != 0)
                     throw new IOException("Invalid DNS repair journal file.");
-                var record = JsonSerializer.Deserialize<DnsRepairRecord>(File.ReadAllText(file));
+                using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                var record = JsonSerializer.Deserialize<DnsRepairRecord>(reader.ReadToEnd());
                 if (record == null || !Guid.TryParseExact(record.Id, "N", out _) || Path.GetFileNameWithoutExtension(file) != record.Id)
                     throw new IOException("Invalid DNS repair journal identity.");
                 records.Add(record);

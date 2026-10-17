@@ -31,7 +31,9 @@ namespace Sentinel.Core
                     state.InspectionComplete = true;
                     bool physicalShape = adapter.NetworkInterfaceType == NetworkInterfaceType.Ethernet
                         || adapter.NetworkInterfaceType == NetworkInterfaceType.Wireless80211;
-                    bool virtualShape = new[] { "virtual", "hyper-v", "vmware", "vpn", "wintun", "tap-" }
+                    // A VM guest's hardware-facing Ethernet NIC is a supported adapter;
+                    // host-side virtual switches/tunnels remain excluded.
+                    bool virtualShape = new[] { "virtual", "vethernet", "vpn", "wintun", "tap-" }
                         .Any(x => adapter.Description.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
                     state.Eligible = Guid.TryParse(adapter.Id, out _) && physicalShape && !virtualShape
                         && adapter.OperationalStatus == OperationalStatus.Up && !managed;

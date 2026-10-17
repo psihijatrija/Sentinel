@@ -514,6 +514,7 @@ namespace Sentinel.Core
                         break;
                     case "dns_repair":
                     case "dns_restore":
+                    case "dns_recover":
                         if (_dnsRepair == null || !IsAdministratorClient(pipe))
                         {
                             response = JsonSerializer.Serialize(new { ok = false, error = "Elevated administrator approval is required." });
@@ -521,7 +522,7 @@ namespace Sentinel.Core
                         }
                         var dnsRequest = JsonSerializer.Deserialize<DnsRepairRequest>(body)
                             ?? throw new ArgumentException("Invalid DNS request.");
-                        var dnsResult = await _dnsRepair.ExecuteAsync(dnsRequest, op.Equals("dns_restore", StringComparison.OrdinalIgnoreCase), ct).ConfigureAwait(false);
+                        var dnsResult = await _dnsRepair.ExecuteAsync(dnsRequest, op.Equals("dns_restore", StringComparison.OrdinalIgnoreCase), ct, op.Equals("dns_recover", StringComparison.OrdinalIgnoreCase)).ConfigureAwait(false);
                         response = JsonSerializer.Serialize(new { ok = dnsResult.Status == "Verified", result = dnsResult });
                         break;
                     case "cert_distrust":
@@ -662,7 +663,7 @@ namespace Sentinel.Core
             {
                 using var pipe = new NamedPipeClientStream(
                     ".", ServiceAgentIpc.InstancePipeName, PipeDirection.InOut, PipeOptions.Asynchronous,
-                    op == "dns_repair" || op == "dns_restore" ? TokenImpersonationLevel.Identification : TokenImpersonationLevel.None);
+                    op == "dns_repair" || op == "dns_restore" || op == "dns_recover" ? TokenImpersonationLevel.Identification : TokenImpersonationLevel.None);
                 var connectTask = pipe.ConnectAsync(timeoutMs);
                 await connectTask.ConfigureAwait(false);
                 if (!pipe.IsConnected) return null;
