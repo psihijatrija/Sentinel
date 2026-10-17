@@ -11,6 +11,19 @@ namespace Sentinel.Tests
 {
     public class DnsRepairAuthorizationTests
     {
+        [Fact]
+        public void UnavailableRepairStorageDoesNotPreventServiceConstructionButRefusesAccess()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "SentinelDnsStorage_" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(path, "A file blocks directory creation.");
+            try
+            {
+                var journal = new DnsRepairJournal(path);
+                Assert.Throws<IOException>(() => journal.ReadAll());
+            }
+            finally { File.Delete(path); }
+        }
+
         [WindowsContainmentFact]
         public async Task IdentificationTokenUsesTheRealClientAdministratorRole()
         {

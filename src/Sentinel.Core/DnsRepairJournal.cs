@@ -11,9 +11,12 @@ namespace Sentinel.Core
     public sealed class DnsRepairJournal : IDnsRepairJournal
     {
         private readonly string _directory;
-        public DnsRepairJournal()
+        public DnsRepairJournal() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Sentinel", "DnsRepair")) { }
+        internal DnsRepairJournal(string directory) => _directory = Path.GetFullPath(directory);
+        private void EnsureStorage()
         {
-            _directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Sentinel", "DnsRepair");
+            // Optional repair storage must not prevent the monitoring service from starting.
+            // Inspection/mutation still fails closed if storage cannot be secured.
             Directory.CreateDirectory(_directory);
             var directory = new DirectoryInfo(_directory);
             if ((directory.Attributes & FileAttributes.ReparsePoint) != 0 ||
@@ -32,6 +35,7 @@ namespace Sentinel.Core
         }
         public IReadOnlyList<DnsRepairRecord> ReadAll()
         {
+            EnsureStorage();
             var records = new List<DnsRepairRecord>();
             foreach (string file in Directory.EnumerateFiles(_directory, "*.json"))
             {
@@ -48,6 +52,7 @@ namespace Sentinel.Core
         }
         public void Save(DnsRepairRecord record)
         {
+            EnsureStorage();
             if (!Guid.TryParseExact(record.Id, "N", out _)) throw new ArgumentException("Invalid transaction identity.");
             if (!File.Exists(Path.Combine(_directory, record.Id + ".json")) && ReadAll().Count >= 128)
                 throw new IOException("DNS repair journal capacity reached.");
