@@ -167,11 +167,8 @@ namespace Sentinel.Tests
             var fusedContext = _fusionEngine.FeedEvent(telemetry);
             _detectionEngine.SubmitTelemetry(fusedContext);
 
-            // Wait for async pipeline to process
-            await Task.Delay(500);
-
-            // Assert: verify the event log recorded a detection
-            var logContent = ReadLogFile();
+            // Wait for the queued detection to reach the log, not a fixed runner-speed delay.
+            var logContent = await WaitForLogAsync("LsassAccessRule");
             Assert.Contains("LsassAccessRule", logContent);
             Assert.Contains("detection", logContent);
 
@@ -203,9 +200,7 @@ namespace Sentinel.Tests
             var fusedContext = _fusionEngine.FeedEvent(telemetry);
             _detectionEngine.SubmitTelemetry(fusedContext);
 
-            await Task.Delay(500);
-
-            var logContent = ReadLogFile();
+            var logContent = await WaitForLogAsync("RansomwareDetectionRule");
             Assert.Contains("RansomwareDetectionRule", logContent);
 
             var profile = _scoringEngine.GetProcessProfile(8888);
@@ -234,9 +229,7 @@ namespace Sentinel.Tests
             var fusedContext = _fusionEngine.FeedEvent(telemetry);
             _detectionEngine.SubmitTelemetry(fusedContext);
 
-            await Task.Delay(500);
-
-            var logContent = ReadLogFile();
+            var logContent = await WaitForLogAsync("ReverseShellRule");
             Assert.Contains("ReverseShellRule", logContent);
 
             var profile = _scoringEngine.GetProcessProfile(7777);

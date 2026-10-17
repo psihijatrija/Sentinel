@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -21,7 +19,6 @@ namespace Sentinel.Core
         private readonly IoCScanner _iocScanner;
         private readonly JsonlEventLogger _eventLogger;
         private readonly ToastService _toastService;
-        private readonly HttpClient _httpClient;
         private readonly string _rulesDirectory;
 
         // Track already deployed rules to avoid duplicate writes
@@ -39,12 +36,6 @@ namespace Sentinel.Core
             _iocScanner = iocScanner; // retained: ctor/DI surface; 2.2.4 no longer writes synthetic PoC salts
             _eventLogger = eventLogger;
             _toastService = toastService;
-            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            try
-            {
-                _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Sentinel/" + ProductInfo.Version);
-            }
-            catch { }
             _rulesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rules");
         }
 
@@ -74,7 +65,7 @@ namespace Sentinel.Core
             {
                 try
                 {
-                    _logger.LogInformation("CVE Shield: Scanning system and fetching vulnerability feed...");
+                    _logger.LogInformation("CVE Shield: Scanning system using local vulnerability catalog...");
                     await RunShieldingCycleAsync(stoppingToken);
                 }
                 catch (Exception ex)
@@ -111,7 +102,7 @@ namespace Sentinel.Core
             var vulnerabilities = await FetchVulnerabilityFeedAsync(cancellationToken);
             if (vulnerabilities == null || vulnerabilities.Count == 0)
             {
-                _logger.LogWarning("CVE Shield: No vulnerabilities found in feed or failed to fetch.");
+                _logger.LogWarning("CVE Shield: No local vulnerability catalog is available. Live feed retrieval was removed.");
                 return;
             }
 
@@ -197,24 +188,6 @@ namespace Sentinel.Core
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed to load CVE feed from local custom path: {Path}", _config.CveShield.CustomFeedPath);
-                }
-            }
-
-            // Fallback/Default: Fetch from online CISA KEV
-            if (!string.IsNullOrEmpty(_config.CveShield.FeedUrl))
-            {
-                try
-                {
-                    _logger.LogInformation("CVE Shield: Fetching feed from URL: {Url}", _config.CveShield.FeedUrl);
-                    var catalog = await _httpClient.GetFromJsonAsync<CisaKevCatalog>(_config.CveShield.FeedUrl, cancellationToken);
-                    var list = catalog?.Vulnerabilities ?? new List<CisaVulnerability>();
-                    if (list.Count > 0)
-                        TryCacheKev(catalog!);
-                    return list;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to fetch CVE feed from URL: {Url}. Attempting to locate local cached version...", _config.CveShield.FeedUrl);
                 }
             }
 
@@ -407,7 +380,6 @@ namespace Sentinel.Core
 
         public override void Dispose()
         {
-            _httpClient.Dispose();
             base.Dispose();
         }
     }

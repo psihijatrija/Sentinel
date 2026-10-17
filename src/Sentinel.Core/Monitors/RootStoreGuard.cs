@@ -264,6 +264,11 @@ namespace Sentinel.Core.Monitors
             try
             {
                 using var chain = new X509Chain();
+                // NoCheck only disables revocation checks; it does not disable AIA downloads.
+                // net48 lacks this switch, so omit root-shape enrichment rather than fetch certificates.
+                var disableDownloads = typeof(X509ChainPolicy).GetProperty("DisableCertificateDownloads");
+                if (disableDownloads == null || !disableDownloads.CanWrite) return null;
+                disableDownloads.SetValue(chain.ChainPolicy, true, null);
                 chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
                 chain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllFlags; // we only want the shape, not validity
                 chain.Build(leaf);

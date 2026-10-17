@@ -25,43 +25,27 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void ProxyAuth_TryApplyAuthHeaders_IncludesNonceAndTimestamp()
+        public void ProxyAuth_OfflineModeCannotEnableAuthHeaders()
         {
-            var config = new ThreatReportingConfig
-            {
-                ProxySharedSecret = "test-shared-secret-32chars!!!!"
-            };
+            var config = new ThreatReportingConfig { ProxySharedSecret = "test-shared-secret-32chars!!!!" };
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://example.test/report/hash");
-            Assert.True(ProxyAuthHelper.TryApplyAuthHeaders(request, config, "/report/hash", "{}"));
-
-            Assert.True(request.Headers.Contains("X-Sentinel-Timestamp"));
-            Assert.True(request.Headers.Contains("X-Sentinel-Nonce"));
-            Assert.True(request.Headers.Contains("X-Sentinel-Signature"));
-            Assert.False(request.Headers.Contains("X-Sentinel-Auth"));
-
-            var nonce = request.Headers.GetValues("X-Sentinel-Nonce").First();
-            Assert.Equal(32, nonce.Length); // 16 bytes hex
+            Assert.False(ProxyAuthHelper.TryApplyAuthHeaders(request, config, "/report/hash", "{}"));
+            Assert.Empty(request.Headers);
         }
 
         [Fact]
         public void ProxyAuth_SignaturePayload_IncludesNonce()
         {
             var secret = "test-shared-secret-32chars!!!!";
-            var config = new ThreatReportingConfig { ProxySharedSecret = secret };
-            var path = "/lookup/vt";
-            var body = "{\"type\":\"hash\",\"value\":\"aa\"}";
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, "https://example.test" + path);
-            Assert.True(ProxyAuthHelper.TryApplyAuthHeaders(request, config, path, body));
-
-            var ts = request.Headers.GetValues("X-Sentinel-Timestamp").First();
-            var nonce = request.Headers.GetValues("X-Sentinel-Nonce").First();
-            var sig = request.Headers.GetValues("X-Sentinel-Signature").First();
-
+            const string path = "/lookup/vt";
+            const string body = "{}";
+            const string ts = "1234567890";
+            const string nonce = "0123456789abcdef0123456789abcdef";
             var payload = ProxyAuthHelper.BuildSignaturePayload(ts, nonce, path, body);
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
             var expected = ConvertHex.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
-            Assert.Equal(expected, sig);
+            var sig = expected;
+            Assert.Equal(ts + "." + nonce + "." + path + "." + body, payload);
 
             // Legacy v2.0.4 payload (without nonce) must NOT verify
             var legacy = $"{ts}.{path}.{body}";
@@ -139,13 +123,13 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void HasSharedSecret_StillEnforcesMinLength()
+        public void HasSharedSecret_RejectsFormerlyValidSecretInOfflineMode()
         {
             Assert.False(ProxyAuthHelper.HasSharedSecret(new ThreatReportingConfig
             {
                 ProxySharedSecret = "tooshort"
             }));
-            Assert.True(ProxyAuthHelper.HasSharedSecret(new ThreatReportingConfig
+            Assert.False(ProxyAuthHelper.HasSharedSecret(new ThreatReportingConfig
             {
                 ProxySharedSecret = "0123456789abcdef"
             }));

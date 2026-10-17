@@ -368,139 +368,8 @@ namespace Sentinel.Core
     // 
     public sealed class DnsResponseValidationMonitor : BackgroundService
     {
-        private readonly DetectionEngine _detectionEngine;
-        private readonly ILogger<DnsResponseValidationMonitor> _logger;
-        private readonly ConcurrentDictionary<string, IPAddress[]> _baselineResolutions = new();
-
-        public DnsResponseValidationMonitor(DetectionEngine de, ILogger<DnsResponseValidationMonitor> l) { _detectionEngine = de; _logger = l; }
-
-        // Accumulates all known-good IPs per domain across CDN rotations
-        private readonly ConcurrentDictionary<string, HashSet<string>> _knownSubnets = new();
-
-        protected override async Task ExecuteAsync(CancellationToken ct)
-        {
-            _logger.LogInformation("[DnsResponseValidationMonitor] Started");
-            var watchDomains = new[] { "login.microsoftonline.com", "accounts.google.com", "github.com" };
-
-            // Pre-populate known Microsoft, Google, and GitHub subnets to prevent false positives from global CDNs
-            var msSubnets = _knownSubnets.GetOrAdd("login.microsoftonline.com", _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-            foreach (var net in new[] { "20.190", "40.126", "20.20", "20.231", "20.150", "20.50", "52.150", "52.160", "2603:1036", "2603:1026", "2603:1046" })
-                msSubnets.Add(net);
-
-            var googleSubnets = _knownSubnets.GetOrAdd("accounts.google.com", _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-            foreach (var net in new[] { "172.217", "142.250", "142.251", "216.58", "74.125", "172.253", "108.177", "64.233", "2607:f8b0" })
-                googleSubnets.Add(net);
-
-            var githubSubnets = _knownSubnets.GetOrAdd("github.com", _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-            foreach (var net in new[] { "140.82", "192.30", "185.199", "20.200", "20.201", "20.205", "4.225", "143.204", "2600:9000", "2a04:4e42" })
-                githubSubnets.Add(net);
-
-            // Resolve each domain multiple times over 2 minutes to build a robust baseline
-            // CDN/anycast services rotate IPs frequently - single-shot baselines cause false positives
-            for (int round = 0; round < 3; round++)
-            {
-                foreach (var d in watchDomains)
-                {
-                    try
-                    {
-                        var addrs = await DnsNet48.GetHostAddressesAsync(d, ct);
-                        _baselineResolutions[d] = addrs;
-                        var subnets = _knownSubnets.GetOrAdd(d, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-                        foreach (var a in addrs)
-                        {
-                            subnets.Add(GetSubnet(a.ToString()));
-                        }
-                    }
-                    catch { }
-                }
-                if (round < 2) await Task.Delay(40000, ct);
-            }
-
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(60000, ct);
-                    foreach (var domain in watchDomains)
-                    {
-                        try
-                        {
-                            var current = await DnsNet48.GetHostAddressesAsync(domain, ct);
-                            if (_baselineResolutions.TryGetValue(domain, out var baseline))
-                            {
-                                var currentSet = new HashSet<string>(current.Select(a => a.ToString()));
-                                var baselineSet = new HashSet<string>(baseline.Select(a => a.ToString()));
-
-                                // Phase 1: Check exact IP overlap (normal case)
-                                if (currentSet.Overlaps(baselineSet))
-                                {
-                                    // IPs overlap - normal CDN rotation, update baseline
-                                    _baselineResolutions[domain] = current;
-                                    var subnets = _knownSubnets.GetOrAdd(domain, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-                                    foreach (var a in current) subnets.Add(GetSubnet(a.ToString()));
-                                    continue;
-                                }
-
-                                // Phase 2: No exact overlap - check if new IPs are in known subnets
-                                var knownNets = _knownSubnets.GetOrAdd(domain, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-                                var newSubnets = current.Select(a => GetSubnet(a.ToString())).ToHashSet();
-                                bool allInKnownSubnets = newSubnets.All(s => knownNets.Contains(s));
-
-                                if (allInKnownSubnets)
-                                {
-                                    // Same /16 or /32 subnets - CDN rotation, not poisoning
-                                    _baselineResolutions[domain] = current;
-                                    foreach (var a in current) knownNets.Add(GetSubnet(a.ToString()));
-                                    continue;
-                                }
-
-                                // Phase 3: IPs moved to a completely different subnet - likely poisoning
-                                var suspiciousIps = currentSet.Except(baselineSet).ToList();
-                                var metadata = new Dictionary<string, string>
-                                {
-                                    { "Domain", domain },
-                                    { "TargetIP", suspiciousIps.FirstOrDefault() ?? "" },
-                                    { "AllNewIPs", string.Join(";", suspiciousIps) },
-                                    // Root observation = this domain's resolution shift; an
-                                    // independent vector from any ARP/route/adapter fact.
-                                    { BehavioralCorrelationEngine.ObservationKeyMeta, $"dns-domain:{domain}" }
-                                };
-
-                                await _detectionEngine.EmitAsync(new DetectionEvent
-                                {
-                                    RuleName = "DNS Poisoning: Critical Domain Resolution Changed",
-                                    Evidence = $"Domain '{domain}' resolved to {string.Join(",", currentSet)} (baseline: {string.Join(",", baselineSet)}, known subnets: {string.Join(",", knownNets)})",
-                                    Reasoning = "A critical authentication domain resolved to IPs in completely different subnets from all previously observed addresses, indicating possible DNS poisoning.",
-                                    Confidence = 0.90, Tier = DetectionTier.Tier1Behavioral,
-                                    AuthorizedResponse = ResponseAction.NetworkIsolate,
-                                    ProcessName = "SYSTEM", ProcessId = 0,
-                                    Metadata = metadata
-                                });
-                            }
-                            _baselineResolutions[domain] = current;
-                        }
-                        catch { }
-                    }
-                }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex) { _logger.LogDebug(ex, "[DnsResponseValidationMonitor] Error"); }
-            }
-        }
-
-        /// <summary>Extract subnet prefix (first two octets for IPv4 /16, or first two segments for IPv6 /32) for CDN rotation tolerance.</summary>
-        private static string GetSubnet(string ip)
-        {
-            if (ip.IndexOf(':') >= 0)
-            {
-                var parts = ip.Split(':');
-                return parts.Length >= 2 ? $"{parts[0]}:{parts[1]}" : ip;
-            }
-            else
-            {
-                var parts = ip.Split('.');
-                return parts.Length >= 2 ? $"{parts[0]}.{parts[1]}" : ip;
-            }
-        }
+        public DnsResponseValidationMonitor(DetectionEngine de, ILogger<DnsResponseValidationMonitor> l) { }
+        protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
 
@@ -509,56 +378,8 @@ namespace Sentinel.Core
     // 
     public sealed class PublicIpMonitor : BackgroundService
     {
-        private readonly DetectionEngine _detectionEngine;
-        private readonly ILogger<PublicIpMonitor> _logger;
-        private string? _baselineIp;
-
-        public PublicIpMonitor(DetectionEngine de, ILogger<PublicIpMonitor> l) { _detectionEngine = de; _logger = l; }
-
-        protected override async Task ExecuteAsync(CancellationToken ct)
-        {
-            _logger.LogInformation("[PublicIpMonitor] Started");
-            _baselineIp = await GetPublicIp(ct);
-
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(300000, ct);
-                    var currentIp = await GetPublicIp(ct);
-                    if (_baselineIp != null && currentIp != null && currentIp != _baselineIp)
-                    {
-                        await _detectionEngine.EmitAsync(new DetectionEvent
-                        {
-                            RuleName = "Network: Public IP Address Changed",
-                            Evidence = $"Public IP changed from {_baselineIp} to {currentIp}",
-                            Reasoning = "The system's public IP address changed at runtime. This may indicate VPN activation/deactivation, network switch, or traffic rerouting via a compromised gateway.",
-                            Confidence = 0.50, Tier = DetectionTier.Tier2Indicator,
-                            AuthorizedResponse = ResponseAction.LogOnly,
-                            ProcessName = "SYSTEM", ProcessId = 0,
-                            Metadata = new Dictionary<string, string>
-                            {
-                                ["OldIP"] = _baselineIp,
-                                ["NewIP"] = currentIp
-                            }
-                        });
-                        _baselineIp = currentIp;
-                    }
-                }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex) { _logger.LogDebug(ex, "[PublicIpMonitor] Error"); }
-            }
-        }
-
-        private static async Task<string?> GetPublicIp(CancellationToken ct)
-        {
-            try
-            {
-                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-                return (await http.GetStringAsync("https://api.ipify.org")).Trim();
-            }
-            catch { return null; }
-        }
+        public PublicIpMonitor(DetectionEngine de, ILogger<PublicIpMonitor> l) { }
+        protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
 
@@ -1286,33 +1107,10 @@ namespace Sentinel.Core
             return Task.CompletedTask;
         }
 
-        private static async Task<string?> ProbeSuspiciousPorts(string ip, CancellationToken ct)
+        private static Task<string?> ProbeSuspiciousPorts(string ip, CancellationToken ct)
         {
-            foreach (var port in SuspiciousPorts)
-            {
-                try
-                {
-                    using var client = new System.Net.Sockets.TcpClient();
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
-                    await client.ConnectAsync(IPAddress.Parse(ip), port);
-                    var serviceName = port switch
-                    {
-                        8008 => "HTTP-Alt (Cast discovery)",
-                        8009 => "Google Cast",
-                        8443 => "HTTPS-Alt",
-                        5555 => "ADB (Android Debug Bridge)",
-                        5353 => "mDNS",
-                        9222 => "Chrome DevTools Protocol",
-                        2323 => "Telnet-Alt",
-                        4443 => "Pharos",
-                        _ => $"Port {port}"
-                    };
-                    return $"{serviceName} (port {port})";
-                }
-                catch { }
-            }
-            return null;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<string?>(null); // Offline policy: passive device telemetry only.
         }
 
         private static string LookupManufacturer(string mac)

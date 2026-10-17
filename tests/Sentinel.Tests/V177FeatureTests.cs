@@ -20,7 +20,7 @@ namespace Sentinel.Tests
             var cfg = new AutoIncidentReportingConfig();
             Assert.True(cfg.Enabled);
             Assert.True(cfg.GenerateLocalEvidencePack);
-            Assert.True(cfg.ReportThreatIntel);
+            Assert.False(cfg.ReportThreatIntel);
             Assert.True(cfg.NotifyUser);
             Assert.True(cfg.IncludeKillAuthorized);
             Assert.True(cfg.IncludeNetworkIsolate);

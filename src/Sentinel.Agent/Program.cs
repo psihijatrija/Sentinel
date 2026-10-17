@@ -32,6 +32,13 @@ namespace Sentinel.Agent
         [STAThread]
         public static void Main(string[] args)
         {
+            if (!UserSessionPrivilege.IsCurrentProcessUnprivileged())
+            {
+                System.Windows.Forms.MessageBox.Show(
+                    "Start Sentinel normally, without Run as administrator. Its installed service handles administrator tasks.",
+                    "Sentinel", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
+                return;
+            }
             //  Single-instance check (before anything else) 
             using var instanceMutex = new Mutex(true, SingleInstanceMutexName, out bool createdNew);
             if (!createdNew)
@@ -63,7 +70,7 @@ namespace Sentinel.Agent
             };
 
             //  Hardening 
-            HardeningModule.ApplyOrFail();
+            HardeningModule.ApplyOrFail(applyHostPolicies: false);
 
             // Detach from parent console window (installer / Run key launch)
             try { FreeConsole(); } catch { }
@@ -251,8 +258,10 @@ namespace Sentinel.Agent
 
         private static string GetRestartMarkerPath()
         {
-            var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-            return Path.Combine(programData, "Sentinel", ".agent_restart_marker");
+            var userData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var markerDirectory = Path.Combine(userData, "Sentinel");
+            Directory.CreateDirectory(markerDirectory);
+            return Path.Combine(markerDirectory, ".agent_restart_marker");
         }
 
         // 
@@ -287,8 +296,6 @@ namespace Sentinel.Agent
                     var autoIncidentReportingConfig = new AutoIncidentReportingConfig();
                     var store = new EncryptedConfigStore();
                     store.ApplyOverrides(config, threatReportingConfig, autoIncidentReportingConfig);
-                    if (!ProxyAuthHelper.HasSharedSecret(threatReportingConfig))
-                        threatReportingConfig.ProxySharedSecret = ThreatReportingConfig.CompiledProxySharedSecret;
                     services.AddSingleton(config);
                     services.AddSingleton(threatReportingConfig);
                     services.AddSingleton(autoIncidentReportingConfig);
@@ -334,6 +341,7 @@ namespace Sentinel.Agent
                     services.AddSingleton<BehavioralCorrelationEngine>();
 
                     // Rules
+                    services.AddSingleton<IDetectionRule, ExposedProcessExploitRule>();
                     services.AddTransient<IDetectionRule, LsassAccessRule>();
                     services.AddTransient<IDetectionRule, RansomwareDetectionRule>();
                     services.AddTransient<IDetectionRule, ReverseShellRule>();

@@ -13,12 +13,13 @@ namespace Sentinel.Tests
     public class V181SecurityHardeningTests
     {
         [Fact]
-        public void ProxyAuth_DoesNotTransmitSharedSecretInHeaders()
+        public void ProxyAuth_OfflineModeRejectsHeadersAndDoesNotExposeLegacySecret()
         {
             var secret = "audit-fix-shared-secret!!";
             var config = new ThreatReportingConfig { ProxySharedSecret = secret };
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://example.test/report/hash");
-            Assert.True(ProxyAuthHelper.TryApplyAuthHeaders(request, config, "/report/hash", "{}"));
+            Assert.False(ProxyAuthHelper.TryApplyAuthHeaders(request, config, "/report/hash", "{}"));
+            Assert.Empty(request.Headers);
 
             Assert.False(request.Headers.Contains("X-Sentinel-Auth"));
             foreach (var header in request.Headers)

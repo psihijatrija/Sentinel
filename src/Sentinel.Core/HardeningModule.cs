@@ -247,7 +247,7 @@ namespace Sentinel.Core
             set { } // No-op: hardening is always-on as of v2.5.5
         }
 
-        public static bool ApplyOrFail()
+        public static bool ApplyOrFail(bool applyHostPolicies = true)
         {
             try
             {
@@ -275,6 +275,8 @@ namespace Sentinel.Core
                 {
                     Debug.WriteLine($"ApplyOrFail: self mitigation setup skipped - {ex.Message}");
                 }
+
+                if (!applyHostPolicies) return res1 && res2;
 
                 RegisterForSafeMode();
 

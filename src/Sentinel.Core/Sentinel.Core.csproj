@@ -4,7 +4,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>3.2.2</Version>
+    <Version>3.2.3</Version>
     <Company>Sentinel Security</Company>
     <Product>Sentinel Endpoint Detection and Response</Product>
     <Description>Userland endpoint detection and response (EDR) core engine for Windows</Description>
@@ -14,6 +14,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="PolicyResources\LocalFirewallPolicy.ps1" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Sentinel.Tests" />

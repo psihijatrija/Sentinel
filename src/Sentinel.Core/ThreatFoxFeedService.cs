@@ -5,18 +5,15 @@
 //   - Domain indicators (fed into DnsQueryMonitor via DomainIoCStore)
 //   - Malware-family metadata on every indicator
 //
-// Refreshes from ThreatFox API every 6 hours. On startup loads a bundled offline
-// snapshot so detections work from first launch without waiting for live network.
-//
-// Bundled snapshot path: %ProgramData%\Sentinel\threatfox-bundle.json.gz
-// If the file is absent, the service starts empty and relies solely on live feed.
+// Loads a local snapshot only; there is no API refresh or download fallback.
+// Snapshot path: %ProgramData%\Sentinel\threatfox-bundle.json.gz.
+// A missing snapshot means no bundled IOC coverage, not a clean verdict.
 
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -73,12 +70,6 @@ namespace Sentinel.Core
         private readonly ConcurrentDictionary<string, ThreatFoxIoc> _domainStore =
             new(StringComparer.OrdinalIgnoreCase);
 
-        private static readonly TimeSpan RefreshInterval = TimeSpan.FromHours(6);
-        private static readonly TimeSpan InitialDelay   = TimeSpan.FromSeconds(60);
-
-        private const string ThreatFoxApiUrl = "https://threatfox-api.abuse.ch/api/v1/";
-        private const int    MaxIocsPerRefresh = 5000;
-
         public int LoadedIocCount      => _store.Count;
         public bool IsLiveFeedActive   { get; private set; }
         public DateTimeOffset? LastRefreshed { get; private set; }
@@ -100,23 +91,10 @@ namespace Sentinel.Core
 
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
             await LoadBundleAsync();
             PropagateHashesToScanner();
-
-            _logger.LogInformation(
-                "[ThreatFoxFeedService] Started - {Count} IOCs from bundle. Live refresh in {Delay}s.",
-                _store.Count, InitialDelay.TotalSeconds);
-
-            try { await Task.Delay(InitialDelay, ct); }
-            catch (OperationCanceledException) { return; }
-
-            while (!ct.IsCancellationRequested)
-            {
-                await RefreshFromThreatFoxAsync(ct);
-
-                try { await Task.Delay(RefreshInterval, ct); }
-                catch (OperationCanceledException) { break; }
-            }
+            _logger.LogInformation("[ThreatFoxFeedService] Offline bundle loaded: {Count} IOCs; no live refresh", _store.Count);
         }
 
         //  Public API 
@@ -202,95 +180,6 @@ namespace Sentinel.Core
         }
 
         //  Live feed refresh 
-
-        private async Task RefreshFromThreatFoxAsync(CancellationToken ct)
-        {
-            _logger.LogInformation("[ThreatFoxFeedService] Refreshing from ThreatFox API...");
-
-            try
-            {
-                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("Sentinel-EDR/2.4 (ThreatFoxFeedService)");
-
-                var requestBody = JsonSerializer.Serialize(new { query = "get_iocs", days = 7 });
-                using var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-                using var response = await http.PostAsync(ThreatFoxApiUrl, content, ct);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning(
-                        "[ThreatFoxFeedService] ThreatFox returned HTTP {Status} - keeping existing store.",
-                        (int)response.StatusCode);
-                    return;
-                }
-
-                var json = await response.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(json);
-
-                if (!doc.RootElement.TryGetProperty("data", out var data))
-                {
-                    _logger.LogWarning("[ThreatFoxFeedService] ThreatFox response missing 'data' field.");
-                    return;
-                }
-
-                int added = 0;
-                foreach (var item in data.EnumerateArray())
-                {
-                    if (added >= MaxIocsPerRefresh) break;
-
-                    string? iocValue    = null;
-                    string? iocType     = null;
-                    string? malware     = null;
-                    int     confidence  = 75;
-
-                    if (item.TryGetProperty("ioc",              out var iocProp))   iocValue   = iocProp.GetString();
-                    if (item.TryGetProperty("ioc_type",         out var typeProp))  iocType    = typeProp.GetString();
-                    if (item.TryGetProperty("malware",          out var mwProp))    malware    = mwProp.GetString();
-                    if (item.TryGetProperty("confidence_level", out var confProp))  confidence = confProp.GetInt32();
-
-                    if (string.IsNullOrWhiteSpace(iocValue)) continue;
-
-                    var ioc = new ThreatFoxIoc
-                    {
-                        Indicator     = iocValue!,
-                        IocType       = iocType ?? "unknown",
-                        MalwareFamily = malware,
-                        Confidence    = Math.Min(100, Math.Max(0, confidence)),
-                        Source        = "ThreatFox"
-                    };
-
-                    IngestIoc(ioc, "ThreatFox");
-                    added++;
-                }
-
-                IsLiveFeedActive = true;
-                LastRefreshed    = DateTimeOffset.UtcNow;
-
-                PropagateHashesToScanner();
-
-                _logger.LogInformation(
-                    "[ThreatFoxFeedService] Refresh complete - added/updated {Added} IOCs. Total: {Total}.",
-                    added, _store.Count);
-
-                await _eventLogger.LogEventAsync("threatfox_feed_refresh", new
-                {
-                    Added     = added,
-                    Total     = _store.Count,
-                    Domains   = _domainStore.Count,
-                    Timestamp = DateTime.UtcNow
-                });
-            }
-            catch (OperationCanceledException) { /* normal shutdown */ }
-            catch (Exception ex)
-            {
-                IsLiveFeedActive = false;
-                _logger.LogWarning(ex,
-                    "[ThreatFoxFeedService] Live refresh failed - continuing with {Count} cached IOCs.",
-                    _store.Count);
-            }
-        }
-
-        //  Helpers 
 
         private void IngestIoc(ThreatFoxIoc ioc, string source)
         {

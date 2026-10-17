@@ -1,5 +1,46 @@
 # Sentinel - Design Document
 
+## Firewall defaults, policy stores, and monitoring (3.2.3)
+
+The service manages PersistentStore and, when the OS exposes it, the local computer Group Policy store (`localhost`). It mirrors Sentinel's own process blocks into local Group Policy and inspects ActiveStore, including rule filters, enforcement status, profile settings, and BFE/MpsSvc health. It never writes a domain GPO. Effective domain exceptions, disabled/overridden profiles, missing rules, or non-enforced filters produce visible conflicts and a dashboard attention state instead of a protected claim. A trimmed image without a local GPO store uses PersistentStore; missing NetSecurity/PowerShell means policy management is unavailable and is reported, while COM self-block reconciliation and offline detection continue.
+
+Inbound allow rules in both local stores are disabled and retained. Outbound allow rules and default outbound actions are preserved; Sentinel's own outbound self-blocks remain intentional. Firewall profiles are enabled and default inbound policy is Block in the two writable local stores. Exact DHCP-service UDP 68/67 and 546/547 rules are exempt. System-only ICMPv6 error/control types 1-4 and neighbour/router discovery 133-136 are exempt to preserve outbound IPv6; echo and arbitrary application ICMPv6 rules are not. The policy does not automatically enable an existing disabled essential rule.
+
+Registry tree notifications trigger coalesced rechecks, with a 15-second polling fallback. These are detection/reconciliation intervals, not an atomic prevention guarantee: an unapproved exception may exist briefly before reconciliation. New exceptions and re-enabled unapproved exceptions are disabled again on refresh/restart. Windows changes cannot be reliably distinguished from manual changes from the Enabled flag, so opt-in is explicit. Approval is bound to the store, exact rule name, and complete filter identity; changed definitions lose approval. Privileged approval/revocation is not exposed over the user-session web/pipe API.
+
+Administrators can approve an existing rule from an elevated terminal in the install directory:
+
+```powershell
+.\Sentinel.Service.exe --allow-inbound PersistentStore 'Exact-Rule-Name'
+.\Sentinel.Service.exe --allow-inbound localhost 'Exact-GPO-Rule-Name'
+.\Sentinel.Service.exe --deny-inbound PersistentStore 'Exact-Rule-Name'
+```
+
+The names are the rule `Name` identifiers, not translated display names or wildcard patterns. No new arbitrary rule or command is created by these operations. Windows Firewall UI can still disable an approved exception; enabling an unapproved exception there is temporary until the next reconciliation.
+
+An ACL-protected, atomic rollback journal records original enabled/profile states before changing them, supports interrupted operations, and is serialized across service/administrator processes. Uninstall restores matching recorded original states and removes owned self-blocks; changed rule definitions are skipped and reported. `Sentinel.Service.exe --restore-firewall` is an elevated rollback command that first stops the service/watchdog. Starting Sentinel again resumes the baseline. Preserve the journal for recovery; a malformed/unsafe journal fails visibly rather than silently replacing the original state.
+
+The fixed, embedded NetSecurity management script runs through an absolute Windows PowerShell path with no profile. Script text is embedded code; request/rule data travels as JSON, not command interpolation. Output, execution time, and pre-authentication pipe input are bounded. This management-only bridge is the reason PowerShell is used here: the firewall COM API does not offer the required policy-store selection. No online lookup is involved.
+
+## Runtime exploit observation (3.2.3)
+
+Existing ETW process/module, credential-access, injection, script, file, DNS, and network sensors remain active. A new bounded, passive cross-process rule correlates recent non-loopback networking with an evasive script child for all process identities, including Defender/security software, browsers, games, and OS hosts. It handles expiry/PID-reuse reset and emits Tier2 LogOnly context, never exploit proof or kill authority. Classic-port observations now cover browsers/games too and remain Tier2; a port alone is not a kill reason. Persistent-connection follow-up no longer omits recognized application identities, and child-spawn analysis requires actual parentage rather than coincident process start times.
+
+Game/anti-cheat memory-handle safety restrictions remain. Protected/PPL processes, missing/stripped ETW providers, inaccessible memory, event loss, and unobservable exploits limit userland coverage. A signed image or trusted install path does not establish runtime safety. This release does not claim detection of every exploit or a patch for application/OS vulnerabilities.
+
+## Offline operation and privilege boundary (3.2.3)
+
+Sentinel no longer performs online reputation queries, DNS reputation lookups, live threat/KEV feed downloads, public-IP lookups, cloud connectivity probes, or automatic outbound threat/evidence reporting. Local behavioral telemetry, static/ML analysis, cached/local KEV catalogs, bundled ThreatFox indicators, and local evidence packs remain available. Missing external reputation is Unknown with a neutral score; old online reputation caches are not used. Bundled/cached intelligence becomes stale until supplied through a trusted local update. Legacy encrypted settings cannot re-enable online transports, and the embedded proxy credential has been removed.
+
+The SYSTEM service installs and reconciles six fixed, executable-scoped Windows Firewall block rules: inbound and outbound for Sentinel.Service.exe, Sentinel.Agent.exe, and SentinelAutoRotate.exe, on Domain/Private/Public profiles, for non-loopback IPv4/IPv6 traffic including LAN/link-local destinations. Loopback is excluded from the blocks because an allow rule cannot override a matching block. Rule identifiers remain stable across upgrades, and uninstall removes only these identifiers. Firewall failures or disabled profiles are logged as errors and retried every minute; local detection continues without falsely claiming network enforcement. The service must run with installation/admin privileges to manage these rules. Authenticode verification uses cached URL data only.
+
+The Agent uses an explicit asInvoker manifest and refuses SYSTEM/elevated-administrator execution. The service watchdog checks the session token and selects its limited linked token where necessary; if no suitable token exists it refuses an elevated launch. The Agent applies only its own process mitigations, writes logs/restart state to user-owned storage by default, and delegates privileged operations to the service. Module UI requests schedule service inspection rather than directly quarantining a browser-supplied file path. Certificate requests retain the service's explicit distrust-list authorization. If the service is unavailable these operations fail without an elevated fallback. No generic command execution, arbitrary privileged file-write/delete, or response-disable operation is exposed.
+
+The privileged service still contains system sensors and the response engine: this is not yet a minimal standalone privilege broker. Splitting ETW/native sensors and response execution from the rest of analysis is future work and requires its own protocol and authorization review. Agent-only operation has reduced visibility and response capability. The existing service IPC now denies network-logon access, bounds input to 16 Ki characters before JSON/auth parsing, and disconnects stalled request readers after five seconds; HMAC, freshness, replay checks, and the operation allowlist remain in place.
+
+These controls reduce exposure; they do not confine an already-compromised SYSTEM process. Such a process can potentially alter firewall rules or use other processes/OS services. Malicious local files, telemetry, dependencies, and IPC remain attack surfaces. The localhost dashboard is still active and authenticated. There is no longer an off-host evidence mirror; administrators can destroy local evidence. No kernel/PPL boundary is claimed.
+
+
 **Version: 3.0.4**
 
 ---

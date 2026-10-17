@@ -35,6 +35,7 @@ namespace Sentinel.Core
         private readonly DetectionEngine _detectionEngine;
         private readonly ILogger<PersistentConnectionMonitor> _logger;
         private readonly SignerTrustService? _signerTrust;
+        private readonly ProcessAncestryCache? _ancestryCache;
 
         // Tracks established connections: key = "pid:remoteIp:remotePort", value = first-seen time
         private readonly ConcurrentDictionary<string, ConnectionState> _trackedConnections = new();
@@ -81,11 +82,12 @@ namespace Sentinel.Core
             IntPtr pTcpTable, ref int pdwSize, bool bOrder,
             uint ulAf, TCP_TABLE_CLASS tableClass, uint reserved);
 
-        public PersistentConnectionMonitor(DetectionEngine de, ILogger<PersistentConnectionMonitor> l, SignerTrustService? signerTrust = null)
+        public PersistentConnectionMonitor(DetectionEngine de, ILogger<PersistentConnectionMonitor> l, SignerTrustService? signerTrust = null, ProcessAncestryCache? ancestryCache = null)
         {
             _detectionEngine = de;
             _logger = l;
             _signerTrust = signerTrust;
+            _ancestryCache = ancestryCache;
         }
 
         protected override async Task ExecuteAsync(CancellationToken ct)
@@ -148,7 +150,7 @@ namespace Sentinel.Core
                 if (_trackedConnections.TryRemove(key, out var state))
                 {
                     var duration = state.LastSeen - state.FirstSeen;
-                    if (duration >= PersistentThreshold && !IsLegitimate(state.ProcessName, state.Pid))
+                    if (duration >= PersistentThreshold)
                     {
                         // Long-lived connection just dropped - monitor for defensive behavior
                         _droppedConnections[key] = new DroppedConnection
@@ -201,7 +203,7 @@ namespace Sentinel.Core
                         bool isSigned = _signerTrust?.IsSignedProcess(drop.State.Pid) ?? false;
                         var effectiveTier = DetectionTier.Tier2Indicator;
                         var effectiveResponse = ResponseAction.LogOnly;
-                        var effectiveConfidence = isSigned ? 0.40 : 0.55;
+                        var effectiveConfidence = 0.55;
 
                         _ = _detectionEngine.EmitAsync(new DetectionEvent
                         {
@@ -213,7 +215,7 @@ namespace Sentinel.Core
                                         "When that connection was severed, the process immediately initiated connections to multiple " +
                                         "alternative endpoints. This is characteristic of C2 implants with failover logic - " +
                                         "when the primary relay dies, they cycle through backup servers." +
-                                        (isSigned ? " Process is Authenticode-signed; demoted to log-only." : ""),
+                                        (isSigned ? " The signature is context only and does not establish runtime safety." : ""),
                             Confidence = effectiveConfidence,
                             Tier = effectiveTier,
                             AuthorizedResponse = effectiveResponse,
@@ -231,19 +233,22 @@ namespace Sentinel.Core
                     }
                 }
 
-                // Check if same process spawned child processes after drop
+                // Parent identity is established by the OS ancestry cache, never by coincident start times.
+                Process[] childSnapshot = Array.Empty<Process>();
                 try
                 {
-                    var proc = Process.GetProcessById(drop.State.Pid);
+                    using var proc = Process.GetProcessById(drop.State.Pid);
+                    childSnapshot = Process.GetProcesses();
                     // Check for new child processes by scanning processes whose parent is this PID
-                    var children = Process.GetProcesses()
+                    var children = childSnapshot
                         .Where(p =>
                         {
                             try
                             {
                                 // Compare start time - children spawned after the drop
                                 return p.StartTime.ToUniversalTime() > drop.DroppedAt &&
-                                       p.Id != drop.State.Pid && p.Id > 4;
+                                       p.Id != drop.State.Pid && p.Id > 4 &&
+                                       _ancestryCache?.GetParent(p.Id).parentId == drop.State.Pid;
                             }
                             catch { return false; }
                         })
@@ -273,7 +278,7 @@ namespace Sentinel.Core
                             bool isSignedSpawn = _signerTrust?.IsSignedProcess(drop.State.Pid) ?? false;
                             var spawnTier = DetectionTier.Tier2Indicator;
                             var spawnResponse = ResponseAction.LogOnly;
-                            var spawnConfidence = isSignedSpawn ? 0.40 : 0.55;
+                            var spawnConfidence = 0.55;
 
                             _ = _detectionEngine.EmitAsync(new DetectionEvent
                             {
@@ -284,7 +289,7 @@ namespace Sentinel.Core
                                 Reasoning = "After losing a long-held C2 connection, the process immediately spawned multiple child " +
                                             "processes. This is a defensive reaction - the implant is launching recovery routines, " +
                                             "persistence re-establishment, or alternative communication channels." +
-                                            (isSignedSpawn ? " Process is Authenticode-signed; demoted to log-only." : ""),
+                                            (isSignedSpawn ? " The signature is context only and does not establish runtime safety." : ""),
                                 Confidence = spawnConfidence,
                                 Tier = spawnTier,
                                 AuthorizedResponse = spawnResponse,
@@ -302,7 +307,8 @@ namespace Sentinel.Core
                         }
                     }
                 }
-                catch { /* Process may have exited */ }
+                catch (Exception ex) { _logger.LogDebug(ex, "[PersistentConnectionMonitor] Parent/child inspection unavailable"); }
+                finally { foreach (var child in childSnapshot) child.Dispose(); }
 
                 // Check if same process is now doing rapid DNS queries (reconnect attempts)
                 // This is tracked via RecordDnsQuery called from DnsQueryMonitor integration
@@ -380,35 +386,6 @@ namespace Sentinel.Core
         {
             return _droppedConnections.Values.Any(d =>
                 d.State.Pid == pid && DateTime.UtcNow - d.DroppedAt < PostDropWindow);
-        }
-
-        private bool IsLegitimate(string? processName, int pid = 0)
-        {
-            if (string.IsNullOrEmpty(processName)) return false;
-
-            string? path = null;
-            if (pid > 0)
-            {
-                try { path = SecurityValidation.GetProcessImagePath(pid); } catch { }
-            }
-
-            var n = processName!;
-            if (n.Equals("svchost", StringComparison.OrdinalIgnoreCase) ||
-                n.Equals("SearchHost", StringComparison.OrdinalIgnoreCase))
-                return SecurityValidation.IsWindowsSystemImage(path);
-
-            if (n.Equals("Sentinel.Service", StringComparison.OrdinalIgnoreCase) ||
-                n.Equals("Sentinel.Agent", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (UserlandProtocolHeuristics.IsKnownCommsIdentity(n, path))
-                return true;
-            if (SecurityValidation.IsGameOrAntiCheatPath(path))
-                return true;
-            if (ChainTracer.IsLegitimateIdeHost(path, n))
-                return true;
-
-            return false;
         }
 
         private List<ActiveConnection> GetEstablishedConnections()

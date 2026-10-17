@@ -10,7 +10,7 @@ namespace Sentinel.Tests
     public class HashReputationServiceTests
     {
         [Fact]
-        public async Task GetVerdictAsync_ReturnsSafe_ForPredefinedSafeHash()
+        public async Task GetVerdictAsync_ReturnsUnknown_ForFormerSafeTestHash()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "rep_test_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
@@ -22,7 +22,7 @@ namespace Sentinel.Tests
 
                 var verdict = await service.GetVerdictAsync("0000000000000000000000000000000000000000000000000000000000000000");
 
-                Assert.Equal(HashVerdict.Safe, verdict);
+                Assert.Equal(HashVerdict.Unknown, verdict);
             }
             finally
             {
@@ -31,7 +31,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task GetVerdictAsync_ReturnsUnsafe_ForPredefinedUnsafeHash()
+        public async Task GetVerdictAsync_ReturnsUnknown_ForFormerUnsafeTestHash()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "rep_test_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
@@ -43,7 +43,7 @@ namespace Sentinel.Tests
 
                 var verdict = await service.GetVerdictAsync("bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1");
 
-                Assert.Equal(HashVerdict.Unsafe, verdict);
+                Assert.Equal(HashVerdict.Unknown, verdict);
             }
             finally
             {
@@ -52,7 +52,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task GetVerdictAsync_ReturnsCachedVerdict_FromDiskStore()
+        public async Task GetVerdictAsync_IgnoresLegacyOnlineCache()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "rep_test_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
@@ -67,7 +67,7 @@ namespace Sentinel.Tests
                 var service = new HashReputationService(cache, config, NullLogger<HashReputationService>.Instance);
                 var verdict = await service.GetVerdictAsync(sha256);
 
-                Assert.Equal(HashVerdict.Unsafe, verdict);
+                Assert.Equal(HashVerdict.Unknown, verdict);
             }
             finally
             {
@@ -86,7 +86,7 @@ namespace Sentinel.Tests
                 var config = new ThreatReportingConfig { MalwareBazaarApiKey = "dummy_key" };
                 var service = new HashReputationService(cache, config, NullLogger<HashReputationService>.Instance);
 
-                // A random non-cached hash will attempt live query and timeout/fail without actual network or invalid target.
+                // Offline operation returns Unknown without consulting remote sources.
                 var sha256 = "1234567890123456789012345678901234567890123456789012345678901234";
                 var verdict = await service.GetVerdictAsync(sha256);
 
@@ -116,7 +116,7 @@ namespace Sentinel.Tests
                 var service = new HashReputationService(cache, new ThreatReportingConfig(), NullLogger<HashReputationService>.Instance);
 
                 // Length-invalid inputs return Unknown immediately without a DNS lookup.
-                var verdict = service.QueryCymruMhr(sha1!);
+                var verdict = service.GetVerdictAsync(new string('a', 64), sha1: sha1).GetAwaiter().GetResult();
 
                 Assert.Equal(HashVerdict.Unknown, verdict);
             }

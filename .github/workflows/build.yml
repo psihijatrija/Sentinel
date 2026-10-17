@@ -26,6 +26,10 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
+    - name: Firewall policy regression tests
+      shell: pwsh
+      run: ./tests/Sentinel.Tests/LocalFirewallPolicy.Tests.ps1
+
     - name: Setup Node for Worker tests
       uses: actions/setup-node@v4
       with:
@@ -94,3 +98,22 @@ jobs:
         name: coverage
         path: ${{ github.workspace }}/tests/Sentinel.Tests/TestResults/coverage.cobertura.xml
         if-no-files-found: ignore
+
+  firewall-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Build native Windows firewall integration fixture
+      shell: pwsh
+      run: |
+        dotnet build Sentinel.sln -c Release -warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Solution build failed' }
+        dotnet build tools/Sentinel.FirewallSmoke/Sentinel.FirewallSmoke.csproj -c Release -warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Native firewall fixture build failed' }
+    - name: Exercise real local and Group Policy firewall stores on disposable runner
+      shell: powershell
+      run: ./tools/validation/WindowsFirewallSmoke.ps1

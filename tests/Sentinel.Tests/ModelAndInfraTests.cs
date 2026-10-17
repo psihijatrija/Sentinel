@@ -41,17 +41,17 @@ namespace Sentinel.Tests
         public void ThreatReportingConfig_Defaults_Correct()
         {
             var config = new ThreatReportingConfig();
-            Assert.True(config.Enabled);
-            Assert.True(config.ReportToMalwareBazaar);
-            Assert.True(config.ReportToUrlhaus);
-            Assert.Equal("https://sentinel-threat-proxy.znastidobrostoje-6ee.workers.dev", config.ProxyEndpoint);
-            Assert.True(ProxyAuthHelper.HasSharedSecret(config));
-            Assert.Equal(ThreatReportingConfig.CompiledProxySharedSecret, config.ProxySharedSecret);
-            Assert.True(config.ProxySharedSecret!.Length >= 16);
+            Assert.False(config.Enabled);
+            Assert.False(config.ReportToMalwareBazaar);
+            Assert.False(config.ReportToUrlhaus);
+            Assert.Null(config.ProxyEndpoint);
+            Assert.False(ProxyAuthHelper.HasSharedSecret(config));
+            Assert.Empty(ThreatReportingConfig.CompiledProxySharedSecret);
+            Assert.Null(config.ProxySharedSecret);
         }
 
         [Fact]
-        public void EncryptedStore_ShortSecret_DoesNotWipeCompiledHmac()
+        public void EncryptedStore_LegacySecretCannotRestoreOfflineTransport()
         {
             var store = new EncryptedConfigStore(customPath: Path.Combine(Path.GetTempPath(),
                 "sentinel-hmac-" + Guid.NewGuid().ToString("N") + ".enc"));
@@ -60,7 +60,7 @@ namespace Sentinel.Tests
             var compiled = threat.ProxySharedSecret;
             store.ApplyOverrides(new SentinelConfig(), threat);
             Assert.Equal(compiled, threat.ProxySharedSecret);
-            Assert.True(ProxyAuthHelper.HasSharedSecret(threat));
+            Assert.False(ProxyAuthHelper.HasSharedSecret(threat));
         }
 
         [Fact]
@@ -77,7 +77,7 @@ namespace Sentinel.Tests
             var config = new AutoIncidentReportingConfig();
             Assert.True(config.Enabled);
             Assert.True(config.GenerateLocalEvidencePack);
-            Assert.True(config.ReportThreatIntel);
+            Assert.False(config.ReportThreatIntel);
             Assert.True(config.ReportableGradeOnly);
             Assert.Equal(0.85, config.MinConfidence);
             Assert.Equal(0.80, config.KillAuthorizedMinConfidence);
@@ -92,7 +92,7 @@ namespace Sentinel.Tests
             var config = new CveShieldConfig();
             Assert.True(config.Enabled);
             Assert.Equal(4, config.PollIntervalHours);
-            Assert.Contains("cisa.gov", config.FeedUrl);
+            Assert.Empty(config.FeedUrl);
         }
 
         #endregion

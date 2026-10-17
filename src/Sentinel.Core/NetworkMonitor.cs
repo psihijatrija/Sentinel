@@ -413,51 +413,43 @@ namespace Sentinel.Core
                             });
                         }
 
-                        // C. Attack-only ports (Telnet, Meterpreter defaults, etc.).
-                        // Games (Unreal 7777) and browsers are civilians - skip.
-                        // Remaining process on 4444/31337/... is the attack (v2.5.3).
+                        // Port observations cover every process, including browsers and games.
+                        // A port number is weak context and never sufficient response authority.
                         if (KnownMaliciousPorts.Contains(remotePort) || KnownMaliciousPorts.Contains(localPort))
                         {
-                            if (IsKnownBrowser(processName, imagePath) ||
-                                SecurityValidation.IsGameOrAntiCheatPath(imagePath))
-                            {
-                                // skip the 90
-                            }
-                            else
-                            {
-                                int suspiciousPort = KnownMaliciousPorts.Contains(remotePort) ? remotePort : localPort;
-                                bool isOutbound = KnownMaliciousPorts.Contains(remotePort);
-                                string direction = isOutbound ? "outbound to" : "inbound from";
-                                string targetAddr = isOutbound ? remoteIp : localIp;
+                            int suspiciousPort = KnownMaliciousPorts.Contains(remotePort) ? remotePort : localPort;
+                            bool isOutbound = KnownMaliciousPorts.Contains(remotePort);
+                            string direction = isOutbound ? "outbound to" : "inbound from";
+                            string targetAddr = isOutbound ? remoteIp : localIp;
 
-                                _ = _detectionEngine.EmitAsync(new DetectionEvent
+                            _ = _detectionEngine.EmitAsync(new DetectionEvent
+                            {
+                                RuleName = "Network Indicator: Classic Malware Port",
+                                Evidence = $"Process '{processName}' (PID {owningPid}) has {direction} {targetAddr}:{suspiciousPort}. " +
+                                           $"Full connection: {localIp}:{localPort} -> {remoteIp}:{remotePort}",
+                                Reasoning = $"Port {suspiciousPort} ({GetPortDescription(suspiciousPort)}) is in the suspicious-port " +
+                                            "indicator set (legacy shells / classic RAT ports). Port choice alone cannot prove an exploit; " +
+                                            "all application identities are monitored without kill authority.",
+                                Confidence = 0.40,
+                                Tier = DetectionTier.Tier2Indicator,
+                                AuthorizedResponse = ResponseAction.LogOnly,
+                                ProcessName = processName,
+                                ProcessId = owningPid,
+                                SignalType = SignalType.NetworkC2,
+                                Metadata = new Dictionary<string, string>
                                 {
-                                    RuleName = "Network Indicator: Classic Malware Port",
-                                    Evidence = $"Process '{processName}' (PID {owningPid}) has {direction} {targetAddr}:{suspiciousPort}. " +
-                                               $"Full connection: {localIp}:{localPort} -> {remoteIp}:{remotePort}",
-                                    Reasoning = $"Port {suspiciousPort} ({GetPortDescription(suspiciousPort)}) is in the attack-only " +
-                                                "block set (legacy shells / classic RAT ports). Games and browsers are skipped. " +
-                                                "This process is not that - kill-grade C2.",
-                                    Confidence = 0.86,
-                                    Tier = DetectionTier.Tier1Behavioral,
-                                    AuthorizedResponse = ResponseAction.KillProcessTree,
-                                    ProcessName = processName,
-                                    ProcessId = owningPid,
-                                    SignalType = SignalType.NetworkC2,
-                                    Family = TerminalFamily.C2Beacon,
-                                    Metadata = new Dictionary<string, string>
-                                    {
-                                        { "RemoteAddress", remoteIp },
-                                        { "RemotePort", remotePort.ToString() },
-                                        { "LocalAddress", localIp },
-                                        { "LocalPort", localPort.ToString() },
-                                        { "SuspiciousPort", suspiciousPort.ToString() },
-                                        { "Direction", isOutbound ? "Outbound" : "Inbound" },
-                                        { "TargetIP", isOutbound ? remoteIp : localIp }
-                                    }
-                                });
-                            }
+                                    { "WeakObserveSeed", "true" },
+                                    { "RemoteAddress", remoteIp },
+                                    { "RemotePort", remotePort.ToString() },
+                                    { "LocalAddress", localIp },
+                                    { "LocalPort", localPort.ToString() },
+                                    { "SuspiciousPort", suspiciousPort.ToString() },
+                                    { "Direction", isOutbound ? "Outbound" : "Inbound" },
+                                    { "TargetIP", isOutbound ? remoteIp : localIp }
+                                }
+                            });
                         }
+
 
                         // 3. Submit network telemetry context to telemetry pipeline
                         var telemetry = new NetworkTelemetry

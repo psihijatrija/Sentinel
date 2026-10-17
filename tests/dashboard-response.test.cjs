@@ -64,3 +64,35 @@ test('outcome details remain escaped when rendered', () => {
   assert.match(html, /&lt;script/);
   assert.doesNotMatch(html, /<img|<script/);
 });
+
+test('unverified firewall policy never gets an active dashboard badge', () => {
+  const elements = {};
+  const context = vm.createContext({
+    document: { getElementById(id) { return elements[id] ||= {}; } },
+    apiCall(endpoint, options, callback) {
+      callback(endpoint === '/api/status'
+        ? { ok: true, version: '3.2.3', serviceRunning: true, firewallPolicyCompliant: false }
+        : { ok: false });
+    }
+  });
+  vm.runInContext(sourceOf('loadStatus'), context);
+  context.loadStatus();
+  assert.equal(elements['status-text'].textContent, 'Firewall policy needs attention');
+  assert.equal(elements['ov-status'].textContent, 'Needs attention');
+});
+
+test('verified offline firewall policy can display active protection', () => {
+  const elements = {};
+  const context = vm.createContext({
+    document: { getElementById(id) { return elements[id] ||= {}; } },
+    apiCall(endpoint, options, callback) {
+      callback(endpoint === '/api/status'
+        ? { ok: true, version: '3.2.3', serviceRunning: true, firewallPolicyCompliant: true }
+        : { ok: false });
+    }
+  });
+  vm.runInContext(sourceOf('loadStatus'), context);
+  context.loadStatus();
+  assert.equal(elements['status-text'].textContent, 'Offline Protection Active');
+  assert.equal(elements['ov-status'].className, 'card-value success');
+});

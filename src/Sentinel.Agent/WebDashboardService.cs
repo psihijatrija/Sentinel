@@ -364,28 +364,22 @@ namespace Sentinel.Agent
                     return;
                 }
 
-                bool remediated = false;
-                string message;
-
-                if (_dllUnload != null)
+                // The interactive process never quarantines an arbitrary browser-supplied path.
+                // Ask the privileged service to inspect using its own sensors and response policy.
+                var result = await ServiceAgentIpcClient.RequestAsync("scan", "", 8000).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(result))
                 {
-                    var res = await _dllUnload.OnSideloadDllDroppedAsync(path, pid, $"Process_{pid}").ConfigureAwait(false);
-                    remediated = res.Success;
-                    message = remediated ? "Remediated via DllUnloadEngine" : "DllUnloadEngine completed without quarantine";
+                    response.StatusCode = 503;
+                    await WriteJson(response, new { ok = false, error = "service_unreachable", message = "Administrator service is unavailable; no remediation was performed." }).ConfigureAwait(false);
+                    return;
                 }
-                else
-                {
-                    var qPath = await _quarantine.QuarantineFileAtomicAsync(path, forceQuarantineSigned: true).ConfigureAwait(false);
-                    remediated = !string.IsNullOrEmpty(qPath);
-                    message = remediated ? $"Quarantined to {Path.GetFileName(qPath)}" : "Quarantine refused or failed";
-                }
-
+                using var serviceResult = JsonDocument.Parse(result!);
+                bool accepted = serviceResult.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True;
                 await WriteJson(response, new
                 {
-                    ok = remediated,
-                    path,
-                    pid,
-                    message
+                    ok = accepted,
+                    status = accepted ? "inspection_requested" : "inspection_refused",
+                    message = "Service inspection requested. Remediation requires the service's own detection policy."
                 }).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -512,13 +506,26 @@ namespace Sentinel.Agent
         private async Task HandleStatus(HttpListenerResponse response)
         {
             bool serviceRunning = false;
+            bool networkIsolationVerified = false;
+            bool firewallPolicyCompliant = false;
             try
             {
-                var procs = System.Diagnostics.Process.GetProcessesByName("Sentinel.Service");
-                serviceRunning = procs.Length > 0;
-                foreach (var p in procs) p.Dispose();
+                var health = await ServiceAgentIpcClient.RequestAsync("health", "", 3000).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(health))
+                {
+                    using var document = JsonDocument.Parse(health!);
+                    var root = document.RootElement;
+                    serviceRunning = root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True;
+                    if (root.TryGetProperty("firewallPolicy", out var policy) && policy.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrEmpty(policy.GetString()))
+                    {
+                        using var posture = JsonDocument.Parse(policy.GetString()!);
+                        networkIsolationVerified = posture.RootElement.TryGetProperty("SelfBlocksEffective", out var isolated) && isolated.ValueKind == JsonValueKind.True;
+                        firewallPolicyCompliant = posture.RootElement.TryGetProperty("PolicyCompliant", out var compliant) && compliant.ValueKind == JsonValueKind.True;
+                    }
+                }
             }
-            catch { }
+            catch (Exception ex) { _logger.LogDebug(ex, "[WebDashboard] Service firewall posture unavailable"); }
 
             var version = typeof(WebDashboardService).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
             await WriteJson(response, new
@@ -527,6 +534,9 @@ namespace Sentinel.Agent
                 version,
                 serviceRunning,
                 protectionActive = serviceRunning,
+                networkIsolationVerified,
+                firewallPolicyCompliant,
+                privilegeMode = "standard-user",
                 uptime = Environment.TickCount / 1000,
             }).ConfigureAwait(false);
         }

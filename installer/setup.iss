@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.2.2
+AppVersion=3.2.3
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.2.2.0
+VersionInfoVersion=3.2.3.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.2.2.0
-VersionInfoOriginalFileName=SentinelSetup-3.2.2.exe
+VersionInfoProductVersion=3.2.3.0
+VersionInfoOriginalFileName=SentinelSetup-3.2.3.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.2.2
+OutputBaseFilename=SentinelSetup-3.2.3
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -234,7 +234,11 @@ begin
     Svc := ExpandConstant('{app}\Sentinel.Service.exe');
     if FileExists(Svc) then
     begin
-      Exec(Svc, '--uninstall-cleanup', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      ResultCode := -1;
+      if not Exec(Svc, '--uninstall-cleanup', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        RaiseException('Sentinel firewall rollback could not start. The program files have been retained for recovery.');
+      if ResultCode <> 0 then
+        RaiseException('Sentinel firewall rollback failed. The program files have been retained for recovery. Repair the firewall policy or run --restore-firewall as administrator, then retry uninstall.');
       Sleep(800);
     end;
 
