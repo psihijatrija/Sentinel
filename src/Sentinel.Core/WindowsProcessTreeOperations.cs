@@ -12,7 +12,7 @@ namespace Sentinel.Core
     {
         internal static long GetCreationTime(int pid)
         {
-            using var handle = OpenProcess(0x1000, false, pid);
+            using var handle = new SafeProcessHandle(NativeResolver.OpenProcess(0x1000, false, pid), ownsHandle: true);
             if (handle.IsInvalid || !GetProcessTimes(handle, out long created, out _, out _, out _))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             return created;
@@ -36,7 +36,8 @@ namespace Sentinel.Core
         public IProcessTreeTarget? Open(int pid)
         {
             // Query identity, terminate, and wait; never request PROCESS_ALL_ACCESS.
-            var handle = OpenProcess(0x1000 | 0x0001 | 0x00100000, false, pid);
+            var handle = new SafeProcessHandle(
+                NativeResolver.OpenProcess(0x1000 | 0x0001 | 0x00100000, false, pid), ownsHandle: true);
             if (handle.IsInvalid)
             {
                 int error = Marshal.GetLastWin32Error();
@@ -104,8 +105,6 @@ namespace Sentinel.Core
         private static extern bool Process32First(SafeFileHandle snapshot, ref ProcessEntry entry);
         [DllImport("kernel32.dll", EntryPoint = "Process32NextW", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool Process32Next(SafeFileHandle snapshot, ref ProcessEntry entry);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int processId);
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetProcessTimes(SafeProcessHandle process, out long creation, out long exit, out long kernel, out long user);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
