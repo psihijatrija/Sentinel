@@ -1,6 +1,7 @@
 # Changelog
 ## [3.2.5] - 2026-10-17
 ### Added
+- Administrator-approved local DNS resolver profiles, protected snapshots, verified restoration and explicit failure/partial receipts. Configuration verification does not certify a router or DNS answers as safe.
 - Explicit administrator-approved recovery of interrupted DNS transactions, backed by durable starting/target states. Stale previews, unrelated DNS changes, changed protocol support, missing legacy plans and newer transactions are refused. Unresolved transactions block stacking new repairs.
 - Dashboard recovery selection and original-state preview through the existing UAC and actual IPC administrator-token checks. Failed recovery preserves the original target and attempts rollback to the newly approved state.
 - Separate disposable Windows DNS mutation job covering actual resolver writes, original/automatic restoration, cancellation rollback and disk-backed recovery with a new service instance. The wrapper retains an independent Windows-cmdlet restore and kills the test process tree on timeout. Regular test runs skip this guarded mutation fixture.

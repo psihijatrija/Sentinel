@@ -66,9 +66,14 @@ namespace Sentinel.Tests
                         var connecting = client.ConnectAsync(5000);
                         server.WaitForConnection();
                         connecting.GetAwaiter().GetResult();
-                        Volatile.Write(ref stage, "transferring client identity byte");
-                        client.WriteByte(1);
-                        Assert.Equal(1, server.ReadByte());
+                        Volatile.Write(ref stage, "starting identity read");
+                        var buffer = new byte[1];
+                        var reading = server.ReadAsync(buffer, 0, 1);
+                        Volatile.Write(ref stage, "writing client identity byte");
+                        client.WriteAsync(new byte[] { 1 }, 0, 1).GetAwaiter().GetResult();
+                        Volatile.Write(ref stage, "finishing identity read");
+                        Assert.Equal(1, reading.GetAwaiter().GetResult());
+                        Assert.Equal(1, buffer[0]);
                         Volatile.Write(ref stage, "checking actual client administrator token");
                         approved = ServiceAgentIpcHost.IsAdministratorClient(server);
                         Volatile.Write(ref stage, "disposing connected pipes");
