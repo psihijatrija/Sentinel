@@ -38,19 +38,25 @@ namespace Sentinel.Tests
             {
                 root = Start(powershell, rootCode);
                 unrelated = Start(powershell, "Start-Sleep -Seconds 120");
+                int rootPid = root.Id;
                 int childPid = await ReadPidAsync(childFile);
                 int grandchildPid = await ReadPidAsync(grandchildFile);
                 child = Process.GetProcessById(childPid);
                 grandchild = Process.GetProcessById(grandchildPid);
                 // Pin the original instances before containment, including for test cleanup.
+                _ = root.Handle;
                 _ = child.Handle;
                 _ = grandchild.Handle;
                 _ = unrelated.Handle;
 
                 var result = root.KillTree();
 
-                Assert.True(result.Success, result.Error);
-                Assert.Contains(root.Id, result.ExitedProcessIds);
+                Assert.True(result.Success,
+                    $"{result.Error}; rootExited={result.RootExited}; discoveryComplete={result.DiscoveryComplete}; " +
+                    $"exited={string.Join(",", result.ExitedProcessIds)}; " +
+                    $"failed={string.Join(",", result.FailedProcessIds)}; " +
+                    $"refused={string.Join(",", result.RefusedProcessIds)}");
+                Assert.Contains(rootPid, result.ExitedProcessIds);
                 Assert.Contains(childPid, result.ExitedProcessIds);
                 Assert.Contains(grandchildPid, result.ExitedProcessIds);
                 Assert.True(root.WaitForExit(5000));
@@ -77,11 +83,14 @@ namespace Sentinel.Tests
         private static string Encode(string code) => Convert.ToBase64String(Encoding.Unicode.GetBytes(code));
         private static string Quote(string text) => "'" + text.Replace("'", "''") + "'";
         private static string Spawn(string powershell, string code)
-            => "Start-Process -FilePath " + Quote(powershell) +
-               " -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand'," + Quote(Encode(code)) + ")";
+            => "$psi = New-Object System.Diagnostics.ProcessStartInfo; " +
+               "$psi.FileName = " + Quote(powershell) + "; " +
+               "$psi.Arguments = " + Quote("-NoProfile -NonInteractive -EncodedCommand " + Encode(code)) + "; " +
+               "$psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; " +
+               "[void][System.Diagnostics.Process]::Start($psi)";
         private static Process Start(string executable, string code)
             => Process.Start(new ProcessStartInfo(executable,
-                "-NoProfile -NonInteractive -EncodedCommand " + Encode(code)) { UseShellExecute = false })
+                "-NoProfile -NonInteractive -EncodedCommand " + Encode(code)) { UseShellExecute = false, CreateNoWindow = true })
                ?? throw new InvalidOperationException("Unable to start process-tree fixture.");
         private static async Task<int> ReadPidAsync(string path)
         {

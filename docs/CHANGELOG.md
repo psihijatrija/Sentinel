@@ -1,4 +1,10 @@
 # Changelog
+## [3.2.3] - 2026-10-17
+### Fixed
+- Windows process-tree integration fixtures now start without console helper processes and pin all process handles before containment. Failure diagnostics include observed containment outcomes.
+- Module attribution tests inject servicing-window state and cover both active and inactive servicing, avoiding dependence on Windows Update activity on the runner.
+- Build CI publishes all failed test names, messages and stack traces in its job summary.
+
 ## [3.2.2] - 2026-10-16
 ### Fixed
 - Response executors now return structured receipts with refused, attempted, failed,

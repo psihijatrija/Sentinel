@@ -16,6 +16,7 @@ namespace Sentinel.Core
         private readonly ModuleBaselineStore _store;
         private readonly ILogger<StateReconciliationMonitor> _logger;
         private readonly VisibilityGapTracker? _gaps;
+        private readonly Func<bool> _isServicingActive;
         private long _reconciledGeneration;
 
         public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(11));
@@ -47,7 +48,17 @@ namespace Sentinel.Core
             SignerTrustService signerTrust,
             ModuleBaselineStore store,
             ILogger<StateReconciliationMonitor> logger, VisibilityGapTracker? gaps = null)
+            : this(detectionEngine, signerTrust, store, logger, gaps,
+                () => ServicingWindow.IsActiveOrRecent())
         {
+        }
+
+        internal StateReconciliationMonitor(
+            DetectionEngine detectionEngine, SignerTrustService signerTrust, ModuleBaselineStore store,
+            ILogger<StateReconciliationMonitor> logger, VisibilityGapTracker? gaps,
+            Func<bool> isServicingActive)
+        {
+            _isServicingActive = isServicingActive ?? throw new ArgumentNullException(nameof(isServicingActive));
             _detectionEngine = detectionEngine;
             _signerTrust = signerTrust;
             _store = store;
@@ -186,7 +197,7 @@ namespace Sentinel.Core
 
             // 2. Active (or recently active) OS servicing window - updates legitimately stage and
             //    load modules from otherwise-suspicious paths.
-            if (ServicingWindow.IsActiveOrRecent())
+            if (_isServicingActive())
                 return (true, "servicing-window", SafeSigner(modulePath));
 
             // 3. Publisher already accepted on THIS machine. A signer new to this host is NOT

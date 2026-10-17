@@ -56,6 +56,28 @@ jobs:
         path: ${{ github.workspace }}/TestResults/*.trx
         if-no-files-found: ignore
 
+    - name: Summarize Windows test failures
+      if: always()
+      shell: pwsh
+      run: |
+        $resultPath = Join-Path $env:GITHUB_WORKSPACE 'TestResults/test-results.trx'
+        if (Test-Path $resultPath) {
+          [xml]$trx = Get-Content $resultPath -Raw
+          $c = $trx.TestRun.ResultSummary.Counters
+          "Windows Framework tests: executed=$($c.executed), passed=$($c.passed), failed=$($c.failed), notExecuted=$($c.notExecuted)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          foreach ($result in $trx.SelectNodes("//*[local-name()='UnitTestResult'][@outcome='Failed']")) {
+            $message = $result.SelectSingleNode(".//*[local-name()='Message']")
+            $stack = $result.SelectSingleNode(".//*[local-name()='StackTrace']")
+            Write-Host "Failed: $($result.testName)"
+            "Failed: $($result.testName)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+            if ($message) {
+              Write-Host $message.InnerText
+              $message.InnerText | Out-File $env:GITHUB_STEP_SUMMARY -Append
+            }
+            if ($stack) { $stack.InnerText | Out-File $env:GITHUB_STEP_SUMMARY -Append }
+          }
+        }
+
     # Coverage runs as its own step: coverlet.msbuild instruments at test-build time, so it
     # cannot use the --no-build artifacts from the Test step above. It builds+tests again with
     # instrumentation and emits a cobertura report. Not gated on a threshold yet (the baseline

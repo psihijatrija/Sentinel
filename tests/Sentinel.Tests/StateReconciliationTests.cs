@@ -30,12 +30,12 @@ namespace Sentinel.Tests
 
         // Attribution + baseline logic never touch the DetectionEngine (only the emit path does,
         // which is exercised separately via AdvancedResponseEngine), so a null engine is safe here.
-        private static StateReconciliationMonitor NewMonitor(string tempDir)
+        private static StateReconciliationMonitor NewMonitor(string tempDir, bool servicingActive = false)
         {
             var signerTrust = new SignerTrustService(NullLogger<SignerTrustService>.Instance);
             var store = new ModuleBaselineStore(Path.Combine(tempDir, "baseline"));
             return new StateReconciliationMonitor(null!, signerTrust, store,
-                NullLogger<StateReconciliationMonitor>.Instance);
+                NullLogger<StateReconciliationMonitor>.Instance, null, () => servicingActive);
         }
 
         // ---- Attribution ---------------------------------------------------------------
@@ -92,6 +92,22 @@ namespace Sentinel.Tests
                     @"C:\Users\Admin\AppData\Local\Temp\evil\headache.dll");
                 Assert.False(attributed);
                 Assert.Equal("unattributable", reason);
+            }
+            finally { TryDelete(tempDir); }
+        }
+
+        [Fact]
+        public void Attribution_ActiveServicingWindow_IsSuppressed()
+        {
+            var tempDir = NewTemp();
+            try
+            {
+                var mon = NewMonitor(tempDir, servicingActive: true);
+                var (attributed, reason, _) = mon.TryAttribute(
+                    @"C:\Windows\explorer.exe",
+                    @"C:\Users\Admin\AppData\Local\Temp\evil\headache.dll");
+                Assert.True(attributed);
+                Assert.Equal("servicing-window", reason);
             }
             finally { TryDelete(tempDir); }
         }
