@@ -52,7 +52,7 @@ function Invoke-SentinelFirewallPolicy {
         $interface = $rule | Get-NetFirewallInterfaceFilter
         $interfaceType = $rule | Get-NetFirewallInterfaceTypeFilter
         $security = $rule | Get-NetFirewallSecurityFilter
-        # Enabled is deliberately excluded: a later manual enable is the user's opt-in.
+        # Enabled is excluded so Windows re-enables cannot change a rule identity or grant approval.
         $identity = [ordered]@{
             Name=[string]$rule.Name; Direction=[string]$rule.Direction; Action=[string]$rule.Action
             Profile=[string]$rule.Profile; Protocol=[string]$port.Protocol

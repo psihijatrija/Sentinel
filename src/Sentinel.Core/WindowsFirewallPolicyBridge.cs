@@ -95,7 +95,9 @@ namespace Sentinel.Core
                 var script = await scriptReader.ReadToEndAsync().ConfigureAwait(false);
                 using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start Windows firewall management");
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromMinutes(2));
+                // Initial Windows inventories can contain hundreds of rules and CIM filter reads.
+                // Keep cancellation effective while allowing journaled baseline creation to finish.
+                timeout.CancelAfter(TimeSpan.FromMinutes(10));
                 // Bound both streams and drain concurrently to avoid pipe deadlocks.
                 var stdout = ReadBoundedAsync(child.StandardOutput, 1024 * 1024, timeout.Token);
                 var stderr = ReadBoundedAsync(child.StandardError, 64 * 1024, timeout.Token);

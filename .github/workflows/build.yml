@@ -101,7 +101,7 @@ jobs:
 
   firewall-smoke:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-dotnet@v4

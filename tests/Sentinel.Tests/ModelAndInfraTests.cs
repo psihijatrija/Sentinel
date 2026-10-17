@@ -48,7 +48,6 @@ namespace Sentinel.Tests
             Assert.False(ProxyAuthHelper.HasSharedSecret(config));
             Assert.Empty(ThreatReportingConfig.CompiledProxySharedSecret);
             Assert.Null(config.ProxySharedSecret);
-            Assert.Null(config.ProxySharedSecret);
         }
 
         [Fact]
@@ -93,7 +92,7 @@ namespace Sentinel.Tests
             var config = new CveShieldConfig();
             Assert.True(config.Enabled);
             Assert.Equal(4, config.PollIntervalHours);
-            Assert.Contains("cisa.gov", config.FeedUrl);
+            Assert.Empty(config.FeedUrl);
         }
 
         #endregion

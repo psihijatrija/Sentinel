@@ -438,6 +438,7 @@ namespace Sentinel.Core
                                 SignalType = SignalType.NetworkC2,
                                 Metadata = new Dictionary<string, string>
                                 {
+                                    { "WeakObserveSeed", "true" },
                                     { "RemoteAddress", remoteIp },
                                     { "RemotePort", remotePort.ToString() },
                                     { "LocalAddress", localIp },

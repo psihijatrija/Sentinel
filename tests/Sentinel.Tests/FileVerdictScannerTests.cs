@@ -13,9 +13,9 @@ namespace Sentinel.Tests
     public class FileVerdictScannerTests
     {
         [Fact]
-        public async Task HashReputationService_CirclFastPath_ReturnsSafe_BeforeMalwareBazaar()
+        public async Task HashReputationService_LegacySafeTestHash_ReturnsUnknownOffline()
         {
-            // Predefined safe hash bypasses both APIs - confirms the fast-path ordering
+            // Legacy test-only trust must not survive removal of online reputation.
             var tempDir = Path.Combine(Path.GetTempPath(), "fvs_test_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(tempDir);
             try
@@ -25,7 +25,7 @@ namespace Sentinel.Tests
                 var service = new HashReputationService(cache, config, NullLogger<HashReputationService>.Instance);
 
                 var verdict = await service.GetVerdictAsync("0000000000000000000000000000000000000000000000000000000000000000");
-                Assert.Equal(HashVerdict.Safe, verdict);
+                Assert.Equal(HashVerdict.Unknown, verdict);
             }
             finally
             {
@@ -34,7 +34,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task HashReputationService_CachesVerdict_SkipsApiOnSecondCall()
+        public async Task HashReputationService_LegacyUnsafeTestHash_RemainsUnknownOnRepeat()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "fvs_test_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(tempDir);
@@ -46,13 +46,13 @@ namespace Sentinel.Tests
 
                 var hash = "bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1bad1";
 
-                // First call hits the predefined hash path
+                // A synthetic hash is not evidence of malicious behavior.
                 var v1 = await service.GetVerdictAsync(hash);
-                Assert.Equal(HashVerdict.Unsafe, v1);
+                Assert.Equal(HashVerdict.Unknown, v1);
 
-                // Second call should hit memory cache (instant return)
+                // Repeating a lookup must not restore a synthetic or cached verdict.
                 var v2 = await service.GetVerdictAsync(hash);
-                Assert.Equal(HashVerdict.Unsafe, v2);
+                Assert.Equal(HashVerdict.Unknown, v2);
             }
             finally
             {
