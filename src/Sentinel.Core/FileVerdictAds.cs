@@ -303,6 +303,12 @@ namespace Sentinel.Core
             bool force = false,
             Action<string>? log = null,
             CancellationToken cancellationToken = default)
+            => PurgeLegacySidecarsOnce(roots: null, force, log, cancellationToken);
+
+        // Exercise the real marker/cleanup path against an isolated tree in regression tests.
+        // Production callers retain the all-fixed-drives scope through the public overload.
+        internal int PurgeLegacySidecarsOnce(IEnumerable<string>? roots, bool force,
+            Action<string>? log = null, CancellationToken cancellationToken = default)
         {
             var marker = LegacySidecarPurgeMarkerPath;
             if (!force && File.Exists(marker))
@@ -311,7 +317,7 @@ namespace Sentinel.Core
                 return 0;
             }
 
-            var deleted = PurgeLegacySidecarFiles(roots: null, log, cancellationToken);
+            var deleted = PurgeLegacySidecarFiles(roots, log, cancellationToken);
 
             try
             {

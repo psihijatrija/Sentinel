@@ -203,27 +203,46 @@ namespace Sentinel.Tests
         [Fact]
         public void FileVerdictAds_PurgeLegacySidecarsOnce_IsIdempotentViaMarker()
         {
-            var secure = Path.Combine(Path.GetTempPath(), "sentinel_purge_once_" + Guid.NewGuid().ToString("N")[..8]);
+            var root = Path.Combine(Path.GetTempPath(), "sentinel_purge_once_" + Guid.NewGuid().ToString("N"));
+            var secure = Path.Combine(root, "secure");
+            var scanRoot = Path.Combine(root, "scan");
+            var nested = Path.Combine(scanRoot, "nested");
+            Directory.CreateDirectory(nested);
             Directory.CreateDirectory(secure);
+            var executable = Path.Combine(nested, "fixture.exe");
+            var sidecar = executable + ".sentinel_verdict";
+            var outside = Path.Combine(root, "outside.sentinel_verdict");
 
             try
             {
                 var ads = new FileVerdictAds(secure);
-                // Pre-create marker as if a prior upgrade pass already completed
+                File.WriteAllText(executable, "preserve original");
+                File.WriteAllText(sidecar, "legacy");
+                File.WriteAllText(outside, "outside scan scope");
                 File.WriteAllText(ads.LegacySidecarPurgeMarkerPath, "prior");
 
-                var skipped = ads.PurgeLegacySidecarsOnce(force: false);
+                var skipped = ads.PurgeLegacySidecarsOnce(new[] { scanRoot }, force: false);
                 Assert.Equal(0, skipped);
-                Assert.True(File.Exists(ads.LegacySidecarPurgeMarkerPath));
+                Assert.True(File.Exists(sidecar));
+                Assert.Equal("prior", File.ReadAllText(ads.LegacySidecarPurgeMarkerPath));
 
-                // force=true re-runs and rewrites marker (may delete 0 files if no sidecars on fixed drives)
-                var forced = ads.PurgeLegacySidecarsOnce(force: true);
-                Assert.True(forced >= 0);
-                Assert.True(File.Exists(ads.LegacySidecarPurgeMarkerPath));
+                var forced = ads.PurgeLegacySidecarsOnce(new[] { scanRoot }, force: true);
+                Assert.Equal(1, forced);
+                Assert.False(File.Exists(sidecar));
+                Assert.Equal("preserve original", File.ReadAllText(executable));
+                Assert.Equal("outside scan scope", File.ReadAllText(outside));
+                var marker = File.ReadAllText(ads.LegacySidecarPurgeMarkerPath);
+                Assert.Contains("deleted=1", marker);
+
+                // A later non-forced call must skip the walk, not just rewrite its marker.
+                File.WriteAllText(sidecar, "new legacy fixture");
+                Assert.Equal(0, ads.PurgeLegacySidecarsOnce(new[] { scanRoot }, force: false));
+                Assert.True(File.Exists(sidecar));
+                Assert.Equal(marker, File.ReadAllText(ads.LegacySidecarPurgeMarkerPath));
             }
             finally
             {
-                try { Directory.Delete(secure, true); } catch { }
+                try { Directory.Delete(root, true); } catch { }
             }
         }
     }

@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main, master ]
 
+# Obsolete builds should not consume runners after a newer push to the same branch/PR.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -41,10 +46,14 @@ jobs:
     - name: Build (warnings as errors)
       run: dotnet build Sentinel.sln -c Release --no-restore -warnaserror
 
-    - name: Test
+    # coverlet.msbuild instruments during build: do not use --no-build here.
+    # One test execution produces both the TRX results and coverage report.
+    - name: Test with coverage
       run: >
         dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj
-        -c Release --no-build --verbosity normal
+        -c Release --no-restore --verbosity minimal
+        /p:CollectCoverage=true
+        /p:CoverletOutputFormat=cobertura
         --logger "trx;LogFileName=test-results.trx"
         --results-directory ${{ github.workspace }}/TestResults
 
@@ -77,17 +86,6 @@ jobs:
             if ($stack) { $stack.InnerText | Out-File $env:GITHUB_STEP_SUMMARY -Append }
           }
         }
-
-    # Coverage runs as its own step: coverlet.msbuild instruments at test-build time, so it
-    # cannot use the --no-build artifacts from the Test step above. It builds+tests again with
-    # instrumentation and emits a cobertura report. Not gated on a threshold yet (the baseline
-    # is ~40% line on Sentinel.Core); the number is published so regressions are visible.
-    - name: Coverage
-      run: >
-        dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj
-        -c Release
-        /p:CollectCoverage=true
-        /p:CoverletOutputFormat=cobertura
 
     - name: Upload coverage report
       if: always()

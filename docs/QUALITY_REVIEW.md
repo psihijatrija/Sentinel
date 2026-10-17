@@ -132,3 +132,10 @@ an installer release exists.
 - Full Windows Framework suite, native ETW/DPAPI behavior, installer creation and publication
   are delegated to the Windows GitHub Actions release gate. Do not infer success from
   local checks; consult the actual workflow/release result.
+
+
+## CI runtime correction
+
+Build & Test uses a concurrency group per branch or pull request with cancellation of superseded runs. Its single coverage-enabled Framework test invocation emits both the TRX result and Cobertura report; it does not run the suite a second time for coverage. Release validation remains independent.
+
+The legacy-sidecar one-shot marker regression supplies a temporary scan root through an internal overload of the production cleanup path. The public production overload retains its fixed-drive scope. The regression verifies actual deletion counts and preserved files without scanning or deleting sidecars elsewhere on the runner. No tests are skipped or filtered out of the normal suite. Windows CI must confirm the resulting wall-clock improvement; Linux cross-builds do not measure it.

@@ -1,6 +1,8 @@
 # Changelog
 ## [3.2.2] - 2026-10-17
 ### Fixed
+- Build CI cancels superseded runs for the same branch or pull request and produces test results plus coverage from one test execution.
+- The one-shot legacy-sidecar purge regression now scans only its temporary fixture, rather than every fixed drive on the runner. It verifies marker skipping, forced removal, repeat-call idempotence and preservation of original/out-of-scope files.
 - Process-tree termination now waits for the pinned process handle even when TerminateProcess reports access denied during an already-pending exit. Only a signaled handle verifies exit; persistent denial and timeouts remain incomplete.
 - Monitor-group startup tests wait for explicit start notifications with a bounded deadline instead of assuming startup completes in 200ms. Cleanup runs after failed assertions too.
 - Prevented Sentinel's pipe-owner inspection from generating C2 alerts against its own decoys, using kernel-reported PIDs rather than process names.
