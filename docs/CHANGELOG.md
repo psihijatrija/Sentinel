@@ -1,6 +1,8 @@
 # Changelog
 ## [3.2.2] - 2026-10-17
 ### Fixed
+- Process-tree termination now waits for the pinned process handle even when TerminateProcess reports access denied during an already-pending exit. Only a signaled handle verifies exit; persistent denial and timeouts remain incomplete.
+- Monitor-group startup tests wait for explicit start notifications with a bounded deadline instead of assuming startup completes in 200ms. Cleanup runs after failed assertions too.
 - Prevented Sentinel's pipe-owner inspection from generating C2 alerts against its own decoys, using kernel-reported PIDs rather than process names.
 - Certificate trust-marker heuristics are now Tier2 review-only findings. Only explicit thumbprint distrust policy may remove certificates, block them or quarantine associated files; the remediator enforces this at its entry point.
 - Separated agent logs and audit chains from the service log. Event files accept one writer and no longer rename a live writer's file on contention; lost writes remain counted. Dashboard history/live events and tray notifications read both sources.

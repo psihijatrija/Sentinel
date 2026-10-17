@@ -15,6 +15,8 @@ namespace Sentinel.Tests
         {
             public bool Started { get; private set; }
             public bool Stopped { get; private set; }
+            private readonly TaskCompletionSource<bool> _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public Task StartedSignal => _started.Task;
             private readonly bool _shouldFail;
 
             public FakeMonitor(bool shouldFail = false) => _shouldFail = shouldFail;
@@ -23,7 +25,9 @@ namespace Sentinel.Tests
             {
                 if (_shouldFail) throw new InvalidOperationException("Simulated failure");
                 Started = true;
-                return base.StartAsync(ct);
+                var start = base.StartAsync(ct);
+                _started.TrySetResult(true);
+                return start;
             }
 
             public override Task StopAsync(CancellationToken ct)
@@ -40,7 +44,7 @@ namespace Sentinel.Tests
         {
             var monitors = new IHostedService[] { new FakeMonitor(), new FakeMonitor(), new FakeMonitor() };
             var config = new MonitorGroupConfig { Name = "TestGroup" };
-            var group = new MonitorGroup(config, monitors, NullLogger.Instance);
+            using var group = new MonitorGroup(config, monitors, NullLogger.Instance);
 
             Assert.Equal("TestGroup", group.GroupName);
             Assert.Equal(3, group.MonitorCount);
@@ -59,17 +63,23 @@ namespace Sentinel.Tests
                 StaggerDelay = TimeSpan.FromMilliseconds(10),
                 HealthCheckInterval = TimeSpan.FromHours(1) // don't health check during test
             };
-            var group = new MonitorGroup(config, monitors, NullLogger.Instance);
+            using var group = new MonitorGroup(config, monitors, NullLogger.Instance);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await group.StartAsync(cts.Token);
-            await Task.Delay(200); // let stagger+start complete
-
-            Assert.True(m1.Started);
-            Assert.True(m2.Started);
-
-            cts.Cancel();
-            try { await group.StopAsync(CancellationToken.None); } catch { }
+            using var cts = new CancellationTokenSource();
+            try
+            {
+                await group.StartAsync(cts.Token);
+                await AwaitStartup(Task.WhenAll(m1.StartedSignal, m2.StartedSignal));
+                Assert.True(m1.Started);
+                Assert.True(m2.Started);
+            }
+            finally
+            {
+                cts.Cancel();
+                await group.StopAsync(CancellationToken.None);
+            }
+            Assert.True(m1.Stopped);
+            Assert.True(m2.Stopped);
         }
 
         [Fact]
@@ -84,17 +94,34 @@ namespace Sentinel.Tests
                 StaggerDelay = TimeSpan.FromMilliseconds(10),
                 HealthCheckInterval = TimeSpan.FromHours(1)
             };
-            var group = new MonitorGroup(config, monitors, NullLogger.Instance);
+            using var group = new MonitorGroup(config, monitors, NullLogger.Instance);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await group.StartAsync(cts.Token);
-            await Task.Delay(200);
+            using var cts = new CancellationTokenSource();
+            try
+            {
+                await group.StartAsync(cts.Token);
+                await AwaitStartup(good.StartedSignal);
+                // A failed monitor cannot prevent the remaining monitor from starting.
+                Assert.True(good.Started);
+            }
+            finally
+            {
+                cts.Cancel();
+                await group.StopAsync(CancellationToken.None);
+            }
+            Assert.True(good.Stopped);
+        }
 
-            // Good monitor should still start even though first one failed
-            Assert.True(good.Started);
-
-            cts.Cancel();
-            try { await group.StopAsync(CancellationToken.None); } catch { }
+        private static async Task AwaitStartup(Task startup)
+        {
+            using var timeout = new CancellationTokenSource();
+            var deadline = Task.Delay(TimeSpan.FromSeconds(30), timeout.Token);
+            try
+            {
+                Assert.Same(startup, await Task.WhenAny(startup, deadline));
+                await startup;
+            }
+            finally { timeout.Cancel(); }
         }
 
         [Fact]

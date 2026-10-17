@@ -79,11 +79,10 @@ namespace Sentinel.Core
             }
             public bool TerminateAndWait(int timeoutMilliseconds)
             {
-                if (!TerminateProcess(_handle, 1) && !HasExited)
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                uint status = WaitForSingleObject(_handle, (uint)timeoutMilliseconds);
-                if (status == 0xFFFFFFFF) throw new Win32Exception(Marshal.GetLastWin32Error());
-                return status == 0;
+                return NativeProcessExitVerifier.TerminateAndWait(ProcessId, timeoutMilliseconds,
+                    () => TerminateProcess(_handle, 1),
+                    () => Marshal.GetLastWin32Error(),
+                    timeout => WaitForSingleObject(_handle, (uint)timeout));
             }
             public void Dispose() => _handle.Dispose();
         }
