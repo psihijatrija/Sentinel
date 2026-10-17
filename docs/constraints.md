@@ -1,6 +1,6 @@
 # Sentinel - Constraints
 
-**Version: 3.2.3**
+**Version: 3.2.4**
 
 ---
 
@@ -132,3 +132,5 @@
 - File reputation verdicts must not pollute user/system directories with adjacent `*.sentinel_verdict` sidecars; use central ProgramData cache (and optional NTFS ADS only)
 
 
+
+DNS configuration observations never authorize mutation. Repair requires an elevated administrator IPC caller, fresh preview, durable protected snapshot and audit acceptance; native read-back and cache flushing determine success. No router-clean claim or active DNS probe is permitted. See [DNS repair limits](DNS_REPAIR.md).

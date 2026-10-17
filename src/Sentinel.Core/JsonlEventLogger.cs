@@ -479,7 +479,7 @@ namespace Sentinel.Core
                 // the companion chain without flooding it with Tier2 LogOnly responses.
                 bool chainEvent = type == "integrity_change" || type == "integrity_coverage_restored" ||
                     type == "integrity_baseline_unavailable" || type == "integrity_reconciled_after_visibility_gap" ||
-                    type == "certificate_provenance" ||
+                    type == "certificate_provenance" || type == "dns_repair_before" || type == "dns_repair_result" || type == "dns_configuration_change" ||
                     type == "detection" && data is DetectionEvent diagnostic &&
                         (diagnostic.RuleName.StartsWith("Telemetry: ETW ", StringComparison.Ordinal) ||
                          diagnostic.RuleName.StartsWith("State Reconciliation: ", StringComparison.Ordinal)) ||

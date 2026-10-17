@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 3.2.3**
+**Version: 3.2.4**
 
 ---
 
@@ -55,7 +55,7 @@ The system must detect the following behavioral threats:
 | T1-13 | Phantom keystrokes | Injected keystrokes detected via `LLKHF_INJECTED` flag and blocked via `WH_KEYBOARD_LL` |
 | T1-14 | Network: Unauthorized Network Bridge | Virtual bridge detection and active SetupAPI uninstallation |
 | T1-15 | Network: Primary Adapter Disabled | Baselined physical adapter disabled state detection and active restoration |
-| T1-16 | Network: Unauthorized DNS Change | NameServer configuration registry lock and browser DoH policy enforcement |
+| DNS review | Adapter Configuration Changed | IPv4/IPv6/effective resolver drift is Tier2 LogOnly; no startup-baseline DNS restoration |
 | T1-17 | BYOVD / planted driver certs | Driver load + cert-trace; neutralize via service stop/SCM key remove (no System32 driver mass-delete) |
 | T1-18 | Token theft / potato-class impersonation | Non-service SYSTEM tokens from user-writable paths (OS false positives suppressed) |
 | T1-19 | Digital coercion / surveillance toolkit | Covert surveillance + remote channel, remote-control abuse toolkit, session theft + abuse channel, stalkerware persistence chain (host-tool composites only; no chat moderation) |
@@ -166,7 +166,7 @@ The system must implement two correlation engines that fire composite detections
 | RemoveCert / RemoveCertAndKillAdder | Planted / high-confidence rogue certificates |
 | RemoveRegistryEntry | Malicious autorun / service / COM persistence |
 | DismountVolume (wired v2.8.4) | Authorized Tier1 kill whose process runs from a mounted ISO -> `IsolationResponseEngine.HandleIsoThreatAsync`: kill process tree, `Dismount-DiskImage`, delete backing `.iso`. ISO origin resolved from non-attacker-controllable anchors (OS-recorded mounted-image + process image path); degrades to plain kill (never dismounts an unrelated volume) if origin unconfirmed. Also drives Docker (`HandleDockerThreatAsync`, via `ContainerId`) and VM (`HandleVmThreatAsync`, via VM host PID) containment alongside the kill. VHD/SUBST fallback drives are dismounted by `VolumeMountMonitor` |
-| VpnShieldUp (v2.6.0) | Confirmed local network tamper: raise a userland RAS VPN tunnel (visible; no kernel), clean the path (unbridge / re-enable adapters / restore DNS), verify clean, then drop the tunnel. Fail-safe: hold tunnel if not verified clean. Non-kill (ordered below KillProcess). Gated on `VpnShield.Enabled` (`ProductPosture.AllowsVpnShield`, default off); prefers trusted `ProviderProfile`, VPN Gate fallback only if opted in |
+| VpnShieldUp (v2.6.0) | Confirmed local network tamper: raise a userland RAS VPN tunnel (visible; no kernel), clean the path (unbridge / re-enable adapters; DNS requires explicit administrator repair), verify clean, then drop the tunnel. Fail-safe: hold tunnel if not verified clean. Non-kill (ordered below KillProcess). Gated on `VpnShield.Enabled` (`ProductPosture.AllowsVpnShield`, default off); prefers trusted `ProviderProfile`, VPN Gate fallback only if opted in |
 
 **ActiveResponse model:**
 
@@ -312,7 +312,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
   also continues to feed the existing `WPAD Proxy Hijack Chain`
 - Action (`ResponseAction.VpnShieldUp`, non-kill, ordered below `KillProcess`): `VpnShieldEngine` raises
   a userland RAS VPN tunnel (`rasapi32`, visible - no kernel driver, no self-hiding), asks
-  `NetworkInterfaceGuard` to clean (unbridge / re-enable adapters / restore DNS), verifies the path is
+  `NetworkInterfaceGuard` to clean (unbridge / re-enable adapters; DNS requires explicit administrator repair), verifies the path is
   clean for `CleanSweepsRequired` consecutive sweeps, then drops the tunnel
 - **Fail-safe:** if the path cannot be *verified* clean (or verification errors), the tunnel STAYS UP;
   on `MaxShieldSeconds` expiry the incident is escalated and the tunnel is held - never silently dropped
@@ -416,3 +416,7 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 | 2.6.3 | T2-11 update/servicing-surface abuse; `UpdateServicingMonitor` (CoreDetection group): servicing actors spawning shells/LOLBins/cred tools, CAB/MSU extraction to abnormal paths (CVE-2021-40444 `..\` class), unsigned/non-Microsoft servicing binaries via `SignerTrustService`, plain-HTTP/non-Microsoft update source; all Tier2/LogOnly observe fuel, composes with `RegistryMonitor` service-drop + `FileActivityMonitor` writes; never self-authorizes a kill |
 
 Certificate purpose/private-key classification is not implemented by the current trust-marker guard; see [certificate policy](CERTIFICATES.md).
+
+### FR-35: Administrator-approved DNS repair (3.2.4)
+
+Eligible unmanaged adapters support fixed public-resolver profiles and saved-state restoration through authenticated IPC with a real elevated administrator caller. A fresh configuration fingerprint, protected durable snapshot and accepted pre-action audit are required before mutation. Both enabled address families, effective resolver read-back and cache flushing contribute to verification; failure/cancellation attempts bounded rollback. Partial and refused outcomes remain visible. No external DNS queries, automatic Tier2 repair, router-clean verdict or commercial-product parity is implied. See [DNS repair](DNS_REPAIR.md) for platform validation and recovery limits.

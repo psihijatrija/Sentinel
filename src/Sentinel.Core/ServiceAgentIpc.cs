@@ -286,6 +286,7 @@ namespace Sentinel.Core
         private readonly DetectionEngine? _detectionEngine;
         private readonly UnifiedEtwSession? _etw;
         private readonly FirewallPolicyStatus? _firewallPolicy;
+        private readonly DnsRepairService? _dnsRepair;
         private byte[] _token = Array.Empty<byte>();
 
         // v2.0.4 CRIT-1: Server-side nonce tracking to prevent replay attacks within the 60s window.
@@ -305,7 +306,7 @@ namespace Sentinel.Core
             ILogger<ServiceAgentIpcHost> logger,
             MonitorRegistry? registry = null,
             CertRemediator? certRemediator = null,
-            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null, FirewallPolicyStatus? firewallPolicy = null)
+            JsonlEventLogger? eventLogger = null, DetectionEngine? detectionEngine = null, UnifiedEtwSession? etw = null, FirewallPolicyStatus? firewallPolicy = null, DnsRepairService? dnsRepair = null)
         {
             _metrics = metrics;
             _weighted = weighted;
@@ -317,6 +318,7 @@ namespace Sentinel.Core
             _detectionEngine = detectionEngine;
             _etw = etw;
             _firewallPolicy = firewallPolicy;
+            _dnsRepair = dnsRepair;
             _certRemediator = certRemediator;
         }
 
@@ -506,6 +508,22 @@ namespace Sentinel.Core
                             response = JsonSerializer.Serialize(new { ok = true, status = "idle" });
                         }
                         break;
+                    case "dns_inspect":
+                        response = _dnsRepair == null ? JsonSerializer.Serialize(new { ok = false, error = "DNS repair unavailable" })
+                            : JsonSerializer.Serialize(new { ok = true, data = _dnsRepair.Inspect() });
+                        break;
+                    case "dns_repair":
+                    case "dns_restore":
+                        if (_dnsRepair == null || !IsAdministratorClient(pipe))
+                        {
+                            response = JsonSerializer.Serialize(new { ok = false, error = "Elevated administrator approval is required." });
+                            break;
+                        }
+                        var dnsRequest = JsonSerializer.Deserialize<DnsRepairRequest>(body)
+                            ?? throw new ArgumentException("Invalid DNS request.");
+                        var dnsResult = await _dnsRepair.ExecuteAsync(dnsRequest, op.Equals("dns_restore", StringComparison.OrdinalIgnoreCase), ct).ConfigureAwait(false);
+                        response = JsonSerializer.Serialize(new { ok = dnsResult.Status == "Verified", result = dnsResult });
+                        break;
                     case "cert_distrust":
                         // Remediate a distrusted certificate: remove from Root, pin to Disallowed.
                         // Mirrors Registry\Certificates.reg. Fail-closed: CertRemediator refuses
@@ -524,6 +542,24 @@ namespace Sentinel.Core
                 _logger.LogDebug(ex, "[IPC] Bad request");
                 await writer.WriteLineAsync("{\"ok\":false,\"error\":\"bad_request\"}").ConfigureAwait(false);
             }
+        }
+
+        internal static bool IsAdministratorClient(NamedPipeServerStream pipe)
+        {
+            bool administrator = false;
+            try
+            {
+                pipe.RunAsClient(() =>
+                {
+                    using var identity = WindowsIdentity.GetCurrent(true);
+                    administrator = identity != null && new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                });
+            }
+            catch (System.Security.SecurityException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (IOException) { return false; }
+            catch (InvalidOperationException) { return false; }
+            return administrator;
         }
 
         /// <summary>
@@ -625,7 +661,8 @@ namespace Sentinel.Core
             try
             {
                 using var pipe = new NamedPipeClientStream(
-                    ".", ServiceAgentIpc.InstancePipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                    ".", ServiceAgentIpc.InstancePipeName, PipeDirection.InOut, PipeOptions.Asynchronous,
+                    op == "dns_repair" || op == "dns_restore" ? TokenImpersonationLevel.Identification : TokenImpersonationLevel.None);
                 var connectTask = pipe.ConnectAsync(timeoutMs);
                 await connectTask.ConfigureAwait(false);
                 if (!pipe.IsConnected) return null;

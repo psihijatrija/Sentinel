@@ -18,7 +18,7 @@ namespace Sentinel.Core
     /// Monitors and hardens network interface state:
     /// - Detects and removes network bridges via SetupAPI (DIF_REMOVE)
     /// - Re-enables disabled physical adapters via WMI (MSFT_NetAdapter)
-    /// - Locks adapter DNS configuration to baseline registry values
+    /// - Observes adapter DNS changes; explicit administrator repair owns DNS mutation
     /// - Enforces global DNS-over-HTTPS (DoH) parameters
     /// </summary>
     public sealed class NetworkInterfaceGuard : BackgroundService
@@ -26,6 +26,9 @@ namespace Sentinel.Core
         private readonly DetectionEngine _detectionEngine;
         private readonly SentinelConfig _config;
         private readonly ILogger<NetworkInterfaceGuard> _logger;
+        private readonly IDnsConfigurationBackend? _dnsBackend;
+        private readonly JsonlEventLogger? _eventLog;
+        private readonly Dictionary<string, DnsAdapterState> _dnsObservations = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly HashSet<int> _baselinePhysicalInterfaceIndices = new();
         private readonly Dictionary<string, string> _baselineDnsServers = new(StringComparer.OrdinalIgnoreCase);
@@ -95,11 +98,13 @@ namespace Sentinel.Core
         public NetworkInterfaceGuard(
             DetectionEngine detectionEngine,
             SentinelConfig config,
-            ILogger<NetworkInterfaceGuard> logger)
+            ILogger<NetworkInterfaceGuard> logger, IDnsConfigurationBackend? dnsBackend = null, JsonlEventLogger? eventLog = null)
         {
             _detectionEngine = detectionEngine;
             _config = config;
             _logger = logger;
+            _dnsBackend = dnsBackend;
+            _eventLog = eventLog;
         }
 
         protected override async Task ExecuteAsync(CancellationToken ct)
@@ -110,6 +115,12 @@ namespace Sentinel.Core
             BaselinePhysicalAdapters();
             BaselineAllAdapters();
             BaselineDnsServers();
+            if (_dnsBackend != null)
+            {
+                try { await ObserveDnsConfigurationAsync(ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+                catch (Exception ex) { _logger.LogWarning(ex, "[NetworkInterfaceGuard] Initial DNS inspection unavailable; periodic inspection will retry"); }
+            }
             EnforceSecureDoh();
 
             while (!ct.IsCancellationRequested)
@@ -124,8 +135,9 @@ namespace Sentinel.Core
                     // 2. Re-enable disabled physical network adapters
                     await CheckAndRestoreDisabledAdaptersAsync(ct);
 
-                    // 3. Monitor and lock DNS configuration
-                    await CheckAndLockDnsAsync(ct);
+                    // 3. Observe DNS configuration drift
+                    if (_dnsBackend != null) await ObserveDnsConfigurationAsync(ct);
+                    else await CheckAndLockDnsAsync(ct);
 
                     // 4. Ensure DoH remains enabled
                     EnforceSecureDoh();
@@ -148,14 +160,14 @@ namespace Sentinel.Core
         /// <see cref="ResponsePolicy.MayPerformInlineHostMutation"/>), this is invoked ONLY by
         /// <c>VpnShieldEngine</c> after a network-tamper incident is already chain-confirmed
         /// and the user is behind the protective tunnel - so the mutation is already authorized.
-        /// It unbridges, re-enables disabled physical adapters, and restores DNS to baseline.
+        /// It unbridges, re-enables disabled physical adapters, and leaves DNS changes to explicit administrator-approved repair.
         /// Best-effort and non-throwing (graceful degradation).
         /// </summary>
         public async Task ForceCleanAsync(CancellationToken ct)
         {
             try { RemoveNetworkBridge(); } catch (Exception ex) { _logger.LogDebug(ex, "[NetworkInterfaceGuard] ForceClean: bridge removal error"); }
             try { await RestoreDisabledAdaptersAsync(ct).ConfigureAwait(false); } catch (Exception ex) { _logger.LogDebug(ex, "[NetworkInterfaceGuard] ForceClean: adapter restore error"); }
-            try { RestoreDnsToBaseline(); } catch (Exception ex) { _logger.LogDebug(ex, "[NetworkInterfaceGuard] ForceClean: DNS restore error"); }
+            _logger.LogInformation("[NetworkInterfaceGuard] DNS startup observations are not repair authority; use administrator-approved DNS repair.");
         }
 
         /// <summary>
@@ -239,20 +251,6 @@ namespace Sentinel.Core
             await Task.CompletedTask;
         }
 
-        private void RestoreDnsToBaseline()
-        {
-            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (_baselineDnsServers.TryGetValue(ni.Id, out var baselineDns))
-                {
-                    var currentDns = GetRegistryDns(ni.Id);
-                    if (!string.IsNullOrEmpty(currentDns) && !currentDns!.Equals(baselineDns))
-                    {
-                        SetRegistryDns(ni.Id, baselineDns);
-                    }
-                }
-            }
-        }
 
         private void BaselinePhysicalAdapters()
         {
@@ -569,6 +567,37 @@ namespace Sentinel.Core
             }
         }
 
+        private async Task ObserveDnsConfigurationAsync(CancellationToken ct)
+        {
+            foreach (var current in _dnsBackend!.Inspect())
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!current.InspectionComplete) continue;
+                if (_dnsObservations.TryGetValue(current.Id, out var prior) && prior.Fingerprint != current.Fingerprint)
+                {
+                    if (_eventLog != null)
+                        await _eventLog.LogEventAsync("dns_configuration_change", new { Before = prior, After = current,
+                            Attribution = "Unknown; DHCP, VPN, administrator repair and tampering can change DNS." }, ct);
+                    await _detectionEngine.EmitAsync(new DetectionEvent
+                    {
+                        RuleName = "DNS: Adapter Configuration Changed", Tier = DetectionTier.Tier2Indicator,
+                        AuthorizedResponse = ResponseAction.LogOnly, Confidence = 0.5,
+                        ProcessId = 0, ProcessName = "SYSTEM", SignalType = SignalType.Generic,
+                        Evidence = $"Adapter '{current.Name}' DNS configuration or availability changed. IPv4/IPv6 and effective resolver state are recorded.",
+                        Reasoning = "An observed configuration change is not proof of hijacking and does not authorize automatic mutation. Administrator-approved repair uses its own verified snapshot.",
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["AdapterId"] = current.Id, ["BeforeFingerprint"] = prior.Fingerprint,
+                            ["AfterFingerprint"] = current.Fingerprint,
+                            ["BeforeServers"] = string.Join(";", prior.EffectiveServers),
+                            ["AfterServers"] = string.Join(";", current.EffectiveServers)
+                        }
+                    });
+                }
+                _dnsObservations[current.Id] = current;
+            }
+        }
+
         private async Task CheckAndLockDnsAsync(CancellationToken ct)
         {
             try
@@ -580,28 +609,15 @@ namespace Sentinel.Core
                         var currentDns = GetRegistryDns(ni.Id);
                         if (!string.IsNullOrEmpty(currentDns) && !currentDns!.Equals(baselineDns))
                         {
-                            // v-next: tune confidence by the reputation of the NEW resolver.
-                            // A change TO a well-known public resolver (Cloudflare/Google/Quad9/...)
-                            // is usually a benign provider switch; the classic hijack points DNS at
-                            // an unknown attacker-controlled server. Down-weight the known-good case;
-                            // keep high confidence when the new server is unrecognized.
-                            bool newDnsAllKnown = PublicDnsResolvers.AllKnownPublicResolvers(currentDns);
-                            double dnsConfidence = newDnsAllKnown ? 0.45 : 0.88;
-                            string dnsReasoning = newDnsAllKnown
-                                ? "A process changed the network adapter's DNS servers to a well-known public resolver. " +
-                                  "This is frequently a legitimate provider switch, but an unexpected change can still " +
-                                  "indicate tampering - reported at reduced confidence as an observe-only signal."
-                                : "An unauthorized process modified the network adapter's DNS settings to an unrecognized " +
-                                  "server. Pointing resolution at an attacker-controlled resolver is a common hijacking " +
-                                  "technique to redirect web traffic to malicious servers.";
+                            // Resolver identity and a startup observation do not prove hijacking.
+                            string dnsReasoning = "An observed resolver change requires review. DHCP, administrator changes and tampering can all change DNS; no process attribution is established.";
 
                             await _detectionEngine.EmitAsync(new DetectionEvent
                             {
-                                RuleName = "Network: Unauthorized DNS Change",
-                                Evidence = $"DNS NameServer configuration for interface '{ni.Name}' changed from '{baselineDns}' to '{currentDns}' in Registry." +
-                                           (newDnsAllKnown ? " New servers are known public resolvers." : " New servers are not recognized public resolvers."),
+                                RuleName = "DNS: Adapter Configuration Changed",
+                                Evidence = $"DNS NameServer configuration for interface '{ni.Name}' differs from the startup observation: '{baselineDns}' -> '{currentDns}'.",
                                 Reasoning = dnsReasoning,
-                                Confidence = dnsConfidence, Tier = DetectionTier.Tier1Behavioral,
+                                Confidence = 0.5, Tier = DetectionTier.Tier2Indicator,
                                 AuthorizedResponse = ResponseAction.LogOnly,
                                 ProcessName = "SYSTEM", ProcessId = 0,
                                 Metadata = new Dictionary<string, string>
@@ -611,10 +627,8 @@ namespace Sentinel.Core
                                 }
                             });
 
-                            if (ResponsePolicy.MayPerformInlineHostMutation(_config))
-                            {
-                                SetRegistryDns(ni.Id, baselineDns);
-                            }
+                            // A startup observation may itself be poisoned. Never use it as
+                            // automatic repair authority; explicit DNS repair owns DNS mutation.
                         }
                     }
                 }
@@ -635,22 +649,6 @@ namespace Sentinel.Core
             catch { return null; }
         }
 
-        private void SetRegistryDns(string interfaceGuid, string dnsServers)
-        {
-            try
-            {
-                using var key = Registry.LocalMachine.OpenSubKey($@"{InterfacesKeyPath}\{interfaceGuid}", writable: true);
-                if (key != null)
-                {
-                    key.SetValue("NameServer", dnsServers, RegistryValueKind.String);
-                    _logger.LogInformation("[NetworkInterfaceGuard] Restored DNS servers on interface {Guid} to secure baseline: {DNS}", interfaceGuid, dnsServers);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[NetworkInterfaceGuard] Failed to set DNS servers on interface {Guid}", interfaceGuid);
-            }
-        }
 
         private void EnforceSecureDoh()
         {

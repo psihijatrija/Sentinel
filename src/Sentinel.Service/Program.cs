@@ -52,6 +52,24 @@ namespace Sentinel.Service
     {
         public static async Task Main(string[] args)
         {
+            // Short-lived elevated client: privileged mutation still occurs inside the service.
+            if (args.Length == 2 && (args[0] == "--repair-dns" || args[0] == "--restore-dns"))
+            {
+                if (UserSessionPrivilege.IsCurrentProcessUnprivileged()) { Environment.ExitCode = 5; return; }
+                try
+                {
+                    if (args[1].Length > 8192) throw new ArgumentException("DNS request is too large.");
+                    string body = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                    _ = System.Text.Json.JsonSerializer.Deserialize<DnsRepairRequest>(body) ?? throw new ArgumentException("Invalid request.");
+                    string? result = await ServiceAgentIpcClient.RequestAsync(args[0] == "--restore-dns" ? "dns_restore" : "dns_repair", body, 45000);
+                    if (result == null) { Environment.ExitCode = 1; return; }
+                    Console.WriteLine(result);
+                    using var document = System.Text.Json.JsonDocument.Parse(result);
+                    Environment.ExitCode = document.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean() ? 0 : 1;
+                }
+                catch (Exception ex) { Console.Error.WriteLine(ex.Message); Environment.ExitCode = 1; }
+                return;
+            }
             // Isolated hard-fault attribution - no host, no monitors, no response actions.
             if (args.Length >= 1 && args[0].Equals("--pagefault-diag", StringComparison.OrdinalIgnoreCase))
             {
@@ -326,6 +344,10 @@ namespace Sentinel.Service
                         opts.ShutdownTimeout = TimeSpan.FromSeconds(10);
                     });
 
+                    services.AddSingleton<IDnsConfigurationBackend, WindowsDnsConfigurationBackend>();
+                    services.AddSingleton<IDnsRepairJournal, DnsRepairJournal>();
+                    services.AddSingleton<IDnsRepairAudit, DnsRepairAudit>();
+                    services.AddSingleton<DnsRepairService>();
                     services.AddSingleton<ISelfNetworkFirewall, WindowsSelfNetworkFirewall>();
                     services.AddHostedService<SelfNetworkIsolationService>();
                     services.AddSingleton<IWindowsFirewallPolicyBridge, WindowsFirewallPolicyBridge>();

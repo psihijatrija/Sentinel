@@ -1,3 +1,7 @@
+## DNS repair and observation (3.2.4)
+
+`DnsRepairService` coordinates injected configuration, protected journal and audit backends. The dashboard previews fixed resolver profiles, then a short-lived UAC helper sends an authenticated operation to the service; the service validates the actual caller token and the preview fingerprint. Snapshots and audit acceptance precede native Windows DNS settings changes. Static/effective read-back, cache flushing, rollback and explicit receipts prevent attempted changes from appearing verified. IPv4/IPv6/DHCP drift stays Tier2 LogOnly; startup observations never authorize DNS restoration. See [DNS repair](DNS_REPAIR.md) and its live-Windows validation limits. These controls supersede historical DNS-lock descriptions below.
+
 # Sentinel - Design Document
 
 ## Firewall defaults, policy stores, and monitoring (3.2.3)
@@ -41,7 +45,7 @@ The privileged service still contains system sensors and the response engine: th
 These controls reduce exposure; they do not confine an already-compromised SYSTEM process. Such a process can potentially alter firewall rules or use other processes/OS services. Malicious local files, telemetry, dependencies, and IPC remain attack surfaces. The localhost dashboard is still active and authenticated. There is no longer an off-host evidence mirror; administrators can destroy local evidence. No kernel/PPL boundary is claimed.
 
 
-**Version: 3.2.3**
+**Version: 3.2.4**
 
 ---
 
@@ -228,16 +232,16 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | Component | Mechanism | Interval |
 |-----------|-----------|----------|
 | `ArpSpoofMonitor` | GetIpNetTable P/Invoke; detects gateway MAC change, ARP poisoning, virtual OUI | 15s |
-| `DnsResponseValidationMonitor` | Resolves canary domains; validates against expected CIDR ranges | 1min |
+| `DnsResponseValidationMonitor` | Retired compatibility type; no external validation | inactive |
 | `PublicIpMonitor` | Checks public IP via Cloudflare/ipify/icanhazip; detects geo/ASN shift | 5min |
 | `WifiSecurityMonitor` | Polls Wi-Fi state via netsh; detects deauth flood, open network, encryption downgrade | 15s |
-| `NetworkInterfaceGuard` | Removes bridges via SetupAPI, restores disabled adapters, locks DNS. **v2.6.5** DNS-change confidence reputation-aware via `PublicDnsResolvers` allowlist (known public resolver -> 0.45, unknown -> 0.88) | 15s |
+| `NetworkInterfaceGuard` | Removes bridges via SetupAPI, restores disabled adapters, observes IPv4/IPv6/effective DNS drift as Tier2 LogOnly; administrator-approved DNS repair is separate | 15s |
 | `WinsockLspIntegrityMonitor` | **v2.6.5.** Walks Winsock2 protocol/namespace catalogs; flags non-Microsoft/unsigned LSP provider DLLs, missing providers, and chain gaps. Tier1 LogOnly (never rewrites the catalog) | 10min |
 | `AppDnsExfilMonitor` | Detects non-browser processes connecting to known DoH resolvers on port 443 | 500ms |
 | `NetworkShareMonitor` | Monitors SMB shares, admin share access (C$/ADMIN$/IPC$), inbound sessions | 15s |
 | `NetworkReinfectionDetector` | Monitors NIC state changes; flags new suspicious processes after network reconnection | on NIC event |
 | `ReinfectionCorrelator` | Tracks killed/quarantined hashes across reboots; scans for reappearance | 60s |
-| `DnsCrossValidator` | Resolves test domain via system + direct Cloudflare; detects router DNS poisoning | periodic |
+| `DnsCrossValidator` | Retired compatibility type; no external validation | inactive |
 | `TrafficVolumeBaseline` | NIC BytesSent spikes; bulk-transfer clients (torrent/P2P) -> observe-only, not Exfil | 30s |
 | `OutboundConnectionWhitelist` | Monitors/enforces outbound connections against allowed IP subnets | periodic |
 | `RemoteAccessMonitor` | Scans for 35+ remote access tools; TeamViewer/AnyDesk/cloudflared LogOnly; **v2.5.3** ngrok/chisel/frpc/tailcat kill-grade | 60s |

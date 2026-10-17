@@ -112,3 +112,7 @@ When you want to move forward but don't have a specific task in mind, pick the h
 item from Theme 1 (that's where "bulletproof" actually improves), and ask to spin it into a
 feature spec. The steering rules keep the work inside Sentinel's constraints, and the
 post-task test hook verifies it before it's called done.
+
+## Remediation expansion (3.2.4)
+
+Administrator-approved DNS profile repair is implemented with explicit verification limits. The [capability matrix](CAPABILITY_MATRIX.md) prioritizes disposable-adapter validation, interrupted transaction recovery, hosts/proxy recovery, browser/persistence recovery and an independent adversarial review. These are separate deliverables, not a claim of commercial parity.

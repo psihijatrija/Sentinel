@@ -44,6 +44,7 @@ namespace Sentinel.Agent
         private readonly DllUnloadEngine? _dllUnload;
         private readonly string[] _eventLogPaths;
         private readonly ConcurrentBag<WebSocket> _wsClients = new();
+        private readonly SemaphoreSlim _dnsApprovalGate = new(1, 1);
         private readonly string _csrfToken;
         private readonly string _bearerToken;
         private HttpListener? _listener;
@@ -293,6 +294,16 @@ namespace Sentinel.Agent
                     if (!ValidateCsrf(request, response)) return;
                     await HandleModuleRemediate(request, response).ConfigureAwait(false);
                     break;
+                case "/api/dns":
+                    if (method != "GET") { response.StatusCode = 405; response.Close(); return; }
+                    await HandleDnsInspect(response).ConfigureAwait(false);
+                    break;
+                case "/api/dns/repair":
+                case "/api/dns/restore":
+                    if (method != "POST") { response.StatusCode = 405; response.Close(); return; }
+                    if (!ValidateCsrf(request, response)) return;
+                    await HandleDnsApproval(request, response, path.EndsWith("/restore", StringComparison.Ordinal)).ConfigureAwait(false);
+                    break;
                 case "/api/cert/distrust":
                     if (method != "POST") { response.StatusCode = 405; response.Close(); return; }
                     if (!ValidateCsrf(request, response)) return;
@@ -388,6 +399,65 @@ namespace Sentinel.Agent
                 response.StatusCode = 500;
                 await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
             }
+        }
+
+        private async Task HandleDnsInspect(HttpListenerResponse response)
+        {
+            string? result = await ServiceAgentIpcClient.RequestAsync("dns_inspect", "", 8000).ConfigureAwait(false);
+            if (result == null)
+            {
+                response.StatusCode = 502;
+                await WriteJson(response, new { ok = false, error = "Service unavailable; no DNS inspection performed." }).ConfigureAwait(false);
+                return;
+            }
+            using var document = JsonDocument.Parse(result);
+            await WriteJson(response, document.RootElement.Clone()).ConfigureAwait(false);
+        }
+
+        private async Task HandleDnsApproval(HttpListenerRequest request, HttpListenerResponse response, bool restore)
+        {
+            if (request.ContentLength64 <= 0 || request.ContentLength64 > 4096)
+            {
+                response.StatusCode = 400;
+                await WriteJson(response, new { ok = false, error = "A bounded DNS approval request is required." }).ConfigureAwait(false);
+                return;
+            }
+            if (!await _dnsApprovalGate.WaitAsync(0).ConfigureAwait(false))
+            {
+                response.StatusCode = 409;
+                await WriteJson(response, new { ok = false, error = "A DNS administrator approval is already in progress." }).ConfigureAwait(false);
+                return;
+            }
+            try
+            {
+                using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
+                var submitted = JsonSerializer.Deserialize<DnsRepairRequest>(await reader.ReadToEndAsync().ConfigureAwait(false))
+                    ?? throw new ArgumentException("Invalid DNS approval request.");
+                if (!Guid.TryParse(submitted.AdapterId, out _) || submitted.ExpectedFingerprint.Length != 64)
+                    throw new ArgumentException("Inspect the adapter before requesting repair.");
+                // No arbitrary command, binary path or resolver address is accepted from HTTP.
+                string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(submitted)));
+                string executable = Path.Combine(AppContext.BaseDirectory, "Sentinel.Service.exe");
+                using var helper = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = executable,
+                    Arguments = (restore ? "--restore-dns " : "--repair-dns ") + encoded,
+                    UseShellExecute = true, Verb = "runas"
+                }) ?? throw new InvalidOperationException("Administrator approval helper could not start.");
+                bool exited = await Task.Run(() => helper.WaitForExit(55000)).ConfigureAwait(false);
+                if (!exited)
+                {
+                    await WriteJson(response, new { ok = false, error = "Approval result is pending. Refresh DNS status; no success is assumed." }).ConfigureAwait(false);
+                    return;
+                }
+                await WriteJson(response, new { ok = helper.ExitCode == 0,
+                    error = helper.ExitCode == 0 ? "" : "Repair was refused or failed. Refresh DNS status for the recorded outcome." }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+            }
+            finally { _dnsApprovalGate.Release(); }
         }
 
         /// <summary>

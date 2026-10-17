@@ -1,4 +1,13 @@
 # Changelog
+## [3.2.4] - 2026-10-17
+### Added
+- Dashboard DNS inspection and administrator-approved fixed resolver profiles for eligible unmanaged Ethernet/Wi-Fi adapters, using authenticated IPC and actual caller-token authorization. Agent remains unprivileged.
+- Protected durable snapshots, fresh-preview checks, IPv4/IPv6 and effective resolver read-back, cache flushing, bounded rollback, saved-state restoration and explicit outcome receipts.
+- Passive IPv4/IPv6/DHCP resolver drift observations and last-approved-profile comparison; removed blind startup-baseline DNS restoration. DNS changes remain Tier2 LogOnly.
+- DNS usage/limits guide and a remediation capability matrix with concrete remaining work. No router-clean or commercial parity claim.
+### Validation
+- Zero-warning/error solution cross-build, 69 portable production response/DNS transaction tests and 14 dashboard checks pass locally. Windows CI includes real pipe-authorization and read-only native API checks. Live adapter DNS mutation/reset-to-automatic and interactive UAC validation remain required on a disposable Windows system; ordinary CI does not change runner DNS.
+
 ## [3.2.3] - 2026-10-17
 ### Security
 - Removed online hash/DNS reputation queries, live ThreatFox/IP-blocklist/CISA downloads, public-IP and cloud-connectivity checks, active DNS validation, and automatic threat/evidence uploads. Legacy settings cannot re-enable transport; the compiled proxy credential is removed. Offline reputation is Unknown; old online composite caches are no longer reused.

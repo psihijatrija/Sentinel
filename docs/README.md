@@ -1,11 +1,13 @@
 # Sentinel documentation
 
-Current documentation baseline: **3.2.3**, reviewed 2026-10-17. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
+Current documentation baseline: **3.2.4**, reviewed 2026-10-17. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
 
 ## Current guidance
 
 | Document | Scope |
 | --- | --- |
+| [DNS repair](DNS_REPAIR.md) | Administrator-approved resolver repair, restoration, verification and platform limits |
+| [Capability matrix](CAPABILITY_MATRIX.md) | Current remediation coverage and concrete remaining work |
 | [Design](design.md) | Runtime architecture, offline operation, privilege boundaries, firewall enforcement and verified response outcomes |
 | [Requirements](requirements.md) | Current functional/safety contracts, including 3.2.2 certificate and response corrections |
 | [Constraints](constraints.md) | Implementation and response limits |

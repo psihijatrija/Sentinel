@@ -96,3 +96,48 @@ test('verified offline firewall policy can display active protection', () => {
   assert.equal(elements['status-text'].textContent, 'Offline Protection Active');
   assert.equal(elements['ov-status'].className, 'card-value success');
 });
+
+function dnsContext(eligible = true) {
+  const elements = {
+    'dns-adapter': { value: '0' }, 'dns-profile': { value: 'Quad9' }, 'dns-transaction': { value: 'snapshot' }
+  };
+  const calls = [];
+  const context = vm.createContext({
+    document: { getElementById(id) { return elements[id] ||= {}; } },
+    dnsInspection: {
+      Adapters: [{ Id: 'adapter', Name: 'Fixture', Eligible: eligible, Fingerprint: 'preview' }],
+      Profiles: [{ Name: 'Quad9', Ipv4: '9.9.9.9', Ipv6: '2620:fe::fe' }],
+      Transactions: [{ Id: 'snapshot', PreviousIpv4: '', PreviousIpv6: '' }]
+    },
+    confirm(message) { calls.push({ confirmation: message }); return true; },
+    ensureCsrf(callback) { callback('csrf-fixture'); },
+    apiCall(endpoint, options) { calls.push({ endpoint, options }); }
+  });
+  vm.runInContext(sourceOf('approveDnsRepair'), context);
+  return { context, calls, elements };
+}
+
+test('DNS repair approval carries the inspected fingerprint and concrete resolver choice', () => {
+  const { context, calls } = dnsContext();
+  context.approveDnsRepair(false);
+  assert.match(calls[0].confirmation, /9\.9\.9\.9/);
+  assert.equal(calls[1].endpoint, '/api/dns/repair');
+  assert.equal(calls[1].options.headers['X-CSRF-Token'], 'csrf-fixture');
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    AdapterId: 'adapter', Profile: 'Quad9', ExpectedFingerprint: 'preview', TransactionId: ''
+  });
+});
+
+test('ineligible adapters cannot request DNS repair from the dashboard', () => {
+  const { context, calls } = dnsContext(false);
+  context.approveDnsRepair(false);
+  assert.equal(calls.length, 0);
+});
+
+test('DNS restoration identifies the snapshot and displays automatic configuration explicitly', () => {
+  const { context, calls } = dnsContext();
+  context.approveDnsRepair(true);
+  assert.match(calls[0].confirmation, /automatic\/DHCP/);
+  assert.equal(calls[1].endpoint, '/api/dns/restore');
+  assert.equal(JSON.parse(calls[1].options.body).TransactionId, 'snapshot');
+});
