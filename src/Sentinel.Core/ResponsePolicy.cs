@@ -713,7 +713,9 @@ namespace Sentinel.Core
         /// seeds (SeImpersonate, PPID, ...) still feed composites but not ResponsePolicy chain nukes.
         /// </summary>
         public static bool IsNonCorrelatingObserveNoise(DetectionEvent detection)
-            => detection == null || IsBenignInstallerNoise(detection) || IsPureUxObserveNoise(detection);
+            => detection == null || IsBenignInstallerNoise(detection) || IsPureUxObserveNoise(detection) ||
+                (detection.Metadata != null && detection.Metadata.TryGetValue("EncodedPowerShellObservation", out var automation) &&
+                 string.Equals(automation, "true", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// Tailcat / userspace WG overlay / webhook-sink stealers attributed to a

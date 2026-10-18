@@ -31,7 +31,8 @@ namespace Sentinel.Core
         private readonly ILogger<ProcessAncestryCache> _logger;
         private static readonly TimeSpan Retention = TimeSpan.FromSeconds(60);
 
-        public ProcessAncestryCache(ILogger<ProcessAncestryCache>? logger = null) : this(ReadIdentity, true, logger) { }
+        public ProcessAncestryCache(ILogger<ProcessAncestryCache>? logger = null)
+            : this(pid => ReadIdentity(pid, logger ?? NullLogger<ProcessAncestryCache>.Instance), true, logger) { }
         internal ProcessAncestryCache(Func<int, Identity?> readIdentity, bool refresh, ILogger<ProcessAncestryCache>? logger = null)
         {
             _readIdentity = readIdentity;
@@ -43,7 +44,7 @@ namespace Sentinel.Core
             }
         }
 
-        private static Identity? ReadIdentity(int pid)
+        private static Identity? ReadIdentity(int pid, ILogger<ProcessAncestryCache> logger)
         {
             try
             {
@@ -61,9 +62,11 @@ namespace Sentinel.Core
                     ImagePath = imagePath
                 };
             }
-            catch (ArgumentException) { return null; }
-            catch (InvalidOperationException) { return null; }
-            catch (System.ComponentModel.Win32Exception) { return null; }
+            catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception)
+            {
+                logger.LogDebug(ex, "Process identity unavailable for PID {Pid}", pid);
+                return null;
+            }
         }
 
         private void SafeRefresh()

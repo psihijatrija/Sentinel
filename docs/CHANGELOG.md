@@ -3,7 +3,7 @@
 
 ### Fixed
 - Apply the central tier policy to direct monitor emissions and response dispatch; Tier2 remains LogOnly. Reject process-kill authority for PID 0/system targets.
-- Routine encoded PowerShell automation no longer authorizes a reverse-shell kill. Preserve original command evidence, decode bounded Base64, and require a socket command loop for the terminal rule.
+- Routine encoded PowerShell automation no longer authorizes a reverse-shell kill or supplies a remote-channel composite leg. Preserve original command evidence, decode bounded Base64, and require a socket command loop for the terminal rule.
 - Keep standalone PPID mismatches and GPU driver staging observational. Temporary installer extraction is not proof of trojanization; never attempt process containment against a driver filename or PID 0.
 - Validate process-cache generations by creation time, replace reused PIDs, serialize cache updates, and require live identity for chain targeting. Retain dead entries for evidence only.
 - Correct EVENT_TRACE_LOGFILEW callback offsets and allocation sizes for x64/x86. Retain native buffers for the consumer lifetime; report provider IDs and Win32 errors when coverage is degraded.

@@ -25,6 +25,8 @@ namespace Sentinel.Tests
             Assert.Equal(DetectionTier.Tier2Indicator, detection.Tier);
             Assert.Equal(ResponseAction.LogOnly, detection.AuthorizedResponse);
             Assert.Contains(Convert.ToBase64String(Encoding.Unicode.GetBytes(script)), detection.Evidence);
+            Assert.Equal(SignalType.Generic, detection.SignalType);
+            Assert.True(ResponsePolicy.IsNonCorrelatingObserveNoise(detection));
         }
 
         [Fact]

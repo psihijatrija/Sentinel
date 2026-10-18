@@ -71,12 +71,13 @@ namespace Sentinel.Core
                             RuleName = Name,
                             ProcessName = pt.ProcessName,
                             ProcessId = pt.ProcessId,
-                            SignalType = SignalType.ReverseShell,
+                            SignalType = SignalType.Generic,
+                            Metadata = new Dictionary<string, string> { ["EncodedPowerShellObservation"] = "true", ["WeakObserveSeed"] = "true" },
                             Confidence = 0.50,
                             Tier = DetectionTier.Tier2Indicator,
                             AuthorizedResponse = ResponseAction.LogOnly,
                             Evidence = $"Encoded PowerShell execution (reverse shell unproven): {originalCommand}",
-                            Reasoning = "Process launched PowerShell with an encoded command. Routine execution flags do not prove malicious behavior; this may be legitimate automation. Logged for correlation."
+                            Reasoning = "Process launched PowerShell with an encoded command. Routine execution flags do not prove malicious behavior; this may be legitimate automation. Logged without supplying a terminal or composite leg."
                         };
                     }
                 }
