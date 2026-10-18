@@ -1027,3 +1027,12 @@ In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no l
 ## Audit-driven dispatch and collection integrity (3.2.9)
 
 See [audit fixes](AUDIT_FIXES_2026-10-18.md) for the common dispatch policy, generation-validated ancestry, ETW native ABI correction and operational metric semantics.
+
+## Read-only investigation audit (3.3.1)
+
+`SecurityAuditService` is injected into the on-demand `ScanEngine`; its
+`ISecurityAuditSource` implementation uses local registry, Event Log and optional WMI
+providers. `ScanResult.SecurityAudit` travels over the existing authenticated service
+IPC to the dashboard. The report is independent of detection/response and contains
+explicit collection states. The user may download collected JSON locally, with a
+privacy notice. See [coverage and status semantics](SECURITY_AUDIT.md).

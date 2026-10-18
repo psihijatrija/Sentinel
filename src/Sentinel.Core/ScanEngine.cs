@@ -34,6 +34,7 @@ namespace Sentinel.Core
         private readonly FileReputationEngine? _fileReputation;
         private readonly CertRemediator? _certRemediator;
         private readonly ILogger<ScanEngine> _logger;
+        private readonly SecurityAuditService? _securityAudit;
 
         private int _isRunning;
 
@@ -41,12 +42,14 @@ namespace Sentinel.Core
             IoCScanner iocScanner,
             ILogger<ScanEngine> logger,
             FileReputationEngine? fileReputation = null,
-            CertRemediator? certRemediator = null)
+            CertRemediator? certRemediator = null,
+            SecurityAuditService? securityAudit = null)
         {
             _iocScanner = iocScanner;
             _logger = logger;
             _fileReputation = fileReputation;
             _certRemediator = certRemediator;
+            _securityAudit = securityAudit;
         }
 
         public bool IsRunning => Interlocked.CompareExchange(ref _isRunning, 0, 0) == 1;
@@ -73,8 +76,12 @@ namespace Sentinel.Core
                 var lnkTask = Task.Run(() => ScanLnkFiles(result, ct), ct);
                 var stagingTask = Task.Run(() => ScanStagingPaths(result, ct), ct);
                 var networkTask = Task.Run(() => ScanNetworkState(result, ct), ct);
+                var auditTask = Task.Run(() =>
+                {
+                    if (_securityAudit != null) result.SecurityAudit = _securityAudit.Collect(result.StartTime, ct);
+                }, ct);
 
-                await Task.WhenAll(processTask, persistenceTask, certTask, lnkTask, stagingTask, networkTask)
+                await Task.WhenAll(processTask, persistenceTask, certTask, lnkTask, stagingTask, networkTask, auditTask)
                     .ConfigureAwait(false);
 
                 sw.Stop();
@@ -1051,6 +1058,7 @@ namespace Sentinel.Core
         public DateTime EndTime { get; set; }
         public long DurationMs { get; set; }
         public ScanStats Stats { get; set; } = new();
+        public SecurityAuditReport? SecurityAudit { get; set; }
         public List<ScanFinding> Findings { get; set; } = new();
 
         [System.Text.Json.Serialization.JsonIgnore]

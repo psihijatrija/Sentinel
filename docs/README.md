@@ -32,3 +32,5 @@ The [legacy Worker](../worker/README.md) is a separately deployed server compone
 ## Audit scope
 
 This pass corrected stale current guidance about online sources/uploads, evidence survival, retired probes/feed monitors, always-on hardening, certificate-removal authority, RSA rule packs, response outcomes, version labels and validation status. It is a documentation consistency review against those implementations and observed CI results, not certification that every historical monitor table is an exhaustive live registration list or that every platform scenario was tested.
+
+- [Read-only security audit and report privacy](SECURITY_AUDIT.md)

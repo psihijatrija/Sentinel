@@ -426,3 +426,12 @@ Eligible unmanaged adapters support fixed public-resolver profiles and saved-sta
 Persist starting and intended states before each DNS mutation. After restart, an administrator may explicitly recover an unresolved transaction to its original snapshot using a fresh preview. Only static values within the saved family states, unchanged protocol support and no newer transaction permit recovery; legacy/missing plans and unrelated settings are refused. An unresolved transaction blocks stacking a new repair. Recovery failures roll back to the freshly approved state and retain the original recovery target. No startup auto-mutation is permitted. Native validation runs only under the guarded disposable Windows fixture, with independent emergency restoration.
 
 In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.
+
+## Read-only audit requirements (3.3.1)
+
+On-demand scans expose bounded recent investigation history and selected hardening
+read-back through existing authenticated IPC/dashboard paths. Configuration and
+runtime snapshots must be distinguished; missing or partial telemetry cannot produce
+a clean-system verdict. Audit collection must not mutate configuration, terminate
+processes, fetch external intelligence or emit containment-authorizing signals. Local
+report download must disclose account/address/application-path exposure.

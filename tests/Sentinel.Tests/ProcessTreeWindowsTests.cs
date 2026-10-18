@@ -27,10 +27,9 @@ namespace Sentinel.Tests
             string grandchildFile = Path.Combine(directory, "grandchild.pid");
             string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
                 "WindowsPowerShell", "v1.0", "powershell.exe");
-            string grandchildCode = "[IO.File]::WriteAllText(" + Quote(grandchildFile) +
-                ", [string]$PID); Start-Sleep -Seconds 120";
+            string grandchildCode = PublishPid(grandchildFile) + "; Start-Sleep -Seconds 120";
             string childCode = Spawn(powershell, grandchildCode) +
-                "; [IO.File]::WriteAllText(" + Quote(childFile) + ", [string]$PID); Start-Sleep -Seconds 120";
+                "; " + PublishPid(childFile) + "; Start-Sleep -Seconds 120";
             string rootCode = Spawn(powershell, childCode) + "; Start-Sleep -Seconds 120";
 
             Process? root = null, child = null, grandchild = null, unrelated = null;
@@ -81,6 +80,9 @@ namespace Sentinel.Tests
         }
 
         private static string Encode(string code) => Convert.ToBase64String(Encoding.Unicode.GetBytes(code));
+        private static string PublishPid(string path) =>
+            "[IO.File]::WriteAllText(" + Quote(path + ".tmp") + ", [string]$PID); " +
+            "[IO.File]::Move(" + Quote(path + ".tmp") + ", " + Quote(path) + ")";
         private static string Quote(string text) => "'" + text.Replace("'", "''") + "'";
         private static string Spawn(string powershell, string code)
             => "$psi = New-Object System.Diagnostics.ProcessStartInfo; " +
@@ -97,10 +99,40 @@ namespace Sentinel.Tests
             var timer = Stopwatch.StartNew();
             while (timer.Elapsed < TimeSpan.FromSeconds(30))
             {
-                if (File.Exists(path) && int.TryParse(File.ReadAllText(path), out int pid)) return pid;
+                try
+                {
+                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(stream);
+                    if (int.TryParse(reader.ReadToEnd(), out int pid) && pid > 0) return pid;
+                }
+                catch (FileNotFoundException) { /* atomic publication has not completed */ }
+                catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33)
+                { /* transient sharing/lock conflict; retain the existing bounded deadline */ }
                 await Task.Delay(50);
             }
             throw new TimeoutException("Process-tree fixture did not publish its PID.");
+        }
+
+        [WindowsContainmentFact]
+        public async Task ReadPid_RetriesTransientExclusiveWriter()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "SentinelPid_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Task<int> read;
+                using (var writer = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    var bytes = Encoding.UTF8.GetBytes("12345");
+                    writer.Write(bytes, 0, bytes.Length);
+                    writer.Flush();
+                    read = ReadPidAsync(path);
+                    await Task.Delay(150);
+                    Assert.False(read.IsCompleted);
+                }
+                Assert.Equal(12345, await read);
+            }
+            finally { File.Delete(path); }
         }
     }
 }

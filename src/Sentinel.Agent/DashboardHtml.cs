@@ -319,6 +319,10 @@ select.rp-input {{ font-family: 'Segoe UI', sans-serif; }}
                 </div>
             </div>
             <div class=""panel"">
+                <div class=""panel-header""><h3>Security audit</h3><button class=""btn"" id=""audit-download"" disabled onclick=""downloadSecurityAudit()"">Download audit JSON</button></div>
+                <div class=""panel-body""><p>Run a full scan to collect hardening configuration and recent activity. The download contains account names, addresses and application paths; review it before sharing.</p><div id=""security-audit"">No audit collected yet.</div></div>
+            </div>
+            <div class=""panel"">
                 <div class=""panel-header""><h3>DNS inspection and repair</h3><button class=""btn"" onclick=""loadDnsRepair()"">Inspect DNS</button></div>
                 <div class=""panel-body"">
                     <p>Inspect local DNS settings, then choose a resolver profile. Repair requires Windows administrator approval and saves a rollback snapshot. This does not verify or repair your router. Changing DNS can affect local name resolution.</p>
@@ -551,6 +555,7 @@ var eventBuffer = [];
 var chartData = [];
 var chartIdx = 0;
 var scanPolling = null;
+var latestSecurityAudit = null;
 var TOKEN = '';
 var wsRetries = 0;
 var eventPollInterval = null;
@@ -944,11 +949,61 @@ function loadQuarantine() {{
     }});
 }}
 
+function renderSecurityAudit(report) {{
+    latestSecurityAudit = report || null;
+    document.getElementById('audit-download').disabled = !report;
+    var container = document.getElementById('security-audit');
+    if (!report) {{
+        container.innerHTML = '<p>Audit coverage unknown: this scan did not return an audit report.</p>';
+        return;
+    }}
+    var checks = report.Hardening || report.hardening || [];
+    var history = report.History || report.history || [];
+    var html = '<p>' + esc(report.Scope || report.scope || 'Read-only observations; coverage may be incomplete.') + '</p>';
+    html += '<p>Window: ' + esc(report.WindowStartUtc || report.windowStartUtc || 'Unknown') + ' to ' + esc(report.WindowEndUtc || report.windowEndUtc || 'Unknown') + '</p>';
+    html += '<h4>Hardening configuration</h4>';
+    if (!checks.length) html += '<p>Unknown: no hardening checks returned.</p>';
+    for (var i = 0; i < checks.length; i++) {{
+        var check = checks[i];
+        var state = check.State || check.state || 'Unknown';
+        var label = state === 'Configured' ? 'Configuration matches baseline' : state === 'ObservedActive' ? 'Active at collection time' : state === 'NeedsReview' ? 'Needs review' : 'Unknown';
+        html += '<div class=""finding""><div class=""finding-body""><div class=""finding-title"">' + esc(check.Name || check.name) + ': ' + esc(label) + '</div><div class=""finding-desc"">' + esc(check.Detail || check.detail) + '</div></div></div>';
+    }}
+    html += '<h4>Recent activity</h4>';
+    if (!history.length) html += '<p>Unknown: no history sources returned.</p>';
+    for (var j = 0; j < history.length; j++) {{
+        var section = history[j];
+        var items = section.Items || section.items || [];
+        html += '<h4>' + esc(section.Name || section.name) + ' &mdash; ' + esc(section.State || section.state || 'Unknown') + '</h4><p>' + esc(section.Detail || section.detail) + '</p>';
+        if (!items.length) html += '<p>No records returned. This does not establish that no activity occurred.</p>';
+        for (var k = 0; k < items.length && k < 50; k++) {{
+            var item = items[k];
+            html += '<div class=""finding""><div class=""finding-body""><div class=""finding-title"">' + esc(item.Kind || item.kind) + ' ' + esc(item.TimestampUtc || item.timestampUtc || 'Time unknown') + '</div><div class=""finding-desc"">' + esc(item.Account || item.account) + ' ' + esc(item.Subject || item.subject) + ' ' + esc(item.Detail || item.detail) + '</div></div></div>';
+        }}
+        if (items.length > 50) html += '<p>Showing 50 of ' + items.length + ' collected records. Download the report for all collected records.</p>';
+    }}
+    container.innerHTML = html;
+}}
+
+function downloadSecurityAudit() {{
+    if (!latestSecurityAudit) return;
+    var blob = new Blob([JSON.stringify(latestSecurityAudit, null, 2)], {{ type: 'application/json' }});
+    if (window.navigator.msSaveOrOpenBlob) {{ window.navigator.msSaveOrOpenBlob(blob, 'sentinel-security-audit.json'); return; }}
+    var url = window.URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url; link.download = 'sentinel-security-audit.json';
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    setTimeout(function() {{ window.URL.revokeObjectURL(url); }}, 1000);
+}}
+
 //  Scan 
 function startScan() {{
     var btn = document.getElementById('btn-scan');
     btn.disabled = true;
     btn.textContent = 'Scanning...';
+    latestSecurityAudit = null;
+    document.getElementById('audit-download').disabled = true;
+    document.getElementById('security-audit').textContent = 'Collecting audit observations...';
     document.getElementById('scan-progress').style.display = 'block';
     document.getElementById('scan-bar').style.width = '30%';
     document.getElementById('sc-status').textContent = 'Running';
@@ -976,8 +1031,9 @@ function checkScanStatus() {{
             if (scanPolling) {{ clearInterval(scanPolling); scanPolling = null; }}
             var r = data.result;
             document.getElementById('scan-progress').style.display = 'none';
-            document.getElementById('sc-status').textContent = 'Complete';
-            document.getElementById('sc-status').className = 'card-value success';
+            document.getElementById('sc-status').textContent = (r.Completed || r.completed) ? 'Complete' : 'Incomplete';
+            renderSecurityAudit(r.SecurityAudit || r.securityAudit);
+            document.getElementById('sc-status').className = (r.Completed || r.completed) ? 'card-value success' : 'card-value warning';
             document.getElementById('sc-time').textContent = 'Duration: ' + (r.DurationMs || r.durationMs || 0) + 'ms';
             var findings = r.Findings || r.findings || [];
             document.getElementById('sc-findings').textContent = findings.length;
@@ -994,7 +1050,7 @@ function checkScanStatus() {{
 
             var container = document.getElementById('scan-findings');
             if (findings.length === 0) {{
-                container.innerHTML = '<div class=""empty-state"" style=""padding:20px"">No threats found. System appears clean.</div>';
+                container.innerHTML = '<div class=""empty-state"" style=""padding:20px"">No findings returned. Review scan completion and audit coverage; this does not establish that the system is clean.</div>';
             }} else {{
                 findings.sort(function(a, b) {{ return (b.Severity || b.severity || 0) - (a.Severity || a.severity || 0); }});
                 var html = '';

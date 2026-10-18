@@ -169,3 +169,84 @@ test('pending DNS operations block new repairs and expose only recoverable snaps
   context.showDnsAdapter();
   assert.equal(elements['dns-recover'].disabled, true);
 });
+
+function auditContext() {
+  const elements = {};
+  const context = vm.createContext({
+    document: {
+      getElementById(id) { return elements[id] ||= {}; },
+      createTextNode(text) { return text; },
+      createElement() { return { innerHTML: '', appendChild(text) {
+        this.innerHTML = text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      } }; }
+    }, latestSecurityAudit: null
+  });
+  vm.runInContext(sourceOf('esc') + '\n' + sourceOf('renderSecurityAudit'), context);
+  return { context, elements };
+}
+
+test('missing audit coverage is unknown and cannot be downloaded as a current report', () => {
+  const { context, elements } = auditContext();
+  context.renderSecurityAudit(null);
+  assert.match(elements['security-audit'].innerHTML, /coverage unknown/);
+  assert.equal(elements['audit-download'].disabled, true);
+  assert.equal(context.latestSecurityAudit, null);
+});
+
+test('configuration read-back is distinguished from observed active runtime protection', () => {
+  const { context, elements } = auditContext();
+  context.renderSecurityAudit({ Hardening: [
+    { Name: 'PPL', State: 'Configured', Detail: 'Runtime enforcement not verified.' },
+    { Name: 'Defender', State: 'ObservedActive', Detail: 'Snapshot.' },
+    { Name: 'Unknown provider', State: 'InventedSuccess', Detail: '' }
+  ] });
+  const html = elements['security-audit'].innerHTML;
+  assert.match(html, /PPL: Configuration matches baseline/);
+  assert.match(html, /Defender: Active at collection time/);
+  assert.match(html, /Unknown provider: Unknown/);
+  assert.match(html, /Runtime enforcement not verified/);
+});
+
+test('audit renders untrusted event fields as escaped text', () => {
+  const { context, elements } = auditContext();
+  context.renderSecurityAudit({ History: [{ Name: '<img src=x>', State: 'Partial',
+    Detail: '<script>bad()</script>', Items: [{ Account: '<iframe>', Subject: '<img>', Kind: '<b>' }] }] });
+  const html = elements['security-audit'].innerHTML;
+  assert.doesNotMatch(html, /<img|<script|<iframe|<b>/);
+  assert.match(html, /&lt;iframe/);
+  assert.match(html, /Partial/);
+});
+
+test('empty available event history does not claim no activity occurred', () => {
+  const { context, elements } = auditContext();
+  context.renderSecurityAudit({ History: [{ Name: 'Logons', State: 'Available', Items: [] }] });
+  assert.match(elements['security-audit'].innerHTML, /does not establish that no activity occurred/);
+  assert.doesNotMatch(elements['security-audit'].innerHTML, /System appears clean/);
+});
+
+test('audit caps rendered history while keeping all collected records in download data', () => {
+  const { context, elements } = auditContext();
+  const report = { History: [{ Name: 'Logons', State: 'Partial', Items:
+    Array.from({ length: 60 }, (_, i) => ({ Kind: 'Logon', Subject: 'Account-' + i })) }] };
+  context.renderSecurityAudit(report);
+  assert.match(elements['security-audit'].innerHTML, /Showing 50 of 60/);
+  assert.doesNotMatch(elements['security-audit'].innerHTML, /Account-59/);
+  assert.equal(context.latestSecurityAudit.History[0].Items.length, 60);
+  assert.equal(elements['audit-download'].disabled, false);
+});
+
+test('incomplete scan cannot display a completed status or a clean-system verdict', () => {
+  const { context, elements } = auditContext();
+  context.scanPolling = null;
+  context.apiCall = (url, options, callback) => callback({ ok: true, status: 'completed', result: {
+    Completed: false, Error: 'Scan cancelled', Findings: []
+  } });
+  context.clearInterval = () => {};
+  for (const id of ['scan-progress', 'scan-bar']) elements[id] = { style: {} };
+  vm.runInContext(sourceOf('checkScanStatus'), context);
+  context.checkScanStatus();
+  assert.equal(elements['sc-status'].textContent, 'Incomplete');
+  assert.equal(elements['sc-status'].className, 'card-value warning');
+  assert.doesNotMatch(elements['scan-findings'].innerHTML, /System appears clean/);
+  assert.equal(elements['audit-download'].disabled, true);
+});

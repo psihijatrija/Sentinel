@@ -407,6 +407,8 @@ namespace Sentinel.Service
                     services.AddSingleton<ToastService>();
                     // v2.2: One-time system scan engine (triggered via IPC from dashboard)
                     services.AddSingleton<ScanEngine>();
+                    services.AddSingleton<ISecurityAuditSource, WindowsSecurityAuditSource>();
+                    services.AddSingleton<SecurityAuditService>();
                     // SYSTEM-side certificate remediation (distrust: remove from Root, pin to Disallowed)
                     services.AddSingleton<CertRemediator>();
 

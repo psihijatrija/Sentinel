@@ -1,4 +1,19 @@
 # Changelog
+## [3.3.1] - 2026-10-18
+
+### Added
+- Add a read-only Security audit panel to full scans, with local JSON download. Show six-hour logon/service/task history and camera/microphone usage timestamps from loaded interactive-user hives, with explicit Available/Partial/Unknown coverage.
+- Read back selected LSASS, WDigest, PowerShell and SMB configuration. Separately label Defender and VBS runtime-provider snapshots; missing values/providers never imply active protection or a clean system. No new policy mutation or autonomous response is introduced.
+- Bound history collection and display, parse named event fields, reject XML entities, and omit raw event XML and service/task command payloads from audit reports.
+
+### Fixed
+- Repair the Windows process-tree fixture PID-file sharing race: publish closed files by rename and retry transient sharing/lock errors within the existing deadline. Add an exclusive-writer regression while retaining all process-tree termination and unrelated-process survival assertions.
+- Show incomplete scans as incomplete and remove the dashboard's unsupported "System appears clean" claim.
+
+### Validation
+- Add aggregation, strict type, missing-source, cancellation, event parsing, timestamp and dashboard regressions. Native Windows collection and containment remain subject to Windows CI; Linux cross-builds/portable tests are not native validation.
+- See [security audit](SECURITY_AUDIT.md) for coverage, privacy and runtime-state limitations.
+
 ## [3.3.0] - 2026-10-18
 
 ### Credential and script telemetry
