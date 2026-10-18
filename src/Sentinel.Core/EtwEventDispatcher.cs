@@ -30,6 +30,7 @@ namespace Sentinel.Core
         private readonly BehavioralBaselineService? _baseline;
         private readonly DllUnloadEngine? _dllUnloadEngine;
         private readonly ILogger<EtwEventDispatcher> _logger;
+        private readonly CredentialReadTracker _credentialReads = new();
 
         // Event IDs for Microsoft-Windows-Kernel-Process
         private const ushort ProcessStart = 1;
@@ -237,6 +238,17 @@ namespace Sentinel.Core
 
         private void OnKernelFileEvent(EtwRawEvent evt)
         {
+            var sensitiveRead = _credentialReads.Observe(evt);
+            if (sensitiveRead != null)
+            {
+                var readContext = _fusionEngine.FeedEvent(new FileActivityTelemetry
+                {
+                    ProcessId = evt.ProcessId, ProcessName = "", Timestamp = evt.Timestamp,
+                    FilePath = sensitiveRead, OperationType = "READ"
+                });
+                _detectionEngine.SubmitTelemetry(readContext);
+                return;
+            }
             // NameCreate/NameDelete carry the path. FileCreate/Rename/Delete are
             // FileObject-only and still caused extract+alloc traffic (hard faults).
             if (evt.EventId != FileNameCreate && evt.EventId != FileNameDelete)
@@ -402,8 +414,9 @@ namespace Sentinel.Core
             if (evt.EventId != ScriptBlockLogging) return;
             if (evt.UserData == IntPtr.Zero || evt.UserDataLength < 4) return;
 
-            // Script block text is in the UserData as a Unicode string
-            string scriptBlock = TryExtractUnicodeString(evt.UserData, 0, evt.UserDataLength);
+            // 4104 v1: MessageNumber(uint32), MessageTotal(uint32), ScriptBlockText,
+            // ScriptBlockId, Path. Never reinterpret the binary counters as script text.
+            string scriptBlock = PowerShellScriptBlockPayload.Read(evt);
             if (string.IsNullOrEmpty(scriptBlock)) return;
 
             int pid = evt.ProcessId;
@@ -416,7 +429,7 @@ namespace Sentinel.Core
             {
                 ProcessName = processName,
                 ProcessId = pid,
-                CommandLine = scriptBlock.Length > 8192 ? scriptBlock[..8192] : scriptBlock,
+                CommandLine = scriptBlock,
                 ImagePath = "",
                 ParentProcessName = "",
                 Timestamp = evt.Timestamp

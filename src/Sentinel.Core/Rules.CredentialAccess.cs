@@ -6,6 +6,36 @@ using System.Linq;
 namespace Sentinel.Core
 {
     [RuleCategory(DetectionCategory.CredentialDump)]
+    public sealed class SensitiveStoreReadRule : IDetectionRule
+    {
+        public string Name => "SensitiveStoreReadRule";
+
+        public DetectionEvent? Evaluate(FusedTelemetryContext context)
+        {
+            if (context.TriggeringEvent is not FileActivityTelemetry file ||
+                file.ProcessId <= 4 || file.OperationType != "READ" ||
+                !CredentialReadTracker.IsSensitivePath(file.FilePath)) return null;
+
+            return new DetectionEvent
+            {
+                RuleName = "Sensitive File Access: ETW Credential Store Read",
+                ProcessId = file.ProcessId, ProcessName = file.ProcessName,
+                Timestamp = file.Timestamp, Confidence = 0.60,
+                Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
+                SignalType = SignalType.Generic,
+                Evidence = $"Kernel-File Read event attributed to PID {file.ProcessId}; target path is in FilePath metadata.",
+                Reasoning = "A credential/session store read was observed. Legitimate browsers and backup tools " +
+                    "also read these files. This alone never authorizes containment; independent C2 evidence is required.",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["SensitiveFileAccess"] = "true", ["FilePath"] = file.FilePath,
+                    ["AccessSource"] = "KernelFileRead", ["Ownership"] = "Unknown"
+                }
+            };
+        }
+    }
+
+    [RuleCategory(DetectionCategory.CredentialDump)]
     public class LsassAccessRule : IDetectionRule
     {
         public string Name => "LsassAccessRule";

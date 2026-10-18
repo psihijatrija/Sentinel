@@ -450,6 +450,8 @@ namespace Sentinel.Core
                     Timestamp = DateTime.FromFileTimeUtc(eventRecord.EventHeader.TimeStamp),
                     UserData = eventRecord.UserData,
                     UserDataLength = eventRecord.UserDataLength,
+                    PointerSize = (eventRecord.EventHeader.Flags & 0x20) != 0 ? 4 :
+                        (eventRecord.EventHeader.Flags & 0x40) != 0 ? 8 : IntPtr.Size,
                     StackFrames = ExtractStackTrace(ref eventRecord)
                 };
 
@@ -691,6 +693,7 @@ namespace Sentinel.Core
         public DateTime Timestamp;
         public IntPtr UserData;
         public ushort UserDataLength;
+        public int PointerSize;
 
         /// <summary>
         /// User-mode return-address chain captured with the event (STACKWALK64), when the

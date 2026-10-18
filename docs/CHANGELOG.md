@@ -1,4 +1,16 @@
 # Changelog
+## [3.3.0] - 2026-10-18
+
+### Credential and script telemetry
+- Route supported Kernel-File Read v0/v1 events into credential/session-store detection using a bounded FileKey/name map, x86/x64 payload widths, key invalidation, expiry and per-process deduplication. Include Discord stable/canary/PTB LevelDB session stores, browser databases and selected developer secrets. Read observations remain Tier2 LogOnly; ordinary connections do not authorize containment. The infostealer composite requires a high-confidence Tier1 C2 leg and excludes weak observe seeds.
+- Decode PowerShell 4104 v1 script text after its two binary counters, validate fragment counters/lengths and preserve individual fragment text beyond the previous 8,192-character cutoff. Multipart fragments are evaluated independently, without claiming complete reconstruction.
+- Keep the sensitive-file watcher alive until cancellation, extend its session-store scope and remove filename-only and arbitrary-signed-binary ownership exemptions.
+- Clarify that credential access plus C2 is observed evidence, without asserting store ownership or confirmed exfiltration.
+
+### Scope and validation
+- Add raw-payload regressions for supported file-read layouts, key reuse/deletion, stale/malformed data, session scope, script fragments and safe correlation boundaries.
+- See [2026 attack coverage](ATTACK_COVERAGE_2026.md) for measured validation and remaining Windows work. This release does not claim universal Windows protection or guaranteed prevention before theft.
+
 ## [3.2.9] - 2026-10-18
 
 ### Fixed

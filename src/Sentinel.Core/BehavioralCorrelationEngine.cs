@@ -239,14 +239,18 @@ namespace Sentinel.Core
             var hasSensitiveFileAccess = currentSignals.Any(s =>
                 s.RuleName.Contains("Sensitive File Access") ||
                 (s.Metadata != null && s.Metadata.ContainsKey("SensitiveFileAccess")));
-            if (hasSensitiveFileAccess && types.Contains(SignalType.NetworkC2))
+            bool hasConfirmedC2 = currentSignals.Any(s => s.SignalType == SignalType.NetworkC2 &&
+                s.Tier == DetectionTier.Tier1Behavioral &&
+                s.Confidence >= ResponsePolicy.DefaultMinTier1Confidence &&
+                !ResponsePolicy.IsWeakObserveSeed(s));
+            if (hasSensitiveFileAccess && hasConfirmedC2)
             {
                 await EmitCompositeAsync(pid, "Infostealer: Credential Access + Outbound", 0.95,
-                    "Non-owning process read a browser credential/session store or developer secret file, then communicated outbound.",
+                    "Credential/session store access and independent C2 evidence were observed on the same process.",
                     "Infostealer kill chain: the process accessed credential material (browser Login Data / " +
-                    "Cookies / Local State, or .ssh / .aws / cloud tokens) it does not own, then established an " +
-                    "outbound channel on the same PID. Behavioral proof of credential theft + exfil without any " +
-                    "LSASS access - the pattern used by commodity stealers.",
+                    "Cookies / Local State, Discord sessions, or .ssh / .aws / cloud tokens), with independent " +
+                    "C2 evidence on the same PID. A read alone or an ordinary connection cannot complete this chain. " +
+                    "This chain does not require LSASS access.",
                     tagCoercionToolkit: true);
                 return;
             }

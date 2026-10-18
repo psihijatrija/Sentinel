@@ -448,6 +448,7 @@ namespace Sentinel.Service
                     // Rules
                     services.AddSingleton<IDetectionRule, ExposedProcessExploitRule>();
                     services.AddTransient<IDetectionRule, LsassAccessRule>();
+                    services.AddSingleton<IDetectionRule, SensitiveStoreReadRule>();
                     services.AddTransient<IDetectionRule, RansomwareDetectionRule>();
                     services.AddTransient<IDetectionRule, ReverseShellRule>();
                     services.AddTransient<IDetectionRule, ThreatIntelInjectionRule>();

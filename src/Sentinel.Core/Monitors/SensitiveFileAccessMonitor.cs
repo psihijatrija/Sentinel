@@ -118,7 +118,7 @@ namespace Sentinel.Core
             _logger = logger;
         }
 
-        protected override Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("[SensitiveFileAccessMonitor] Started - credential store + dev secret + archive staging");
 
@@ -129,8 +129,9 @@ namespace Sentinel.Core
 
             // FileSystemWatcher is event-driven; nothing to poll. Keep the task alive until stop
             // so the group treats the monitor as running, and tear watchers down on cancellation.
-            stoppingToken.Register(DisposeWatchers);
-            return Task.CompletedTask;
+            try { await Task.Delay(Timeout.Infinite, stoppingToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+            finally { DisposeWatchers(); }
         }
 
         private static IEnumerable<string> EnumerateUserProfiles()
@@ -195,7 +196,7 @@ namespace Sentinel.Core
                 if (string.IsNullOrEmpty(fullPath)) return;
                 var lower = fullPath.ToLowerInvariant();
 
-                if (MatchesAny(lower, BrowserCredentialFragments))
+                if (CredentialReadTracker.IsSensitivePath(fullPath) || MatchesAny(lower, BrowserCredentialFragments))
                 {
                     RaiseSensitiveAccess(fullPath, "Browser Credential Store",
                         "browser login/cookie/session store");
@@ -319,19 +320,13 @@ namespace Sentinel.Core
         {
             // A browser reading its own store, or a signed first-party client, is not a stealer.
             var stem = StringNet48.ReplaceIgnoreCase(procName ?? "", ".exe", "");
-            if (KnownStoreOwners.Contains(stem))
-                return true;
-
             try
             {
                 var path = SecurityValidation.GetProcessImagePath(pid);
                 if (!string.IsNullOrEmpty(path))
                 {
-                    // Signed binaries under Program Files / Windows are trusted readers
-                    // (Chrome, Edge, Firefox, OneDrive, backup agents, sync clients).
-                    if (SecurityValidation.IsOsCriticalPath(path!))
-                        return true;
-                    if (_signerTrust.IsSignedFile(path!))
+                    // Names alone and arbitrary signed tools are not ownership proof.
+                    if (KnownStoreOwners.Contains(stem) && _signerTrust.IsSignedFile(path!))
                         return true;
                 }
             }
