@@ -1,6 +1,6 @@
 # Sentinel documentation
 
-Current product version: **3.2.7**. The focused 2026-10-18 regression review covers 3.2.5 follow-up changes through `4a5c973`; it does not validate the later 3.2.6/3.2.7 changes. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
+Current source version: **3.2.7** (`version.txt`). The remote **v3.2.8** tag points to `4a5c973`, whose source version is 3.2.5; tag, current source and installer versions are not synchronized. See the [version discrepancy](CHANGELOG.md#328---tag-present-version-metadata-inconsistent). The focused 2026-10-18 regression review covers 3.2.5 follow-up changes through `4a5c973`; it does not validate the later 3.2.6/3.2.7 changes. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
 
 ## Current guidance
 

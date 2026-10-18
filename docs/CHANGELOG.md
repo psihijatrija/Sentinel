@@ -1,4 +1,10 @@
 # Changelog
+## [3.2.8] - Tag present; version metadata inconsistent
+
+- Verified on 2026-10-18: remote tag `v3.2.8` points to `4a5c973e64b5114b4dc07c008f269b06e0b94169` ("Start pipe identity reads before awaiting client writes"). That commit's `version.txt` declares 3.2.5. The focused [regression review](REGRESSION_REVIEW_2026-10-18.md) covers changes through this commit.
+- Current `main` declares 3.2.7 in `version.txt`, shipping project versions and installer metadata, and includes later WebView2/watchdog/startup changes described below. The 3.2.8 tag does not include those changes.
+- A tag alone does not verify publication or the version embedded in downloadable binaries. GitHub release metadata could not be checked from this environment (HTTP 403). No installer, publication date or new validation result is claimed here. Source versions and tags need reconciliation through the normal release workflow; documentation does not change either.
+
 ## [3.2.7] - 2026-10-18
 ### Fixed
 - **Service crashing immediately on startup** — `UnhandledException` handler was registered after `HardeningModule.ApplyOrFail()` and `CreateHostBuilder().Build()`, so any exception in those calls left no crash trace. Handler now registered first; trace points added at each startup step to `startup_trace.log`.
