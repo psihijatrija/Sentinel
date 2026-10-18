@@ -1,4 +1,17 @@
 # Changelog
+## [3.2.6] - Unreleased
+
+Changes reviewed through `4a5c973`; `version.txt` remains 3.2.5. This section prepares the next patch notes and does not establish a release or passing Windows validation.
+
+### Fixed
+- Match DNS adapters by parsed GUID identity across inspection, native mutation, restoration and interrupted-transaction guards. Equivalent braced/unbraced and case-varied IDs no longer fail lookup; fresh configuration fingerprints remain required.
+- Select a connected DNS-capable hardware interface for disposable Windows DNS validation. Missing IPv6 `NameServer` values are treated as automatic configuration; unsupported registry value types still refuse mutation. Failed adapter selection includes an inventory, and wrapper failures emit CI annotations.
+- Start the server identity read before awaiting the client write in Windows pipe-authorization tests. Token inspection runs on a dedicated background thread, with a 15-second test deadline and stage diagnostics for stalled calls.
+
+### Validation
+- On 2026-10-18, the full Release solution cross-build passed with zero warnings/errors; 16 dashboard and 8 standalone Worker tests passed. A temporary .NET 10 host outside the checkout ran 45 existing DNS transaction/proxy observation tests against the production Core assembly: all passed, none skipped.
+- No regression was identified in this focused review. The temporary host initially required matching production logging dependencies; its corrected run passed. It does not replace the Windows Framework suite, actual pipe-token checks or native DNS mutation. See [review scope and results](REGRESSION_REVIEW_2026-10-18.md).
+
 ## [3.2.5] - 2026-10-17
 ### Added
 - Administrator-approved local DNS resolver profiles, protected snapshots, verified restoration and explicit failure/partial receipts. Configuration verification does not certify a router or DNS answers as safe.
@@ -3494,7 +3507,7 @@ Major platform release. Product law unchanged: **observe by default**, work-firs
 - Interfaces: `IDetector`, `ITelemetryProvider`, `ICorrelationRule`, `IResponsePlugin`.
 - **`PluginRegistry`** DI singleton - register correlation rules without editing core god-files.
 - **`RulePackLoader`**: `%ProgramData%\Sentinel\rules\packs\*.pack.json` (HMAC fail-closed) -> `FragmentCorrelationRule` plugins.
-- Docs: [docs/RULE_PACKS.md](docs/RULE_PACKS.md).
+- Docs: [docs/RULE_PACKS.md](RULE_PACKS.md).
 
 #### Ops / diagnostics
 - Expanded **`SentinelMetrics`**: telemetry/sec, detections/sec, drops, composite/weighted counts, correlation latency percentiles.

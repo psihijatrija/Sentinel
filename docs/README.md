@@ -1,6 +1,6 @@
 # Sentinel documentation
 
-Current documentation baseline: **3.2.5**, reviewed 2026-10-17. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
+Current documentation baseline: **3.2.5**, with follow-up changes reviewed through `4a5c973` on 2026-10-18. Next-patch notes are staged under **3.2.6 (Unreleased)** in the changelog. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
 
 ## Current guidance
 
@@ -15,6 +15,7 @@ Current documentation baseline: **3.2.5**, reviewed 2026-10-17. `version.txt` is
 | [Offline reputation](HASH_REPUTATION.md) | Removed online lookups and retained local analysis |
 | [Certificate policy](CERTIFICATES.md) | Trust-marker observations, explicit distrust authorization and purpose/private-key limitations |
 | [Windows validation](OFFLINE_VALIDATION.md) | Observed Windows test results and remaining domain/reboot/interactive/installer checks |
+| [2026-10-18 regression review](REGRESSION_REVIEW_2026-10-18.md) | Follow-up change review, current cross-build/portable results and unrun Windows gates |
 | [Rule packs](RULE_PACKS.md) | Local RSA signature verification; no endpoint pack downloads |
 | [Diagnostics](../tools/Sentinel.Diagnostics/README.md) | Local replay, integrity checks and redacted export |
 | [Offline model training](../src/Sentinel.Core/MlModels/README.md) | Optional local ML artifacts; soft signals only |
