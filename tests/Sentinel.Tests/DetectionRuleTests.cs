@@ -202,7 +202,8 @@ namespace Sentinel.Tests
             Assert.Equal("ReverseShellRule", result!.RuleName);
             Assert.Equal(DetectionTier.Tier2Indicator, result.Tier);
             Assert.Equal(ResponseAction.LogOnly, result.AuthorizedResponse);
-            Assert.Equal(SignalType.ReverseShell, result.SignalType);
+            Assert.Equal(SignalType.Generic, result.SignalType);
+            Assert.True(ResponsePolicy.IsNonCorrelatingObserveNoise(result));
         }
 
         [Theory]

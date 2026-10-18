@@ -278,7 +278,7 @@ namespace Sentinel.Tests
         {
             var detection = new DetectionEvent
             {
-                RuleName = "Confirmed C2 Beacon",
+                RuleName = "NetworkC2Rule",
                 SignalType = SignalType.NetworkC2,
                 Confidence = 0.95,
                 Tier = DetectionTier.Tier1Behavioral,
@@ -306,7 +306,7 @@ namespace Sentinel.Tests
             // Arrange: loopback IP should be skipped
             var detection = new DetectionEvent
             {
-                RuleName = "Confirmed C2 Beacon",
+                RuleName = "NetworkC2Rule",
                 SignalType = SignalType.NetworkC2,
                 Confidence = 0.95,
                 Tier = DetectionTier.Tier1Behavioral,

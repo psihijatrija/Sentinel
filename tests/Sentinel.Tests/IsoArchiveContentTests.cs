@@ -240,7 +240,7 @@ namespace Sentinel.Tests
                 AuthorizedResponse = ResponseAction.LogOnly,
                 ProcessName = "dockerd",
                 ProcessId = 0,
-                Metadata = new Dictionary<string, string> { ["ContainerId"] = "abc123def456" }
+                Metadata = new Dictionary<string, string> { ["ContainerId"] = "abc123def456", [ResponsePolicy.ChainConfirmedKey] = "true" }
             };
 
             await engine.HandleAsync(detection);
@@ -267,7 +267,7 @@ namespace Sentinel.Tests
                 AuthorizedResponse = ResponseAction.KillProcessTree,
                 ProcessName = "nonexistent.exe",
                 ProcessId = 99996,
-                Metadata = new Dictionary<string, string> { ["ContainerId"] = "abc123def456" }
+                Metadata = new Dictionary<string, string> { ["ContainerId"] = "abc123def456", [ResponsePolicy.ChainConfirmedKey] = "true" }
             };
 
             await engine.HandleAsync(detection);
@@ -297,6 +297,7 @@ namespace Sentinel.Tests
                 ProcessId = 99997,
                 Metadata = new Dictionary<string, string>
                 {
+                    [ResponsePolicy.ChainConfirmedKey] = "true",
                     ["VmHostPid"] = "99998",
                     ["VmName"] = "TestGuest"
                 }

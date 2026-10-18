@@ -174,7 +174,7 @@ namespace Sentinel.Tests
             {
                 await engine.HandleAsync(new DetectionEvent
                 {
-                    RuleName = "Confirmed C2 Beacon",
+                    RuleName = "NetworkC2Rule",
                     SignalType = SignalType.NetworkC2,
                     ProcessId = 0,
                     ProcessName = "test",
