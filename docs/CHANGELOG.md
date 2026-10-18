@@ -9,6 +9,7 @@
 - Correct EVENT_TRACE_LOGFILEW callback offsets and allocation sizes for x64/x86. Retain native buffers for the consumer lifetime; report provider IDs and Win32 errors when coverage is degraded.
 - Distinguish unsupported sensor progress from unknown progress, publish monitor states/errors, separate response outcomes from response-record counts, and leave unmeasured detection latency null.
 - Report the stamped binary version instead of trusting a potentially stale version.txt sidecar.
+- Route the newer Agent watchdog image-path check through the shared NativeResolver; this fixes the pre-existing Windows inspection-API completeness failure without changing its minimal access rights.
 
 ### Validation and release scope
 - Added regressions for direct dispatch, routine firewall PowerShell, encoded socket command loops, PID reuse, dead-process targeting, ETW ABI layout, missing latency and response outcomes.

@@ -59,13 +59,13 @@ namespace Sentinel.Tests
             {
                 await engine.HandleAsync(new DetectionEvent
                 {
-                    RuleName = "TestKillRule",
+                    RuleName = "LsassAccessRule",
                     ProcessId = 999990 + i,
                     ProcessName = "nonexistent_test_proc",
                     Confidence = 0.99,
                     Tier = DetectionTier.Tier1Behavioral,
                     AuthorizedResponse = ResponseAction.KillProcess,
-                    SignalType = SignalType.SuspiciousProcess
+                    SignalType = SignalType.LsassAccess
                 });
             }
 

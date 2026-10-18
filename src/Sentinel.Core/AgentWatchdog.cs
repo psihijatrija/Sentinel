@@ -296,7 +296,7 @@ namespace Sentinel.Core
         /// </summary>
         private static string? QueryProcessImagePath(int pid)
         {
-            var hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+            var hProcess = NativeResolver.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
             if (hProcess == IntPtr.Zero) return null;
             try
             {
@@ -539,9 +539,6 @@ namespace Sentinel.Core
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags,

@@ -77,7 +77,8 @@ namespace Sentinel.Tests
             {
                 await engine.HandleAsync(new DetectionEvent
                 {
-                    RuleName = "TestKill",
+                    RuleName = "LsassAccessRule",
+                    SignalType = SignalType.LsassAccess,
                     ProcessId = 999980 + i,
                     ProcessName = "nonexistent_budget_test",
                     Confidence = 0.99,
@@ -173,7 +174,8 @@ namespace Sentinel.Tests
             {
                 await engine.HandleAsync(new DetectionEvent
                 {
-                    RuleName = "TestBeacon",
+                    RuleName = "Confirmed C2 Beacon",
+                    SignalType = SignalType.NetworkC2,
                     ProcessId = 0,
                     ProcessName = "test",
                     Confidence = 0.99,

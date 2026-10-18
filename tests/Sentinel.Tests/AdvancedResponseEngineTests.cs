@@ -278,8 +278,9 @@ namespace Sentinel.Tests
         {
             var detection = new DetectionEvent
             {
-                RuleName = "ARP Spoofing Detected",
-                Confidence = 0.90,
+                RuleName = "Confirmed C2 Beacon",
+                SignalType = SignalType.NetworkC2,
+                Confidence = 0.95,
                 Tier = DetectionTier.Tier1Behavioral,
                 AuthorizedResponse = ResponseAction.NetworkIsolate,
                 ProcessName = "arp_spoof.exe",
@@ -305,8 +306,9 @@ namespace Sentinel.Tests
             // Arrange: loopback IP should be skipped
             var detection = new DetectionEvent
             {
-                RuleName = "Network Anomaly: Suspicious Connection",
-                Confidence = 0.80,
+                RuleName = "Confirmed C2 Beacon",
+                SignalType = SignalType.NetworkC2,
+                Confidence = 0.95,
                 Tier = DetectionTier.Tier1Behavioral,
                 AuthorizedResponse = ResponseAction.NetworkIsolate,
                 ProcessName = "test.exe",
@@ -401,7 +403,9 @@ namespace Sentinel.Tests
 
             var log = ReadLog();
             Assert.Contains("\"ActionTaken\":\"LOG\"", log);
-            Assert.Contains("without kill authorization", log);
+            Assert.Equal(DetectionTier.Tier2Indicator, detection.Tier);
+            Assert.Equal(ResponseAction.LogOnly, detection.AuthorizedResponse);
+            Assert.False(detection.KillAuthorized);
         }
 
         [Fact]

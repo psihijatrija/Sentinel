@@ -162,6 +162,17 @@ namespace Sentinel.Core
                 var chain = WalkParentChain(detection.ProcessId, detection.ProcessName);
                 result.ParentChain = chain;
                 result.AllChainProcesses = chain;
+                if (chain.Count == 0 && detection.KillAuthorized)
+                {
+                    var refused = new ProcessTreeTerminationResult
+                    {
+                        RootProcessId = detection.ProcessId,
+                        Error = "Current process identity could not be established; historical ancestry is not a response target."
+                    };
+                    refused.RefusedProcessIds.Add(detection.ProcessId);
+                    result.ProcessContainments.Add(refused);
+                }
+
 
                 // 2. Attack root = first non-system, non-browser host walking toward the parent.
                 //    malware -> chrome -> explorer  => attack root is malware (not chrome).

