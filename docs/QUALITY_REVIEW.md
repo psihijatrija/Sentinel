@@ -1,6 +1,10 @@
 # Sentinel engineering assessment and improvement record
 
-## Current addendum: 3.2.3 (2026-10-17)
+## Current addendum: 3.2.5 follow-up review (2026-10-18)
+
+Reviewed five commits after `4acc2de` through `4a5c973`: proxy drift observation, DNS adapter identity, native DNS harness corrections and pipe-authorization fixture reliability. The full Release cross-build passed with zero warnings/errors, all 24 JavaScript checks passed, and 45 existing DNS/proxy regressions passed in a temporary modern-.NET host against production Core. No confirmed regression was found in that scope. Windows Framework, pipe-token and live DNS checks were not run here; this does not renew the historical Windows results below or change numeric ratings. See the [review record](REGRESSION_REVIEW_2026-10-18.md).
+
+## Historical addendum: 3.2.3 (2026-10-17)
 
 The 2026-10-15 scores and implementation log below are a historical assessment, not current ratings. Online reputation/reporting and evidence mirroring have since been removed; no live Worker integration or independent evidence survival is claimed. The Agent is unprivileged, while the service still holds SYSTEM sensors/response. Local and supported local-GPO inbound rules are reconciled with journaled rollback and exact-filter administrator approvals. Certificate mutation requires explicit thumbprint distrust; missing trust markers are review-only.
 
