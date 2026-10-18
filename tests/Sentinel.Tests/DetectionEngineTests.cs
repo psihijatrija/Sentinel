@@ -80,6 +80,25 @@ namespace Sentinel.Tests
                 NullLogger<DetectionEngine>.Instance);
         }
 
+        [Theory]
+        [InlineData("PPID Spoofing: Parent PID Mismatch")]
+        [InlineData("DriverLoadMonitor: Trojanized GPU Driver Dropped in User Path")]
+        public async Task DirectMonitorEmission_EnforcesPolicyBeforeResponse(string rule)
+        {
+            var engine = CreateEngine(Array.Empty<IDetectionRule>());
+            try
+            {
+                var detection = new DetectionEvent { RuleName = rule, ProcessId = 0,
+                    Confidence = 0.99, Tier = DetectionTier.Tier1Behavioral,
+                    AuthorizedResponse = ResponseAction.QuarantineAndKill };
+                await engine.EmitAsync(detection);
+                Assert.Equal(DetectionTier.Tier2Indicator, detection.Tier);
+                Assert.Equal(ResponseAction.LogOnly, detection.AuthorizedResponse);
+                Assert.Null(_metrics.CreateSnapshot().DetectionLatencyMsP95);
+            }
+            finally { engine.Stop(); }
+        }
+
         [Fact]
         public void DetectionEngine_InitializesCorrectly()
         {

@@ -140,7 +140,7 @@ namespace Sentinel.Core
             // v2.3.1: Record detection metric here too - previously only rule-based detections
             // were counted, leaving monitors (Ephemeral, Hardware, DNS, NamedPipe, etc.) invisible
             // in ops metrics.
-            _metrics.RecordDetection(0);
+            _metrics.RecordDetectionWithoutLatency();
             await HandleDetectionEventAsync(detectionEvent);
         }
 
@@ -546,6 +546,7 @@ namespace Sentinel.Core
 
         private async Task HandleDetectionEventAsync(DetectionEvent detection)
         {
+            ResponsePolicy.EnforceDispatchPolicy(detection);
             // Log the event
             await _eventLogger.LogEventAsync("detection", detection);
 

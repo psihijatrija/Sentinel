@@ -17,9 +17,9 @@ namespace Sentinel.Tests
 
         [Theory]
         [InlineData("evil.exe", @"C:\Temp\evil.exe", false)]
-        public void ShouldDemotePpidToLogOnly_ReturnsFalse_ForUnknown(string name, string path, bool selfSigned)
+        public void ShouldDemotePpidToLogOnly_ReturnsTrue_ForUnknown(string name, string path, bool selfSigned)
         {
-            Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(name, path, selfSigned));
+            Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(name, path, selfSigned));
         }
 
         //  IsStockWindowsConsoleHost 
@@ -42,9 +42,9 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void ShouldDemotePpidToLogOnly_NullPath_ReturnsFalse()
+        public void ShouldDemotePpidToLogOnly_NullPath_ReturnsTrue()
         {
-            Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly("evil.exe", null, false));
+            Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly("evil.exe", null, false));
         }
 
         //  Transient-race fix (2.9.9): allowlisted dev tool with unresolved image path 
@@ -67,9 +67,9 @@ namespace Sentinel.Tests
         [Theory]
         [InlineData("evil", null)]
         [InlineData("evil.exe", "")]
-        public void ShouldDemotePpidToLogOnly_ReturnsFalse_ForNonAllowlistedUnresolvedPath(string name, string? path)
+        public void ShouldDemotePpidToLogOnly_ReturnsTrue_ForNonAllowlistedUnresolvedPath(string name, string? path)
         {
-            Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
+            Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
                 name, path, selfSigned: false, allowlistedDevTool: false));
         }
 
@@ -79,9 +79,9 @@ namespace Sentinel.Tests
         // through to the selfSigned / stock-console-host / OS-critical-path checks and the kill
         // stands. A filename never self-authorizes trust on a kill path.
         [Fact]
-        public void ShouldDemotePpidToLogOnly_AllowlistedDevTool_ResolvedUntrustedPath_DoesNotDemote()
+        public void ShouldDemotePpidToLogOnly_AllowlistedDevTool_ResolvedUntrustedPath_ObservesWithoutTrust()
         {
-            Assert.False(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
+            Assert.True(ParentPidSpoofDetector.ShouldDemotePpidToLogOnly(
                 "gh", @"C:\Temp\gh.exe", selfSigned: false, allowlistedDevTool: true));
         }
 

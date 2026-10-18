@@ -133,7 +133,7 @@ namespace Sentinel.Core
             byte level, ulong matchAnyKeyword, ulong matchAllKeyword, uint timeout, IntPtr enableParameters);
 
         [DllImport("advapi32.dll", EntryPoint = "OpenTraceW", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern long OpenTraceW(ref EVENT_TRACE_LOGFILEW logfile);
+        private static extern long OpenTraceW(IntPtr logfile);
 
         [DllImport("advapi32.dll", EntryPoint = "ProcessTrace", SetLastError = true)]
         private static extern uint ProcessTrace(long[] handleArray, uint handleCount, IntPtr startTime, IntPtr endTime);
@@ -145,96 +145,16 @@ namespace Sentinel.Core
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void EventRecordCallbackDelegate(ref EVENT_RECORD eventRecord);
 
-        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate uint BufferCallbackDelegate(ref EVENT_TRACE_LOGFILEW logfile);
-
-        // EVENT_TRACE_LOGFILEW - using explicit layout for the fields we need.
-        // The full struct is very large due to embedded EVENT_TRACE and TRACE_LOGFILE_HEADER.
-        // We only set the fields OpenTrace requires for real-time consumption and let the
-        // rest be zero-initialized (which is valid for real-time mode).
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct EVENT_TRACE_LOGFILEW
-        {
-            public IntPtr LogFileName;        // LPWSTR - NULL for real-time
-            public IntPtr LoggerName;         // LPWSTR - session name for real-time
-            public long CurrentTime;          // LONGLONG (output)
-            public uint BuffersRead;          // ULONG (output)
-            public uint ProcessTraceMode;     // ULONG - processing flags
-            // EVENT_TRACE CurrentEvent - 176 bytes on x64
-            // We need to pad this correctly. EVENT_TRACE on x64:
-            //   WNODE_HEADER (48) + BufferContext (4) + ... remainder
-            // Actually the exact EVENT_TRACE layout varies. For OpenTrace input, we only
-            // set LoggerName, ProcessTraceMode, EventRecordCallback, and Context.
-            // The trick: put the struct in a large byte array padding and only set the offsets.
-            // Alternatively, we use a flat buffer approach below.
-            // SIMPLIFICATION: We use Marshal.AllocHGlobal for a zeroed buffer and write
-            // fields at known offsets rather than define this complex struct.
-            public long Padding_CurrentEvent_0;
-            public long Padding_CurrentEvent_1;
-            public long Padding_CurrentEvent_2;
-            public long Padding_CurrentEvent_3;
-            public long Padding_CurrentEvent_4;
-            public long Padding_CurrentEvent_5;
-            public long Padding_CurrentEvent_6;
-            public long Padding_CurrentEvent_7;
-            public long Padding_CurrentEvent_8;
-            public long Padding_CurrentEvent_9;
-            public long Padding_CurrentEvent_10;
-            public long Padding_CurrentEvent_11;
-            public long Padding_CurrentEvent_12;
-            public long Padding_CurrentEvent_13;
-            public long Padding_CurrentEvent_14;
-            public long Padding_CurrentEvent_15;
-            public long Padding_CurrentEvent_16;
-            public long Padding_CurrentEvent_17;
-            public long Padding_CurrentEvent_18;
-            public long Padding_CurrentEvent_19;
-            public long Padding_CurrentEvent_20;
-            public long Padding_CurrentEvent_21; // 176 bytes = 22 * 8
-            // TRACE_LOGFILE_HEADER LogfileHeader - ~280 bytes on x64 = 35 * 8
-            public long Padding_LogfileHeader_0;
-            public long Padding_LogfileHeader_1;
-            public long Padding_LogfileHeader_2;
-            public long Padding_LogfileHeader_3;
-            public long Padding_LogfileHeader_4;
-            public long Padding_LogfileHeader_5;
-            public long Padding_LogfileHeader_6;
-            public long Padding_LogfileHeader_7;
-            public long Padding_LogfileHeader_8;
-            public long Padding_LogfileHeader_9;
-            public long Padding_LogfileHeader_10;
-            public long Padding_LogfileHeader_11;
-            public long Padding_LogfileHeader_12;
-            public long Padding_LogfileHeader_13;
-            public long Padding_LogfileHeader_14;
-            public long Padding_LogfileHeader_15;
-            public long Padding_LogfileHeader_16;
-            public long Padding_LogfileHeader_17;
-            public long Padding_LogfileHeader_18;
-            public long Padding_LogfileHeader_19;
-            public long Padding_LogfileHeader_20;
-            public long Padding_LogfileHeader_21;
-            public long Padding_LogfileHeader_22;
-            public long Padding_LogfileHeader_23;
-            public long Padding_LogfileHeader_24;
-            public long Padding_LogfileHeader_25;
-            public long Padding_LogfileHeader_26;
-            public long Padding_LogfileHeader_27;
-            public long Padding_LogfileHeader_28;
-            public long Padding_LogfileHeader_29;
-            public long Padding_LogfileHeader_30;
-            public long Padding_LogfileHeader_31;
-            public long Padding_LogfileHeader_32;
-            public long Padding_LogfileHeader_33;
-            public long Padding_LogfileHeader_34; // 280 bytes = 35 * 8
-            public IntPtr BufferCallback;     // PEVENT_TRACE_BUFFER_CALLBACKW
-            public uint BufferSize;           // ULONG (output)
-            public uint Filled;               // ULONG (output)
-            public uint EventsLost;           // ULONG (output - not used)
-            public IntPtr EventRecordCallback; // PEVENT_RECORD_CALLBACK or EventCallback
-            public uint IsKernelTrace;        // ULONG (output)
-            public IntPtr Context;            // PVOID - user context
-        }
+        // Windows SDK EVENT_TRACE_LOGFILEW layout: EVENT_TRACE is 88 bytes, not
+        // 176. TRACE_LOGFILE_HEADER is 280 bytes on x64 and 272 on x86. The
+        // callback union follows EventsLost with native pointer alignment.
+        internal static (int Size, int ModeOffset, int CallbackOffset) ConsumerLayout(int pointerSize)
+            => pointerSize switch
+            {
+                8 => (448, 28, 424),
+                4 => (416, 20, 400),
+                _ => throw new ArgumentOutOfRangeException(nameof(pointerSize))
+            };
 
         // EVENT_RECORD - the struct delivered to EventRecordCallback
         [StructLayout(LayoutKind.Sequential)]
@@ -449,6 +369,8 @@ namespace Sentinel.Core
 
         private void ProcessTraceThread()
         {
+            IntPtr logfile = IntPtr.Zero;
+            IntPtr loggerName = IntPtr.Zero;
             try
             {
                 // Set up the callback delegate and pin it
@@ -458,18 +380,16 @@ namespace Sentinel.Core
                 // Allocate the session name as a pinned string
                 _sessionNameHandle = GCHandle.Alloc(SessionName, GCHandleType.Pinned);
 
-                // Create EVENT_TRACE_LOGFILEW for OpenTrace
-                var logfile = new EVENT_TRACE_LOGFILEW();
-                logfile.LoggerName = Marshal.StringToHGlobalUni(SessionName);
-                logfile.LogFileName = IntPtr.Zero;
-                logfile.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
-                logfile.EventRecordCallback = Marshal.GetFunctionPointerForDelegate(_eventRecordCallback);
-                logfile.Context = IntPtr.Zero;
-
-                _traceHandle = OpenTraceW(ref logfile);
-
-                // Free the allocated session name string
-                Marshal.FreeHGlobal(logfile.LoggerName);
+                var layout = ConsumerLayout(IntPtr.Size);
+                logfile = Marshal.AllocHGlobal(layout.Size);
+                Marshal.Copy(new byte[layout.Size], 0, logfile, layout.Size);
+                loggerName = Marshal.StringToHGlobalUni(SessionName);
+                Marshal.WriteIntPtr(logfile, IntPtr.Size, loggerName);
+                Marshal.WriteInt32(logfile, layout.ModeOffset,
+                    unchecked((int)(PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD)));
+                Marshal.WriteIntPtr(logfile, layout.CallbackOffset,
+                    Marshal.GetFunctionPointerForDelegate(_eventRecordCallback));
+                _traceHandle = OpenTraceW(logfile);
 
                 if (_traceHandle == INVALID_PROCESSTRACE_HANDLE || _traceHandle == 0)
                 {
@@ -499,6 +419,8 @@ namespace Sentinel.Core
             }
             finally
             {
+                if (loggerName != IntPtr.Zero) Marshal.FreeHGlobal(loggerName);
+                if (logfile != IntPtr.Zero) Marshal.FreeHGlobal(logfile);
                 if (_callbackHandle.IsAllocated) _callbackHandle.Free();
                 if (_sessionNameHandle.IsAllocated) _sessionNameHandle.Free();
                 IsActive = false;

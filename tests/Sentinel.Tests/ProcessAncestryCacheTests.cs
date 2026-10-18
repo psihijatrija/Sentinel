@@ -1,77 +1,67 @@
-using System.Diagnostics;
 using System;
-using System.Reflection;
-using Xunit;
+using System.Collections.Generic;
 using Sentinel.Core;
+using Xunit;
 
 namespace Sentinel.Tests
 {
     public class ProcessAncestryCacheTests
     {
+        private static ProcessAncestryCache.Identity Process(int generation, string name = "child", int parent = 11)
+            => new() { Pid = 42, CreationTicks = generation, Name = name, ParentPid = parent, ImagePath = @"C:\Tools\" + name + ".exe" };
+
         [Fact]
-        public void ProcessAncestryCache_PreservesEtwParentPidAcrossRefreshes()
+        public void SameGeneration_PreservesRecordedParent()
         {
-            // Arrange
-            var cache = new ProcessAncestryCache();
-            int myPid = Process.GetCurrentProcess().Id;
-            int fakeParentPid = 1337;
-            string myName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
-
-            // Record the parent process first so its name can be resolved
-            cache.RecordProcessStart(fakeParentPid, 0, "explorer", "C:\\Windows\\explorer.exe");
-
-            // Record a high-fidelity ETW-sourced process start (with custom fake parent ID)
-            cache.RecordProcessStart(myPid, fakeParentPid, myName, "C:\\mock\\path.exe");
-
-            // Verify it was written to the cache
-            var beforeRefresh = cache.GetParent(myPid);
-            Assert.Equal(fakeParentPid, beforeRefresh.parentId);
-            Assert.Equal("explorer", beforeRefresh.name);
-
-            // Act: Invoke the private RefreshCache method via reflection
-            var refreshMethod = typeof(ProcessAncestryCache).GetMethod(
-                "RefreshCache", BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(refreshMethod);
-            refreshMethod!.Invoke(cache, null);
-
-            // Assert: Verify that the custom parent PID was PRESERVED and not overwritten
-            // by the NtQueryInformationProcess parent PID retrieved during refresh!
-            var afterRefresh = cache.GetParent(myPid);
-            Assert.Equal(fakeParentPid, afterRefresh.parentId);
-            Assert.Equal("explorer", afterRefresh.name);
+            using var cache = new ProcessAncestryCache(_ => Process(1), false);
+            cache.RecordProcessStart(42, 99, "child", @"C:\Tools\child.exe");
+            Assert.True(cache.TryGetLiveProcessInfo(42, out var info));
+            Assert.Equal(99, info.parentId);
         }
 
         [Fact]
-        public void ProcessAncestryCache_PrunesExitedProcesses()
+        public void ReusedPid_ReplacesOldImageAndParentWithoutAnObservedExit()
         {
-            // Arrange
-            var cache = new ProcessAncestryCache();
-            int fakePid = 999999; // Non-existent PID
-            int fakeParent = 1111;
+            int generation = 1;
+            using var cache = new ProcessAncestryCache(_ => generation == 1 ? Process(1, "gamingservices") : Process(2, "git", 22), false);
+            cache.RecordProcessStart(42, 99, "gamingservices", @"C:\Tools\gamingservices.exe");
+            generation = 2;
+            Assert.True(cache.TryGetLiveProcessInfo(42, out var info));
+            Assert.Equal(22, info.parentId);
+            Assert.Equal("git", info.name);
+            Assert.Equal(@"C:\Tools\git.exe", info.imagePath);
+        }
 
-            cache.RecordProcessStart(fakePid, fakeParent, "ghost", "C:\\temp\\ghost.exe");
+        [Fact]
+        public void DeadProcess_HistoryCannotBecomeALiveResponseTarget()
+        {
+            bool living = true;
+            using var cache = new ProcessAncestryCache(_ => living ? Process(1) : null, false);
+            cache.RecordProcessStart(42, 99, "child", @"C:\Tools\child.exe");
+            living = false;
+            Assert.False(cache.TryGetLiveProcessInfo(42, out _));
+            Assert.Equal("child", cache.GetProcessInfo(42).name);
+            var now = DateTimeOffset.UtcNow;
+            cache.PruneDeadEntries(new HashSet<int>(), now);
+            cache.PruneDeadEntries(new HashSet<int>(), now.AddSeconds(61));
+            Assert.Equal("unknown", cache.GetProcessInfo(42).name);
+        }
 
-            // Verify before refresh
-            var before = cache.GetParent(fakePid);
-            Assert.Equal(fakeParent, before.parentId);
+        [Fact]
+        public void DelayedEvent_ForOldImageCannotReplaceNewProcess()
+        {
+            using var cache = new ProcessAncestryCache(_ => Process(2, "git", 22), false);
+            cache.RecordProcessStart(42, 99, "gamingservices", @"C:\Tools\gamingservices.exe");
+            Assert.True(cache.TryGetLiveProcessInfo(42, out var info));
+            Assert.Equal(22, info.parentId);
+            Assert.Equal("git", info.name);
+        }
 
-            // Act: Refresh cache (this will see that PID 999999 is not running and start tracking it in dead PIDs)
-            var refreshMethod = typeof(ProcessAncestryCache).GetMethod(
-                "RefreshCache", BindingFlags.NonPublic | BindingFlags.Instance);
-            refreshMethod!.Invoke(cache, null);
-
-            // Manually age the dead PID retention so it gets pruned on the next refresh
-            var deadPidRetention = (System.Collections.Concurrent.ConcurrentDictionary<int, DateTimeOffset>)
-                typeof(ProcessAncestryCache).GetField("_deadPidRetention", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache)!;
-            deadPidRetention[fakePid] = DateTimeOffset.UtcNow.AddMinutes(-2);
-
-            // Run another refresh to trigger pruning
-            refreshMethod!.Invoke(cache, null);
-
-            // Assert: It should have been pruned and return unknown/0
-            var after = cache.GetParent(fakePid);
-            Assert.Equal(0, after.parentId);
-            Assert.Equal("unknown", after.name);
+        [Fact]
+        public void UnknownCreationTime_IsNeverALiveResponseTarget()
+        {
+            using var cache = new ProcessAncestryCache(_ => Process(0), false);
+            Assert.False(cache.TryGetLiveProcessInfo(42, out _));
         }
     }
 }

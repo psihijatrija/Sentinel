@@ -88,7 +88,10 @@ namespace Sentinel.Core
                 if (!health.QuerySucceeded || !providersAvailable || lossIncreased)
                 {
                     string degraded = !health.QuerySucceeded ? "ETW session query unavailable" :
-                        !providersAvailable ? "One or more ETW providers are unavailable" : "ETW events/buffers were lost";
+                        !providersAvailable ? "ETW providers unavailable: " + string.Join("; ",
+                            System.Linq.Enumerable.Select(System.Linq.Enumerable.Where(health.ProviderStatus, p => p.Value != 0),
+                                p => p.Key + ": Win32 " + p.Value + " (" + new System.ComponentModel.Win32Exception((int)p.Value).Message + ")"))
+                        : "ETW events/buffers were lost";
                     Progress.Failed(degraded);
                     if (!_coverageDegraded || lossIncreased)
                     {

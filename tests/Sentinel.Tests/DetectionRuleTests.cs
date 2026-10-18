@@ -187,7 +187,7 @@ namespace Sentinel.Tests
         [InlineData("powershell.exe -enc aaa -sta -noni")]
         [InlineData("powershell.exe -EncodedCommand abc123 -windowstyle hidden")]
         [InlineData("powershell.exe -enc base64 downloadstring")]
-        public void ReverseShellRule_Detects_EncodedWithEvasion(string cmdLine)
+        public void ReverseShellRule_RoutineFlagsRemainObserveOnly(string cmdLine)
         {
             var rule = new ReverseShellRule();
             var pt = new ProcessTelemetry
@@ -200,8 +200,8 @@ namespace Sentinel.Tests
             var result = rule.Evaluate(MakeContext(pt));
             Assert.NotNull(result);
             Assert.Equal("ReverseShellRule", result!.RuleName);
-            Assert.Equal(DetectionTier.Tier1Behavioral, result.Tier);
-            Assert.Equal(ResponseAction.KillProcessTree, result.AuthorizedResponse);
+            Assert.Equal(DetectionTier.Tier2Indicator, result.Tier);
+            Assert.Equal(ResponseAction.LogOnly, result.AuthorizedResponse);
             Assert.Equal(SignalType.ReverseShell, result.SignalType);
         }
 

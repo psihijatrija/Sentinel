@@ -375,7 +375,9 @@ namespace Sentinel.Core
                 if (currentPid <= 4 || visited.Contains(currentPid)) break;
                 visited.Add(currentPid);
 
-                var procInfo = _ancestryCache.GetProcessInfo(currentPid);
+                if (!_ancestryCache.TryGetLiveProcessInfo(currentPid, out var procInfo)) break;
+                if (depth == 0 && !string.Equals(currentName.Replace(".exe", ""),
+                    procInfo.name.Replace(".exe", ""), StringComparison.OrdinalIgnoreCase)) break;
                 string? imagePath = !string.IsNullOrEmpty(procInfo.imagePath) ? procInfo.imagePath : null;
                 if (string.IsNullOrEmpty(currentName)) currentName = procInfo.name;
 

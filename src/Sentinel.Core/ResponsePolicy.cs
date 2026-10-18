@@ -65,7 +65,8 @@ namespace Sentinel.Core
             if (cache == null) return null;
             try
             {
-                var (_, _, imagePath) = cache.GetProcessInfo(pid);
+                if (!cache.TryGetLiveProcessInfo(pid, out var info)) return null;
+                var imagePath = info.imagePath;
                 return string.IsNullOrEmpty(imagePath) ? null : imagePath;
             }
             catch { return null; }
@@ -390,6 +391,33 @@ namespace Sentinel.Core
         /// Module-identity unload remediations are a permanent Tier1 exception (already acted;
         /// do not promote to kill). Other DLL-unload-exempt observe plants stay observe-only.
         /// </summary>
+        /// <summary>Every dispatch path, including direct monitor emission, shares this boundary.</summary>
+        internal static void EnforceDispatchPolicy(DetectionEvent detection)
+        {
+            bool consultant = detection.Metadata != null &&
+                detection.Metadata.TryGetValue("ConsultantSignal", out var marker) &&
+                string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase);
+            if (consultant || detection.Tier == DetectionTier.Tier2Indicator)
+            {
+                detection.Tier = DetectionTier.Tier2Indicator;
+                detection.AuthorizedResponse = ResponseAction.LogOnly;
+                return;
+            }
+            // Non-process host remediations retain their action-specific authorization
+            // checks in the executor (e.g. explicit certificate distrust policy).
+            if (detection.AuthorizedResponse == ResponseAction.RemoveCert ||
+                detection.AuthorizedResponse == ResponseAction.VpnShieldUp ||
+                detection.AuthorizedResponse == ResponseAction.RemoveRegistryEntry ||
+                detection.AuthorizedResponse == ResponseAction.DismountVolume)
+                return;
+            ApplyTierLaw(detection);
+            if (detection.ProcessId <= 4 &&
+                (detection.AuthorizedResponse == ResponseAction.KillProcess ||
+                 detection.AuthorizedResponse == ResponseAction.KillProcessTree ||
+                 detection.AuthorizedResponse == ResponseAction.QuarantineAndKill))
+                DemoteToObserve(detection, "InvalidProcessTarget");
+        }
+
         public static void ApplyTierLaw(DetectionEvent detection, double minConfidence = DefaultMinTier1Confidence)
         {
             if (detection == null) return;

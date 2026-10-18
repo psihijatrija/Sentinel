@@ -388,11 +388,8 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// v2.1.5: Detects .sys files claiming to be GPU drivers (nvlddmkm.sys, amdkmdag.sys, etc.)
-        /// but dropped from non-standard paths. Legitimate GPU drivers are installed exclusively via
-        /// DriverStore (Windows Update, vendor installer, GeForce Experience, AMD Software).
-        /// A GPU driver filename appearing in Temp, Downloads, or user-writable paths is a
-        /// trojanized driver - either for privilege escalation or hardware-level persistence.
+        /// Observes recent GPU driver package staging in writable paths. Vendor installers
+        /// legitimately extract packages here; filenames and paths alone are not kill authority.
         /// </summary>
         private async Task CheckSuspiciousGpuDriverDropAsync(CancellationToken ct)
         {
@@ -432,20 +429,15 @@ namespace Sentinel.Core
 
                         await _detectionEngine.EmitAsync(new DetectionEvent
                         {
-                            RuleName = "DriverLoadMonitor: Trojanized GPU Driver Dropped in User Path",
+                            RuleName = "DriverLoadMonitor: GPU Driver Staged in User Path",
                             Evidence = $"File '{fileName}' (a known GPU driver name) was created in non-standard path '{basePath}'. " +
-                                       $"Full path: '{sysFile}'. Legitimate GPU drivers are only installed via DriverStore.",
-                            Reasoning = "A file with the name of a known GPU kernel-mode driver was dropped in a user-writable " +
-                                        "directory. Legitimate GPU driver installations go through Windows DriverStore " +
-                                        "(via vendor installers, Windows Update, or GeForce Experience/AMD Software). " +
-                                        "A GPU driver filename in Temp/Downloads/AppData indicates either: " +
-                                        "(1) A trojanized GPU driver for kernel-level privilege escalation (replacing the real driver), " +
-                                        "(2) A BYOVD attack using an older vulnerable GPU driver version, or " +
-                                        "(3) Preparation for hardware-level persistence that survives OS reinstallation. " +
-                                        "This is a high-confidence indicator of an advanced attack targeting the GPU driver stack.",
-                            Confidence = 0.88,
-                            Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.QuarantineAndKill,
+                                       $"Full path: '{sysFile}'. This may be installer staging; no driver load or malicious behavior is established.",
+                            Reasoning = "A GPU driver filename was observed in a writable directory. Vendor installers may " +
+                                        "legitimately stage packages here. Filename and location do not establish trojanization, " +
+                                        "vulnerability, loading, or malicious behavior; observation only.",
+                            Confidence = 0.50,
+                            Tier = DetectionTier.Tier2Indicator,
+                            AuthorizedResponse = ResponseAction.LogOnly,
                             ProcessName = "SYSTEM",
                             ProcessId = 0,
                             SignalType = SignalType.SecurityEvasion,
@@ -453,7 +445,7 @@ namespace Sentinel.Core
                             {
                                 ["DriverFile"] = sysFile,
                                 ["FileName"] = fileName,
-                                ["AttackVector"] = "GPU_DRIVER_TROJANIZATION",
+                                ["AttackVector"] = "GPU_DRIVER_STAGING",
                                 ["Technique"] = "T1068 (Exploitation for Privilege Escalation)",
                                 ["MITRE"] = "T1547.006 (Kernel Modules and Extensions)",
                             }

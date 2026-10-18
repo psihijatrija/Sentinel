@@ -1,0 +1,11 @@
+# Audit-driven response and telemetry fixes
+
+The 18 October logs showed Sentinel terminating its firewall bootstrap, issuing failed GPU-driver responses against PID 0, and associating a Git-installer PID with an older Gaming Services image. The direct-emission path skipped the tier policy applied to normal rule evaluation. The ETW native consumer also padded EVENT_TRACE to 176 bytes instead of its SDK size of 88 bytes, moving the callback away from the native ABI offset.
+
+All detections now pass a common dispatch policy before logging and response. Existing Tier2 signals cannot gain active authority at that boundary; inline execution receipts remain evidence of actions already performed. GPU file staging and standalone PPID mismatches stay observational. Encoded automation flags are insufficient for a reverse-shell response; that rule requires decoded socket-stream reads, writes and command execution. No filename, marker or vendor-name allowlist was introduced.
+
+Process ancestry records carry creation-time identity. A live generation check replaces stale PID entries; response chain traversal cannot substitute dead historical entries for live processes. Entries captured after a process exits can remain historical evidence but cannot satisfy the live-target API. Ambiguous collection or identity cannot authorize action.
+
+Operational snapshots expose Unsupported progress for monitors without collection instrumentation and retain separate runtime state and error text. They publish separate NotRequested, Attempted, Verified, Failed, Refused and PartiallyCompleted response counts. Missing direct-emission latency is null, with a sample count. ProductVersion comes from the running binary. ETW exposes provider failures without treating missing events as proof of tampering or restarting an otherwise idle stream.
+
+These changes cannot remotely repair Windows provider permissions or prove coverage on the affected host. After installing, verify actual ETW callbacks, inspect remaining provider errors and non-running monitor states, and confirm firewall startup completes. Internal consistency of the supplied 87-record audit chain passed; authenticity and completeness still need an independent checkpoint.

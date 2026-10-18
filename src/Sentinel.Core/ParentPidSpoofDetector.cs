@@ -129,7 +129,8 @@ namespace Sentinel.Core
                         int kernelParentPid = (int)pbi.InheritedFromUniqueProcessId;
 
                         // Compare with what the ancestry cache recorded (from ETW or WMI)
-                        var (cachedParentPid, _) = _ancestryCache.GetParent(proc.Id);
+                        if (!_ancestryCache.TryGetLiveProcessInfo(proc.Id, out var liveInfo)) continue;
+                        int cachedParentPid = liveInfo.parentId;
                         if (cachedParentPid > 0 && cachedParentPid != kernelParentPid && kernelParentPid > 4)
                         {
                             // Child of a signed installer/extractor -> ETW race, not spoofing
@@ -138,56 +139,18 @@ namespace Sentinel.Core
                                 continue;
                             }
 
-                            // Kill only when the mismatched process is a non-OS, unsigned binary.
-                            // Signed / stock System32 hosts (esp. conhost) race ETW constantly -
-                            // kill-class response chain-kills legitimate tools (WinReducer, installers).
-                            bool selfSigned = !string.IsNullOrEmpty(imagePath) &&
-                                (_signerTrust.IsSignedFile(imagePath!) ||
-                                 SecurityValidation.VerifyAuthenticodeSignature(imagePath!));
-                            // Allowlisted dev/browser tool on a PPID mismatch: NEVER kill. The
-                            // top-of-scan signed-skip is gated on BOTH a resolved image path AND a
-                            // passing signature check in the same 2s tick. Under rapid-fire git/gh
-                            // spawning that gate races two ways: (a) the path never resolves (gh /
-                            // git-remote-https exit first), or (b) the path resolves but the slow
-                            // WinVerifyTrust call intermittently fails, so selfSigned is false even
-                            // for a validly-signed binary. Either way a known-good, allowlisted dev
-                            // tool reached the kill branch at 0.85 and was terminated mid-push
-                            // (observed: git PID 11656 killed on a signature race). Allowlist
-                            // membership by NAME is sufficient to decline the kill: a real attacker
-                            // merely naming their binary "git"/"gh" is caught by other rules, whereas
-                            // killing the real tool breaks every push. Demote to LogOnly for any
-                            // allowlisted dev/browser name regardless of whether the path or
-                            // signature resolved on this tick. Non-allowlisted names are unaffected.
-                            bool allowlistedDevTool = (isDev || isBrowser);
-                            bool demote = ShouldDemotePpidToLogOnly(proc.ProcessName, imagePath, selfSigned, allowlistedDevTool);
-                            var response = demote
-                                ? ResponseAction.LogOnly
-                                : ResponseAction.KillProcess;
-                            var tier = demote
-                                ? DetectionTier.Tier2Indicator
-                                : DetectionTier.Tier1Behavioral;
-                            string demoteTag = demote
-                                ? (IsStockWindowsConsoleHost(proc.ProcessName, imagePath)
-                                    ? " [stock console host - LogOnly]"
-                                    : selfSigned
-                                        ? " [signed - LogOnly]"
-                                        : allowlistedDevTool
-                                            ? " [allowlisted dev/browser tool - LogOnly, never killed on PPID race]"
-                                            : " [OS path - LogOnly]")
-                                : "";
+                            const string demoteTag = " [unconfirmed ancestry mismatch - LogOnly]";
 
                             _ = _detectionEngine.EmitAsync(new DetectionEvent
                             {
                                 RuleName = "PPID Spoofing: Parent PID Mismatch",
                                 Evidence = $"Process '{proc.ProcessName}' (PID {proc.Id}) kernel parent PID={kernelParentPid}, cached parent PID={cachedParentPid}" +
                                            demoteTag,
-                                Reasoning = "The process's kernel-reported parent PID does not match the parent recorded via ETW process creation events, indicating PPID spoofing (T1134.004)." +
-                                            (demote
-                                                ? " Treated as ancestry race (signed binary, stock console host, or OS-protected path) - LogOnly, no chain kill."
-                                                : ""),
-                                Confidence = demote ? 0.55 : 0.85,
-                                Tier = tier,
-                                AuthorizedResponse = response,
+                                Reasoning = "The process's kernel-reported parent PID does not match the parent recorded via ETW process creation events, which may reflect PPID spoofing (T1134.004), PID reuse, or a collection race." +
+                                            " An isolated mismatch is observational and cannot authorize a kill.",
+                                Confidence = 0.55,
+                                Tier = DetectionTier.Tier2Indicator,
+                                AuthorizedResponse = ResponseAction.LogOnly,
                                 ProcessName = proc.ProcessName,
                                 ProcessId = proc.Id
                             });
@@ -238,24 +201,9 @@ namespace Sentinel.Core
             bool selfSigned,
             bool allowlistedDevTool = false)
         {
-            if (selfSigned) return true;
-            // Allowlisted dev/browser NAME demotes the kill ONLY in the genuine transient
-            // unresolved-path race window: the image path could not be resolved on this scan
-            // tick (a short-lived gh/git-remote-https exited before QueryFullProcessImageName
-            // returned). In that window there is no resolved attacker-controllable anchor to
-            // check, so failing open for a known dev/browser name is the lesser evil and avoids
-            // killing a real tool mid-push. But if a path DID resolve, the name alone is NOT
-            // enough: fall through to the selfSigned / IsStockWindowsConsoleHost /
-            // IsOsCriticalPath checks so an impostor at a resolved untrusted path
-            // (e.g. C:\Temp\gh.exe) is NOT exonerated by its name. The selfSigned branch above
-            // already protects a validly-signed real tool whose path resolved. This mirrors the
-            // already-shipped IsStockWindowsConsoleHost empty-path carve-out.
-            if (allowlistedDevTool && string.IsNullOrEmpty(imagePath)) return true;
-            if (IsStockWindowsConsoleHost(processName, imagePath)) return true;
-            // Any binary under the Windows tree (WRP) - ancestry races are common; kill chain is not.
-            if (!string.IsNullOrEmpty(imagePath) && SecurityValidation.IsOsCriticalPath(imagePath))
-                return true;
-            return false;
+            // A parent mismatch alone cannot distinguish spoofing from PID reuse or a
+            // collection race. Keep correlation evidence without authorizing process action.
+            return true;
         }
 
         /// <summary>

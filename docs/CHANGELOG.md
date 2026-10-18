@@ -1,4 +1,20 @@
 # Changelog
+## [3.2.9] - 2026-10-18
+
+### Fixed
+- Apply the central tier policy to direct monitor emissions and response dispatch; Tier2 remains LogOnly. Reject process-kill authority for PID 0/system targets.
+- Routine encoded PowerShell automation no longer authorizes a reverse-shell kill. Preserve original command evidence, decode bounded Base64, and require a socket command loop for the terminal rule.
+- Keep standalone PPID mismatches and GPU driver staging observational. Temporary installer extraction is not proof of trojanization; never attempt process containment against a driver filename or PID 0.
+- Validate process-cache generations by creation time, replace reused PIDs, serialize cache updates, and require live identity for chain targeting. Retain dead entries for evidence only.
+- Correct EVENT_TRACE_LOGFILEW callback offsets and allocation sizes for x64/x86. Retain native buffers for the consumer lifetime; report provider IDs and Win32 errors when coverage is degraded.
+- Distinguish unsupported sensor progress from unknown progress, publish monitor states/errors, separate response outcomes from response-record counts, and leave unmeasured detection latency null.
+- Report the stamped binary version instead of trusting a potentially stale version.txt sidecar.
+
+### Validation and release scope
+- Added regressions for direct dispatch, routine firewall PowerShell, encoded socket command loops, PID reuse, dead-process targeting, ETW ABI layout, missing latency and response outcomes.
+- Local .NET 10 solution build passes with 0 warnings and 0 errors. All 15 portable audit regressions pass against the built Core assembly; Worker and dashboard JavaScript checks pass. Full .NET Framework runtime and native Windows checks run in CI.
+- Version 3.2.9 is explicitly requested by the owner to reconcile the earlier tag/source mismatch. Existing tags and releases are preserved.
+
 ## [3.2.8] - Tag present; version metadata inconsistent
 
 - Verified on 2026-10-18: remote tag `v3.2.8` points to `4a5c973e64b5114b4dc07c008f269b06e0b94169` ("Start pipe identity reads before awaiting client writes"). That commit's `version.txt` declares 3.2.5. The focused [regression review](REGRESSION_REVIEW_2026-10-18.md) covers changes through this commit.

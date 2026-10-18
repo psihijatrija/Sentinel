@@ -260,11 +260,13 @@ namespace Sentinel.Core
             if (detection == null) throw new ArgumentNullException(nameof(detection));
             if (detection.RecordedExecution != null)
             {
+                _metrics.RecordResponseOutcome(detection.RecordedExecution);
                 // Report a trusted inline executor's receipt without executing its action again.
                 // External telemetry cannot populate this internal, non-serialized field.
                 await _eventLogger.LogEventAsync("response_result", detection.RecordedExecution).ConfigureAwait(false);
                 return detection.RecordedExecution;
             }
+            ResponsePolicy.EnforceDispatchPolicy(detection);
             var execution = new ResponseExecutionResult
             {
                 ProcessId = detection.ProcessId, ProcessName = detection.ProcessName,
@@ -278,6 +280,7 @@ namespace Sentinel.Core
                 execution.Reason = "Response executor failed: " + ex.Message;
             }
             execution.CompletedAt = DateTimeOffset.UtcNow;
+            _metrics.RecordResponseOutcome(execution);
             await _eventLogger.LogEventAsync("response_result", execution).ConfigureAwait(false);
             return execution;
         }

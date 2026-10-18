@@ -33,7 +33,9 @@ namespace Sentinel.Tests
             int parentPid, string parentName, string? parentImagePath,
             int childPid, string childName, string childCmd)
         {
-            var cache = new ProcessAncestryCache();
+            var cache = new ProcessAncestryCache(pid => pid == parentPid && parentImagePath != null
+                ? new ProcessAncestryCache.Identity { Pid = parentPid, Name = parentName,
+                    ImagePath = parentImagePath, CreationTicks = 1 } : null, false);
             if (parentImagePath != null)
                 cache.RecordProcessStart(parentPid, 0, parentName, parentImagePath);
             ResponsePolicy.SetAncestryCache(cache);

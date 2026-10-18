@@ -875,12 +875,13 @@ function loadOps() {{
             var telDrop = ops.TelemetryDropped || ops.telemetryDropped || 0;
             var dropRate = telRecv > 0 ? ((telDrop / telRecv) * 100).toFixed(2) : '0.00';
             var sensors = ops.SensorProgress || ops.sensorProgress || {{}};
-            var healthy = 0, degraded = 0, unknown = 0;
+            var healthy = 0, degraded = 0, unknown = 0, unsupported = 0;
             for (var sensorName in sensors) {{
                 if (!sensors.hasOwnProperty(sensorName)) continue;
                 var sensorInfo = sensors[sensorName] || {{}};
                 var sensorState = sensorInfo.State || sensorInfo.state || 'Unknown';
-                if (sensorState === 'Healthy') healthy++;
+                if (sensorState === 'Unsupported') unsupported++;
+                else if (sensorState === 'Healthy') healthy++;
                 else if (sensorState === 'Failed' || sensorState === 'Stale') degraded++;
                 else unknown++;
             }}
@@ -888,15 +889,21 @@ function loadOps() {{
                 ['Telemetry/sec', ops.TelemetryPerSecond || ops.telemetryPerSecond || 0],
                 ['Detections/sec', ops.DetectionsPerSecond || ops.detectionsPerSecond || 0],
                 ['Detections Total', ops.DetectionsTotal || ops.detectionsTotal || 0],
-                ['Responses Total', ops.ResponsesTotal || ops.responsesTotal || 0],
+                ['Response records (includes LogOnly)', ops.ResponsesTotal || ops.responsesTotal || 0],
+                ['Verified actions', ops.ResponsesVerified || ops.responsesVerified || 0],
+                ['Failed actions', ops.ResponsesFailed || ops.responsesFailed || 0],
+                ['Refused actions', ops.ResponsesRefused || ops.responsesRefused || 0],
+                ['Partial actions', ops.ResponsesPartiallyCompleted || ops.responsesPartiallyCompleted || 0],
                 ['Drop Rate', dropRate + '%'],
                 ['Queue wait P95', (ops.QueueWaitMsP95 || ops.queueWaitMsP95 || 0).toFixed(1) + 'ms'],
                 ['Pipeline', (ops.Pipeline || ops.pipeline || {{}}).State || (ops.pipeline || {{}}).state || 'Unknown'],
                 ['Oldest queued', ((ops.Pipeline || ops.pipeline || {{}}).OldestQueuedAgeMs || 0).toFixed(1) + 'ms'],
                 ['Correlation P50', (ops.CorrelationLatencyMsP50 || ops.correlationLatencyMsP50 || 0) + 'ms'],
                 ['Monitors', (ops.RunningMonitors || ops.runningMonitors || 0) + '/' + (ops.RegisteredMonitors || ops.registeredMonitors || 0)],
-                ['Sensor progress', healthy + ' verified / ' + degraded + ' degraded / ' + unknown + ' unknown'],
+                ['Sensor progress', healthy + ' verified / ' + degraded + ' degraded / ' + unknown + ' unknown / ' + unsupported + ' unsupported'],
                 ['Audit integrity', !ops.hasOwnProperty('AuditIntegrityDegraded') && !ops.hasOwnProperty('auditIntegrityDegraded') ? 'Unknown' : (ops.AuditIntegrityDegraded || ops.auditIntegrityDegraded) ? 'Degraded' : 'Available'],
+                ['ETW collection', ((ops.Etw || ops.etw || {{}}).EventsProcessed || 0) > 0 ? 'Events observed' : 'Unverified: no events observed'],
+                ['Monitor issues', Object.keys(ops.MonitorStates || {{}}).filter(function(n) {{ return ops.MonitorStates[n].State !== 'Running'; }}).map(function(n) {{ return n + ': ' + ops.MonitorStates[n].State + (ops.MonitorStates[n].LastError ? ' (' + ops.MonitorStates[n].LastError + ')' : ''); }}).join('; ') || 'None reported'],
                 ['Plugins', ops.PluginCount || ops.pluginCount || 0],
                 ['Weighted Correlation', (ops.WeightedCorrelationEnabled || ops.weightedCorrelationEnabled) ? 'Enabled' : 'Disabled'],
                 ['Product Version', ops.ProductVersion || ops.productVersion || '\u2014']

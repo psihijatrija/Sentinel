@@ -1021,3 +1021,9 @@ and `docs/QUALITY_REVIEW.md` for limits, ratings and remaining validation.
 The service owns its events and audit directory. The interactive agent writes its own events and audit chain under LocalAppData/Sentinel/Agent (or an agent subdirectory of the configured log destination). Dashboard and tray readers combine these event sources. Event destinations reject competing writers rather than renaming a live file. Certificate trust-marker absence is an uncertain observation: the guard emits Tier2 LogOnly and the remediator refuses mutations without explicit thumbprint distrust policy. Kernel-reported current-process PID attribution excludes own decoy inspection from pipe alerts. CVE product matches are candidates without version applicability proof.
 
 In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.
+
+
+
+## Audit-driven dispatch and collection integrity (3.2.9)
+
+See [audit fixes](AUDIT_FIXES_2026-10-18.md) for the common dispatch policy, generation-validated ancestry, ETW native ABI correction and operational metric semantics.

@@ -97,12 +97,14 @@ namespace Sentinel.Core
                     foreach (var monitor in _monitorRegistry.GetAllStatuses())
                     {
                         snap.SensorProgress[monitor.Name] = monitor.Progress;
+                        snap.MonitorStates[monitor.Name] = new MonitorRuntimeSnapshot
+                        { State = monitor.State.ToString(), LastError = monitor.LastError };
                         snap.SensorBudgets[monitor.Name] = monitor.Budget;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // registry optional during early startup
+                    _logger.LogDebug(ex, "Monitor status snapshot unavailable during startup");
                 }
             }
 
@@ -119,11 +121,8 @@ namespace Sentinel.Core
     }
 
     /// <summary>
-    /// Central product version for metrics/UI. v2.6.0: computed at runtime from the single
-    /// source of truth (<c>version.txt</c> shipped next to the binary, which the build stamps
-    /// from the repo-root <c>version.txt</c>), falling back to the stamped assembly version.
-    /// Previously a hand-maintained <c>const</c> that silently drifted from <c>version.txt</c>
-    /// every release - computing it here means it can never go stale again.
+    /// Product version is taken from the stamped binary. A stale sidecar cannot
+    /// misidentify the executing engine after an incomplete update.
     /// </summary>
     public static class ProductInfo
     {
@@ -133,18 +132,6 @@ namespace Sentinel.Core
 
         private static string ResolveVersion()
         {
-            try
-            {
-                var versionFile = Path.Combine(System.AppContext.BaseDirectory, "version.txt");
-                if (File.Exists(versionFile))
-                {
-                    var text = File.ReadAllText(versionFile).Trim();
-                    if (!string.IsNullOrEmpty(text))
-                        return text;
-                }
-            }
-            catch { /* fall through to assembly version */ }
-
             return typeof(ProductInfo).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
         }
     }

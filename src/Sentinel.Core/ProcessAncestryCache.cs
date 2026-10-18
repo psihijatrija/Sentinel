@@ -1,212 +1,162 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Sentinel.Core
 {
+    /// <summary>PID plus creation time identifies a process. Dead entries are evidence only.</summary>
     public class ProcessAncestryCache : IDisposable
     {
-        private volatile IReadOnlyDictionary<int, (int parentId, string name, string imagePath)> _cache = new Dictionary<int, (int, string, string)>();
-        private readonly System.Threading.Timer _refreshTimer;
-
-        // HARDENING: Track PIDs injected by RecordProcessStart (ETW/WMI/fast-poll sourced).
-        // These are NEVER overwritten by the periodic refresh - they contain authoritative
-        // data captured at process creation time. The refresh only ADDS new PIDs.
-        private readonly ConcurrentDictionary<int, (int parentId, string name, string imagePath, DateTimeOffset recordedAt)> _authoritativeEntries = new();
-
-        // HARDENING: Retain dead process entries for 60 seconds after they exit.
-        // ChainTracer needs to walk the parent chain AFTER a malicious process is killed.
-        // Without retention, the chain trace fails because the PID is already gone.
-        private readonly ConcurrentDictionary<int, DateTimeOffset> _deadPidRetention = new();
-        private static readonly TimeSpan DeadPidRetentionDuration = TimeSpan.FromSeconds(60);
-
-        public ProcessAncestryCache()
+        internal sealed class Identity
         {
-            RefreshCache();
-            // Refreshed every 5 seconds (as per v4.8.1 optimization)
-            _refreshTimer = new System.Threading.Timer(_ => RefreshCache(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+            public int Pid { get; set; }
+            public int ParentPid { get; set; }
+            public string Name { get; set; } = "";
+            public string ImagePath { get; set; } = "";
+            public long CreationTicks { get; set; }
+        }
+        private sealed class Entry
+        {
+            public Identity Process { get; set; } = new();
+            public DateTimeOffset? DeadSince { get; set; }
+        }
+        private readonly object _gate = new();
+        private readonly Dictionary<int, Entry> _cache = new();
+        private readonly Func<int, Identity?> _readIdentity;
+        private readonly System.Threading.Timer? _refreshTimer;
+        private readonly ILogger<ProcessAncestryCache> _logger;
+        private static readonly TimeSpan Retention = TimeSpan.FromSeconds(60);
+
+        public ProcessAncestryCache(ILogger<ProcessAncestryCache>? logger = null) : this(ReadIdentity, true, logger) { }
+        internal ProcessAncestryCache(Func<int, Identity?> readIdentity, bool refresh, ILogger<ProcessAncestryCache>? logger = null)
+        {
+            _readIdentity = readIdentity;
+            _logger = logger ?? NullLogger<ProcessAncestryCache>.Instance;
+            if (refresh)
+            {
+                SafeRefresh();
+                _refreshTimer = new System.Threading.Timer(_ => SafeRefresh(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+            }
+        }
+
+        private static Identity? ReadIdentity(int pid)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                long created = process.StartTime.ToUniversalTime().Ticks;
+                var pbi = new ParentPidSpoofDetector.PROCESS_BASIC_INFORMATION();
+                int status = NativeResolver.NtQueryInformationProcess(process.Handle, 0, ref pbi, out _);
+                string imagePath = SecurityValidation.GetProcessImagePath(pid) ?? "";
+                using var verify = Process.GetProcessById(pid);
+                if (verify.StartTime.ToUniversalTime().Ticks != created) return null;
+                return new Identity
+                {
+                    Pid = pid, CreationTicks = created, Name = process.ProcessName,
+                    ParentPid = status == 0 ? pbi.InheritedFromUniqueProcessId.ToInt32() : 0,
+                    ImagePath = imagePath
+                };
+            }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
+            catch (System.ComponentModel.Win32Exception) { return null; }
+        }
+
+        private void SafeRefresh()
+        {
+            try { RefreshCache(); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Process ancestry refresh unavailable"); }
         }
 
         private void RefreshCache()
         {
-            try
+            var living = new HashSet<int>();
+            foreach (var process in Process.GetProcesses())
             {
-                var processes = Process.GetProcesses();
-                var currentCache = _cache;
-                var livingPids = new HashSet<int>();
-                foreach (var proc in processes)
+                using (process)
                 {
-                    livingPids.Add(proc.Id);
+                    int pid;
+                    try { pid = process.Id; }
+                    catch (InvalidOperationException) { continue; }
+                    living.Add(pid);
+                    TryGetLiveProcessInfo(pid, out _);
                 }
-
-                var now = DateTimeOffset.UtcNow;
-
-                // 1. Prune authoritative entries for PIDs dead longer than retention window
-                foreach (var pid in _authoritativeEntries.Keys.ToArray())
-                {
-                    if (!livingPids.Contains(pid) &&
-                        _deadPidRetention.TryGetValue(pid, out var deathTime) &&
-                        now - deathTime >= DeadPidRetentionDuration)
-                    {
-                        _authoritativeEntries.TryRemove(pid, out _);
-                    }
-                    else if (!livingPids.Contains(pid) && !_deadPidRetention.ContainsKey(pid))
-                    {
-                        // Dead but not tracked yet - start tracking
-                        _deadPidRetention.TryAdd(pid, now);
-                    }
-                }
-
-                // 2. Always preserve remaining authoritative entries (ETW/WMI/fast-poll sourced)
-                var newCache = new Dictionary<int, (int parentId, string name, string imagePath)>();
-                foreach (var kvp in _authoritativeEntries)
-                {
-                    newCache[kvp.Key] = (kvp.Value.parentId, kvp.Value.name, kvp.Value.imagePath);
-                }
-
-                // 3. Add currently running processes (only if not already in authoritative set)
-                foreach (var proc in processes)
-                {
-                    var pid = proc.Id;
-
-                    if (newCache.ContainsKey(pid))
-                    {
-                        // Already have authoritative data - don't overwrite
-                        proc.Dispose();
-                        continue;
-                    }
-
-                    if (currentCache.TryGetValue(pid, out var existing))
-                    {
-                        newCache[pid] = existing;
-                        proc.Dispose();
-                    }
-                    else
-                    {
-                        try
-                        {
-                            var parentId = GetParentProcessId(proc);
-                            var imagePath = SecurityValidation.GetProcessImagePath(pid) ?? "";
-                            newCache[pid] = (parentId, proc.ProcessName, imagePath);
-                            proc.Dispose();
-                        }
-                        catch
-                        {
-                            proc.Dispose();
-                        }
-                    }
-                }
-
-                // 4. Retain recently-dead PIDs for chain tracing (60s after death)
-                // Mark newly dead PIDs (were in cache but not in living set)
-                foreach (var pid in currentCache.Keys)
-                {
-                    if (!livingPids.Contains(pid) && pid > 4)
-                    {
-                        _deadPidRetention.TryAdd(pid, now);
-                    }
-                }
-
-                // Keep recently-dead PIDs in the cache for chain tracing
-                foreach (var kvp in _deadPidRetention)
-                {
-                    if (now - kvp.Value < DeadPidRetentionDuration)
-                    {
-                        // Still within retention window - keep in cache if we have data
-                        if (!newCache.ContainsKey(kvp.Key) && currentCache.TryGetValue(kvp.Key, out var deadInfo))
-                        {
-                            newCache[kvp.Key] = deadInfo;
-                        }
-                    }
-                    else
-                    {
-                        // Expired - remove from retention tracking
-                        _deadPidRetention.TryRemove(kvp.Key, out _);
-                    }
-                }
-
-                _cache = newCache;
             }
-            catch
+            PruneDeadEntries(living, DateTimeOffset.UtcNow);
+        }
+
+        internal void PruneDeadEntries(ISet<int> living, DateTimeOffset now)
+        {
+            lock (_gate)
             {
-                // Fallback / degrade gracefully
+                foreach (var pid in _cache.Keys.ToArray())
+                {
+                    var entry = _cache[pid];
+                    if (living.Contains(pid)) continue;
+                    entry.DeadSince ??= now;
+                    if (now - entry.DeadSince.Value >= Retention) _cache.Remove(pid);
+                }
             }
         }
 
         public void RecordProcessStart(int pid, int parentPid, string processName, string imagePath)
         {
-            // Record as authoritative - this data came from ETW/WMI/fast-poll at creation time
-            // and will NOT be overwritten by the periodic refresh.
-            _authoritativeEntries[pid] = (parentPid, processName, imagePath ?? "", DateTimeOffset.UtcNow);
+            lock (_gate)
+            {
+                var live = _readIdentity(pid);
+                // Delayed telemetry for a different image cannot overwrite live identity.
+                if (live != null && (live.CreationTicks <= 0 ||
+                    !SameName(live.Name, processName) ||
+                    (!string.IsNullOrEmpty(imagePath) && !string.IsNullOrEmpty(live.ImagePath) &&
+                     !string.Equals(imagePath, live.ImagePath, StringComparison.OrdinalIgnoreCase)))) return;
+                live ??= new Identity { Pid = pid, Name = processName, ImagePath = imagePath ?? "" };
+                live.ParentPid = parentPid;
+                _cache[pid] = new Entry { Process = live };
+            }
+        }
 
-            // Also inject into the live cache immediately for instant availability
-            var dict = new Dictionary<int, (int, string, string)>((Dictionary<int, (int, string, string)>)_cache);
-            dict[pid] = (parentPid, processName, imagePath ?? "");
-            _cache = dict;
+        private static bool SameName(string left, string right)
+        {
+            string Normalize(string name) => name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+            return string.Equals(Normalize(left), Normalize(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Live generation-validated data only; never returns retained history on failure.</summary>
+        public bool TryGetLiveProcessInfo(int pid, out (int parentId, string name, string imagePath) info)
+        {
+            info = (0, "unknown", "");
+            lock (_gate)
+            {
+                var live = _readIdentity(pid);
+                if (live == null || live.CreationTicks <= 0) return false;
+                if (!_cache.TryGetValue(pid, out var entry) || entry.Process.CreationTicks != live.CreationTicks)
+                    _cache[pid] = entry = new Entry { Process = live };
+                entry.DeadSince = null;
+                info = (entry.Process.ParentPid, live.Name, live.ImagePath);
+                return true;
+            }
         }
 
         public (int parentId, string name) GetParent(int pid)
         {
-            if (_cache.TryGetValue(pid, out var info))
-            {
-                var parentId = info.parentId;
-                string parentName = "unknown";
-                if (parentId > 0 && _cache.TryGetValue(parentId, out var parentInfo))
-                {
-                    parentName = parentInfo.name;
-                }
-                return (parentId, parentName);
-            }
-            return (0, "unknown");
+            var info = GetProcessInfo(pid);
+            var parent = GetProcessInfo(info.parentId);
+            return (info.parentId, parent.name);
         }
 
         public (int parentId, string name, string imagePath) GetProcessInfo(int pid)
         {
-            if (_cache.TryGetValue(pid, out var info))
-            {
-                return info;
-            }
-            
-            // Fallback to live query
-            string? livePath = null;
-            try { livePath = SecurityValidation.GetProcessImagePath(pid); } catch {}
-            return (0, "unknown", livePath ?? "");
+            if (TryGetLiveProcessInfo(pid, out var info)) return info;
+            // Historical data remains available for evidence, never response targeting.
+            lock (_gate)
+                return _cache.TryGetValue(pid, out var entry)
+                    ? (entry.Process.ParentPid, entry.Process.Name, entry.Process.ImagePath) : (0, "unknown", "");
         }
-
-        // NtQueryInformationProcess via NativeResolver (plain DllImport).
-        // Reuses PROCESS_BASIC_INFORMATION from ParentPidSpoofDetector.
-
-        private static int GetParentProcessId(Process process)
-        {
-            try
-            {
-                var pbi = new ParentPidSpoofDetector.PROCESS_BASIC_INFORMATION();
-                int status = NativeResolver.NtQueryInformationProcess(process.Handle, 0, ref pbi, out _);
-                if (status == 0)
-                {
-                    return pbi.InheritedFromUniqueProcessId.ToInt32();
-                }
-                return 0;
-            }
-            catch
-            {
-                return 0;
-            }
-        }
-
-        public void Stop()
-        {
-            Dispose();
-        }
-
-        public void Dispose()
-        {
-            _refreshTimer.Dispose();
-        }
+        public void Stop() => Dispose();
+        public void Dispose() => _refreshTimer?.Dispose();
     }
 }
-

@@ -10,25 +10,41 @@ namespace Sentinel.Core
     {
         public string Name => "ReverseShellRule";
 
-        private static readonly string[] EscalationIndicators = new[]
+        // Routine automation flags do not prove evasion or a reverse shell.
+        private static readonly System.Text.RegularExpressions.Regex EncodedArgument = new(
+            @"(?:^|\s)-(?:enc|encodedcommand)\s+[""']?([A-Za-z0-9+/=]+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        internal static bool ContainsReverseShell(string command)
         {
-            "-nop", "-w hidden", "-windowstyle hidden", "-sta", "-noni",
-            "net.webclient", "downloadstring", "invoke-expression", "iex",
-            "net.sockets", "tcpclient", "system.net"
-        };
+            if (command.Length > 65536) return false;
+            var match = EncodedArgument.Match(command);
+            if (!match.Success) return false;
+            try
+            {
+                var script = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(match.Groups[1].Value));
+                // Require a socket stream, input/output and command execution together.
+                return script.IndexOf("tcpclient", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    script.IndexOf("getstream", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    System.Text.RegularExpressions.Regex.IsMatch(script, @"\.Read\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
+                    System.Text.RegularExpressions.Regex.IsMatch(script, @"\.Write\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
+                    System.Text.RegularExpressions.Regex.IsMatch(script, @"\b(?:iex|invoke-expression)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            }
+            catch (FormatException) { return false; }
+        }
 
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
         {
             if (context.TriggeringEvent is ProcessTelemetry pt)
             {
-                var cmd = (pt.CommandLine ?? "").ToLowerInvariant();
+                var originalCommand = pt.CommandLine ?? "";
+                var cmd = originalCommand.ToLowerInvariant();
                 if (pt.ProcessName.Contains("powershell") && 
                     (cmd.Contains("-enc") || 
                      cmd.Contains("-encodedcommand")))
                 {
                     // Check for escalation indicators that suggest malicious use
-                    bool hasEscalationIndicator = EscalationIndicators.Any(
-                        indicator => cmd.Contains(indicator));
+                    bool hasEscalationIndicator = ContainsReverseShell(originalCommand);
 
                     if (hasEscalationIndicator)
                     {
@@ -43,8 +59,8 @@ namespace Sentinel.Core
                             Confidence = 0.85,
                             Tier = DetectionTier.Tier1Behavioral,
                             AuthorizedResponse = ResponseAction.KillProcessTree,
-                            Evidence = $"Encoded PowerShell with evasion/network indicators: {cmd}",
-                            Reasoning = "Process launched an obfuscated PowerShell session combined with evasion flags or network indicators, commonly used to execute downloader cradles or C2 shell callbacks."
+                            Evidence = $"Encoded PowerShell with socket command-execution loop: {originalCommand}",
+                            Reasoning = "Decoded PowerShell combines a TCP stream, stream reads and writes, and command execution, consistent with a reverse-shell command loop."
                         };
                     }
                     else
@@ -59,8 +75,8 @@ namespace Sentinel.Core
                             Confidence = 0.50,
                             Tier = DetectionTier.Tier2Indicator,
                             AuthorizedResponse = ResponseAction.LogOnly,
-                            Evidence = $"Encoded PowerShell execution (no evasion indicators): {cmd}",
-                            Reasoning = "Process launched PowerShell with an encoded command. Without additional evasion or network indicators this may be legitimate automation. Logged for correlation."
+                            Evidence = $"Encoded PowerShell execution (reverse shell unproven): {originalCommand}",
+                            Reasoning = "Process launched PowerShell with an encoded command. Routine execution flags do not prove malicious behavior; this may be legitimate automation. Logged for correlation."
                         };
                     }
                 }

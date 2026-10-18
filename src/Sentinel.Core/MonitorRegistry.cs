@@ -59,7 +59,9 @@ namespace Sentinel.Core
                 State = MonitorState.Starting,
                 RegisteredAt = DateTimeOffset.UtcNow,
                 LastHeartbeat = DateTimeOffset.UtcNow,
-                ServiceInstance = serviceInstance
+                ServiceInstance = serviceInstance,
+                Progress = serviceInstance is ISensorProgressSource ? new SensorProgressSnapshot() :
+                    new SensorProgressSnapshot { State = "Unsupported", Scope = "This sensor does not expose collection progress; task liveness is reported separately" }
             };
             _logger.LogDebug("[MonitorRegistry] Registered: {Name} ({Category})", name, category);
         }

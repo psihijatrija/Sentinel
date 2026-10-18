@@ -33,6 +33,28 @@ namespace Sentinel.Core
         private double _detectionsPerSecond;
         private double _telemetryPerSecond;
 
+        private long _responsesNotRequested;
+        private long _responsesAttempted;
+        private long _responsesVerified;
+        private long _responsesFailed;
+        private long _responsesRefused;
+        private long _responsesPartial;
+
+        public void RecordDetectionWithoutLatency() => Interlocked.Increment(ref _detectionsCount);
+
+        public void RecordResponseOutcome(ResponseExecutionResult result)
+        {
+            switch (result.Status)
+            {
+                case ResponseExecutionStatus.NotRequested: Interlocked.Increment(ref _responsesNotRequested); break;
+                case ResponseExecutionStatus.Verified: Interlocked.Increment(ref _responsesVerified); break;
+                case ResponseExecutionStatus.Failed: Interlocked.Increment(ref _responsesFailed); break;
+                case ResponseExecutionStatus.Refused: Interlocked.Increment(ref _responsesRefused); break;
+                case ResponseExecutionStatus.PartiallyCompleted: Interlocked.Increment(ref _responsesPartial); break;
+            }
+            if (result.Effects.Count > 0) Interlocked.Increment(ref _responsesAttempted);
+        }
+
         public void RecordDetection(double latencyMs)
         {
             Interlocked.Increment(ref _detectionsCount);
@@ -113,6 +135,13 @@ namespace Sentinel.Core
                 DetectionsTotal = Interlocked.Read(ref _detectionsCount),
                 ResponsesTotal = Interlocked.Read(ref _responsesCount),
                 FalsePositivesTotal = Interlocked.Read(ref _falsePositivesCount),
+                DetectionLatencySamples = _detectionLatencies.Count,
+                ResponsesNotRequested = Interlocked.Read(ref _responsesNotRequested),
+                ResponsesAttempted = Interlocked.Read(ref _responsesAttempted),
+                ResponsesVerified = Interlocked.Read(ref _responsesVerified),
+                ResponsesFailed = Interlocked.Read(ref _responsesFailed),
+                ResponsesRefused = Interlocked.Read(ref _responsesRefused),
+                ResponsesPartiallyCompleted = Interlocked.Read(ref _responsesPartial),
                 TelemetryReceived = Interlocked.Read(ref _telemetryReceived),
                 TelemetryDropped = Interlocked.Read(ref _telemetryDropped),
                 CompositesEmitted = Interlocked.Read(ref _compositesEmitted),
@@ -120,8 +149,8 @@ namespace Sentinel.Core
                 ChainConfirmed = Interlocked.Read(ref _chainConfirmed),
                 DetectionsPerSecond = Math.Round(_detectionsPerSecond, 2),
                 TelemetryPerSecond = Math.Round(_telemetryPerSecond, 2),
-                DetectionLatencyMsP50 = det.p50,
-                DetectionLatencyMsP95 = det.p95,
+                DetectionLatencyMsP50 = _detectionLatencies.IsEmpty ? (double?)null : det.p50,
+                DetectionLatencyMsP95 = _detectionLatencies.IsEmpty ? (double?)null : det.p95,
                 ResponseLatencyMsP50 = resp.p50,
                 ResponseLatencyMsP95 = resp.p95,
                 CorrelationLatencyMsP50 = corr.p50,
@@ -194,6 +223,12 @@ namespace Sentinel.Core
     }
 
     /// <summary>Serializable ops snapshot written to ProgramData\Sentinel\ops_metrics.json.</summary>
+    public sealed class MonitorRuntimeSnapshot
+    {
+        public string State { get; set; } = "Unknown";
+        public string? LastError { get; set; }
+    }
+
     public sealed class OpsMetricsSnapshot
     {
         public DateTime TimestampUtc { get; set; }
@@ -201,6 +236,13 @@ namespace Sentinel.Core
         public long DetectionsTotal { get; set; }
         public long ResponsesTotal { get; set; }
         public long FalsePositivesTotal { get; set; }
+        public int DetectionLatencySamples { get; set; }
+        public long ResponsesNotRequested { get; set; }
+        public long ResponsesAttempted { get; set; }
+        public long ResponsesVerified { get; set; }
+        public long ResponsesFailed { get; set; }
+        public long ResponsesRefused { get; set; }
+        public long ResponsesPartiallyCompleted { get; set; }
         public long TelemetryReceived { get; set; }
         public long TelemetryDropped { get; set; }
         public long CompositesEmitted { get; set; }
@@ -208,8 +250,8 @@ namespace Sentinel.Core
         public long ChainConfirmed { get; set; }
         public double DetectionsPerSecond { get; set; }
         public double TelemetryPerSecond { get; set; }
-        public double DetectionLatencyMsP50 { get; set; }
-        public double DetectionLatencyMsP95 { get; set; }
+        public double? DetectionLatencyMsP50 { get; set; }
+        public double? DetectionLatencyMsP95 { get; set; }
         public double ResponseLatencyMsP50 { get; set; }
         public double ResponseLatencyMsP95 { get; set; }
         public double CorrelationLatencyMsP50 { get; set; }
@@ -220,6 +262,7 @@ namespace Sentinel.Core
         public TelemetryPipelineSnapshot Pipeline { get; set; } = new();
         public EtwHealthSnapshot Etw { get; set; } = new();
         public bool AuditIntegrityDegraded { get; set; }
+        public Dictionary<string, MonitorRuntimeSnapshot> MonitorStates { get; set; } = new();
         public Dictionary<string, SensorProgressSnapshot> SensorProgress { get; set; } = new();
         public Dictionary<string, SensorBudgetSnapshot> SensorBudgets { get; set; } = new();
         public int PluginCount { get; set; }
