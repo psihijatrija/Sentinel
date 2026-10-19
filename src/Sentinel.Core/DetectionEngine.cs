@@ -25,8 +25,11 @@ namespace Sentinel.Core
 
         private const int PriorityChannelCapacity = 1_000;
         private readonly TelemetryQueue _priorityChannel;
-        private readonly ConcurrentDictionary<(string, int), DateTime> _dedupCache = new();
+        private readonly ConcurrentDictionary<(string, int, DetectionTier, ResponseAction), DateTime> _dedupCache = new();
         private int _dedupOps;
+        private readonly object _dedupGate = new();
+        private readonly ManagementChildRegistry? _managementChildren;
+        private readonly ConcurrentDictionary<string, int> _managementRepeats = new();
         private readonly SentinelMetrics _metrics;
         private readonly JsonlEventLogger _eventLogger;
         private readonly AdvancedResponseEngine _responseEngine;
@@ -59,8 +62,10 @@ namespace Sentinel.Core
             BehavioralCorrelationEngine correlationEngine,
             ScoringEngine scoringEngine,
             ILogger<DetectionEngine> logger,
-            WeightedCorrelationEngine? weightedCorrelation = null)
+            WeightedCorrelationEngine? weightedCorrelation = null,
+            ManagementChildRegistry? managementChildren = null)
         {
+            _managementChildren = managementChildren;
             _rules.AddRange(rules);
             _metrics = metrics;
             _telemetryChannel = new TelemetryQueue(TelemetryChannelCapacity, _metrics.RecordTelemetryDropped);
@@ -441,6 +446,14 @@ namespace Sentinel.Core
 
                                     if (detection != null)
                                     {
+                                        if (context.TriggeringEvent is ProcessTelemetry process)
+                                        {
+                                            detection.Metadata ??= new Dictionary<string, string>();
+                                            detection.Metadata["CommandLine"] = process.CommandLine ?? "";
+                                            detection.Metadata["ImagePath"] = process.ImagePath ?? "";
+                                            detection.Metadata["ParentProcessId"] = process.ParentProcessId.ToString();
+                                            detection.Metadata["ParentProcessName"] = process.ParentProcessName ?? "";
+                                        }
                                         var duration = (DateTime.UtcNow - startTime).TotalMilliseconds;
                                         _metrics.RecordDetection(duration);
                                         await ProcessDetectionAsync(detection);
@@ -460,47 +473,49 @@ namespace Sentinel.Core
 
         private async Task ProcessDetectionAsync(DetectionEvent detection)
         {
-            var key = (detection.RuleName, detection.ProcessId);
+            bool routineManagement = ManagementChildRegistry.IsRoutineObservation(detection) &&
+                _managementChildren?.IsCurrentChild(detection.ProcessId) == true;
+            // Group only three weak observations from verified, live children that we launched.
+            // All behavioral/terminal signals retain their normal PID and response path.
+            var key = (detection.RuleName, routineManagement ? -1 : detection.ProcessId, detection.Tier, detection.AuthorizedResponse);
             var now = DateTime.UtcNow;
 
             // HARDENING v1.3.0: Reduced dedup window from 60s to 10s for Tier1 detections.
             // Previously, an attacker could trigger one alert and then operate freely for 60s
             // knowing the same rule wouldn't fire again. Tier2 indicators keep 30s dedup
             // to reduce noise, but Tier1 behavioral detections need rapid re-alerting.
-            var dedupWindow = detection.Tier == DetectionTier.Tier1Behavioral
+            var dedupWindow = routineManagement ? TimeSpan.FromMinutes(5) : detection.Tier == DetectionTier.Tier1Behavioral
                 ? TimeSpan.FromSeconds(10)
                 : TimeSpan.FromSeconds(30);
 
-            // Determine - atomically per key - whether THIS call is the one that claims
-            // the dedup slot (fresh insert or window expired). Relying on timestamp equality
-            // is unsafe: two events processed within the same ~15ms DateTime.UtcNow tick share
-            // an identical `now`, so the old `lastTime != now` check let a duplicate slip
-            // through and emit twice. The add/update factories run atomically under
-            // ConcurrentDictionary's per-key lock, so a bool set inside them is race-free.
-            bool claimed = false;
-            _dedupCache.AddOrUpdate(
-                key,
-                _ => { claimed = true; return now; },              // first time we've seen this key
-                (_, oldTime) =>
+            // ConcurrentDictionary factories may run multiple times; a side-effect flag in
+            // AddOrUpdate is not an atomic claim. Keep admission and expiry under one gate.
+            bool claimed;
+            lock (_dedupGate)
+            {
+                claimed = !_dedupCache.TryGetValue(key, out var previous) || now - previous >= dedupWindow;
+                if (claimed) _dedupCache[key] = now;
+                if ((++_dedupOps & 0x3F) == 0)
                 {
-                    if (now - oldTime < dedupWindow)
-                        return oldTime;                            // still inside window -> suppress
-                    claimed = true;                                // window expired -> re-arm + emit
-                    return now;
-                });
+                    foreach (var kv in _dedupCache)
+                        if (now - kv.Value > (kv.Key.Item2 == -1 ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(2)))
+                            _dedupCache.TryRemove(kv.Key, out _);
+                }
+            }
 
             if (!claimed)
             {
+                if (routineManagement) _managementRepeats.AddOrUpdate(detection.RuleName, 1, (_, count) => count + 1);
                 return; // Suppressed by existing recent entry
             }
 
-            if ((++_dedupOps & 0x3F) == 0)
+            if (routineManagement)
             {
-                foreach (var kv in _dedupCache)
-                {
-                    if (now - kv.Value > TimeSpan.FromMinutes(2))
-                        _dedupCache.TryRemove(kv.Key, out _);
-                }
+                detection.Metadata ??= new Dictionary<string, string>();
+                detection.Metadata["ExpectedManagementChild"] = "true";
+                detection.Metadata["WeakObserveSeed"] = "true";
+                _managementRepeats.TryRemove(detection.RuleName, out var repeats);
+                detection.Metadata["CoalescedRepeats"] = repeats.ToString();
             }
 
             // Apply threat scoring

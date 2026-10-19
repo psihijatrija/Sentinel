@@ -30,12 +30,15 @@ namespace Sentinel.Core
         private const int CheckIntervalMs = 3000;
         public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(15));
         private readonly VisibilityGapTracker? _gaps;
-        private long _lastLosses;
+        private long _lastEventsLost, _lastBuffersLost, _lastDispatchDrops;
+        private readonly EtwCoverageAlertState _alerts = new();
         private bool _coverageDegraded;
         private const int AlertCooldownSeconds = 60;
 
         private DateTimeOffset _lastAlertUtc = DateTimeOffset.MinValue;
         private int _restartAttempts;
+        private int _restartBackoffStep;
+        private DateTimeOffset _nextRestartUtc;
 
         public EtwSessionGuard(
             UnifiedEtwSession etwSession,
@@ -76,9 +79,16 @@ namespace Sentinel.Core
         {
             var health = _etwSession.QueryHealth();
             long events = health.EventsProcessed;
-            long losses = health.NativeEventsLost + health.NativeBuffersLost + health.DispatchDrops;
-            bool lossIncreased = losses > _lastLosses;
-            _lastLosses = losses;
+            // Compare independently: a native counter reset must not hide dispatch loss.
+            bool lossIncreased = health.QuerySucceeded &&
+                (health.NativeEventsLost > _lastEventsLost || health.NativeBuffersLost > _lastBuffersLost);
+            lossIncreased |= health.DispatchDrops > _lastDispatchDrops;
+            if (health.QuerySucceeded)
+            {
+                _lastEventsLost = health.NativeEventsLost;
+                _lastBuffersLost = health.NativeBuffersLost;
+            }
+            _lastDispatchDrops = health.DispatchDrops;
             bool inactive = !_etwSession.IsActive;
             bool stalled = health.QuerySucceeded && !health.ConsumerAlive;
             bool providersAvailable = health.ProviderStatus.Count == 10 &&
@@ -88,39 +98,70 @@ namespace Sentinel.Core
                 if (!health.QuerySucceeded || !providersAvailable || lossIncreased)
                 {
                     string degraded = !health.QuerySucceeded ? "ETW session query unavailable" :
-                        !providersAvailable ? "ETW providers unavailable: " + string.Join("; ",
-                            System.Linq.Enumerable.Select(System.Linq.Enumerable.Where(health.ProviderStatus, p => p.Value != 0),
+                        !providersAvailable ? "ETW provider coverage incomplete (" + health.ProviderStatus.Count + "/10 statuses): " + string.Join("; ",
+                            System.Linq.Enumerable.Select(System.Linq.Enumerable.OrderBy(System.Linq.Enumerable.Where(health.ProviderStatus, p => p.Value != 0), p => p.Key),
                                 p => p.Key + ": Win32 " + p.Value + " (" + new System.ComponentModel.Win32Exception((int)p.Value).Message + ")"))
                         : "ETW events/buffers were lost";
                     Progress.Failed(degraded);
-                    if (!_coverageDegraded || lossIncreased)
+                    if (!_coverageDegraded) _gaps?.Report("ETW", degraded);
+                    if (_alerts.Observe(degraded, DateTimeOffset.UtcNow))
                     {
-                        _gaps?.Report("ETW", degraded);
                         await _detectionEngine.EmitAsync(new DetectionEvent
                         {
                             RuleName = "Telemetry: ETW Visibility Degraded", Evidence = degraded,
                             Reasoning = "Missing visibility is not proof of attack or of a clean system.",
                             Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
-                            Confidence = 0.5, SignalType = SignalType.Generic
+                            Confidence = 0.5, SignalType = SignalType.Generic,
+                            Metadata = new Dictionary<string, string>
+                            {
+                                ["NativeEventsLost"] = health.NativeEventsLost.ToString(),
+                                ["NativeBuffersLost"] = health.NativeBuffersLost.ToString(),
+                                ["DispatchDrops"] = health.DispatchDrops.ToString(),
+                                ["CoverageState"] = "Degraded"
+                            }
                         });
                     }
                     _coverageDegraded = true;
                 }
                 else
                 {
+                    // A single quiet poll cannot close an intermittent visibility gap.
+                    _alerts.Observe(null, DateTimeOffset.UtcNow);
+                    if (_alerts.IsDegraded)
+                    {
+                        Progress.Failed("ETW recovery pending 30 seconds of stable coverage");
+                        return;
+                    }
                     // A successful native query and live consumer can be healthy while idle.
                     Progress.Succeeded();
+                    _restartBackoffStep = 0;
+                    _nextRestartUtc = DateTimeOffset.MinValue;
                     if (_coverageDegraded) _gaps?.Report("ETW", "Collection coverage recovered; reconcile current state");
+                    if (_coverageDegraded)
+                        await _detectionEngine.EmitAsync(new DetectionEvent
+                        {
+                            RuleName = "Telemetry: ETW Coverage Recovered",
+                            Evidence = "Session query, consumer and configured providers are available; no new loss in this sample.",
+                            Reasoning = "Recovery does not restore events lost during the visibility gap.",
+                            Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
+                            Confidence = 0.5, SignalType = SignalType.Generic
+                        });
                     _coverageDegraded = false;
                 }
                 return;
             }
 
             string reason = inactive ? "Unified ETW session is inactive" : "ETW processing thread is not alive";
+            _alerts.Observe(reason, DateTimeOffset.UtcNow);
             Progress.Failed(reason);
             if (!_coverageDegraded) _gaps?.Report("ETW", reason);
             _coverageDegraded = true;
 
+            // Failed/short-lived recreations must not form a restart storm. Provider-only
+            // access denial never enters this path; restarting cannot grant protected-provider access.
+            if (DateTimeOffset.UtcNow < _nextRestartUtc) return;
+            _nextRestartUtc = DateTimeOffset.UtcNow.AddSeconds(Math.Min(60, 5 * Math.Pow(2, _restartBackoffStep)));
+            _restartBackoffStep = Math.Min(4, _restartBackoffStep + 1);
             _logger.LogCritical("[EtwSessionGuard] {Reason} - attempting restart", reason);
 
             bool restarted = await _etwSession.RestartAsync(ct);

@@ -20,8 +20,12 @@ namespace Sentinel.Core
     public sealed class WindowsFirewallPolicyBridge : IWindowsFirewallPolicyBridge
     {
         private readonly string _installDirectory;
-        public WindowsFirewallPolicyBridge(string? installDirectory = null)
-        { _installDirectory = Path.GetFullPath(installDirectory ?? AppDomain.CurrentDomain.BaseDirectory); }
+        private readonly ManagementChildRegistry? _managementChildren;
+        public WindowsFirewallPolicyBridge(string? installDirectory = null, ManagementChildRegistry? managementChildren = null)
+        {
+            _installDirectory = Path.GetFullPath(installDirectory ?? AppDomain.CurrentDomain.BaseDirectory);
+            _managementChildren = managementChildren;
+        }
 
         public async Task<string> RunAsync(string operation, CancellationToken ct, string? store = null, string? ruleName = null)
         {
@@ -103,6 +107,7 @@ namespace Sentinel.Core
                 var stderr = ReadBoundedAsync(child.StandardError, 64 * 1024, timeout.Token);
                 try
                 {
+                    _managementChildren?.Register(child, start.FileName);
                     var input = FeedScriptAsync(child.StandardInput, script);
                     var combined = Task.WhenAll(input, stdout, stderr, child.WaitForExitAsync(timeout.Token));
                     if (await Task.WhenAny(combined, Task.Delay(Timeout.Infinite, timeout.Token)).ConfigureAwait(false) != combined)
@@ -115,6 +120,7 @@ namespace Sentinel.Core
                 }
                 finally
                 {
+                    _managementChildren?.Remove(child.Id);
                     if (!child.HasExited) child.Kill();
                 }
             }

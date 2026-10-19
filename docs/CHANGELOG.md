@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.3.4] - 2026-10-19
+
+### Fixed
+- Replace the service host's unguarded default EventLog logger with a bounded diagnostic JSONL sink. Keep the existing guarded critical-only Windows Event Log trail; diagnostic sink and formatting errors cannot escape to detection threads.
+- Back off unavailable-session recreation from 5 to 60 seconds. Coalesce repeated ETW visibility failures into change alerts and five-minute reminders, require 30 seconds of stable samples before recovery, and compare native/dispatch loss counters independently. Include loss counters in degradation evidence.
+- Normalize native driver paths using the actual Windows root and directory boundaries. Label SYSTEM-token observations with unknown images as weak context rather than proven token theft.
+- Label encoded PowerShell without socket command-loop evidence as an observation. Coalesce three weak observation classes only for signed, exact-image, live firewall-helper children launched by Sentinel; behavioral detections remain armed and unknown/reused PIDs receive no exemption.
+- Preserve process-rule command line, image and parent metadata. Make dedup admission atomic and separate weaker versus stronger tiers/actions.
+
+### Validation and limits
+- Service and test projects cross-build with zero warnings/errors. All 22 dashboard, 8 Worker and 45 firewall-policy checks pass. Nineteen portable regression cases pass using production logging, path, coverage and child-attribution logic. The portable child tests inject identity and signature boundaries; they do not test Windows signature APIs. Add a Framework integration test for helper coalescing versus external processes, pending Windows execution.
+- Native ETW/provider permissions, Event Log service failure, signature/catalog checks, protected-directory ACLs, complete Framework tests and installer packaging remain Windows validation gates. Protected-provider access denial is reported, not bypassed. No certificate removal or new driver-file quarantine authority is added.
+- See [design](design.md) for retention, registration-race and recovery limitations.
+
 ## [3.3.3] - 2026-10-19
 
 ### Fixed

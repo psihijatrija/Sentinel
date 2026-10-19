@@ -1,6 +1,15 @@
 # Sentinel - Requirements
 
-**Version: 3.3.3**
+**Version: 3.3.4**
+
+### Log reliability (3.3.4)
+
+- Windows Event Log failure must not escape a generic service log call; keep an independent bounded diagnostic trail and the guarded critical Event Log writer.
+- Coverage failures must remain visible without generating an incident on every loss poll. Require stable recovery and retain separate native/dispatch counters.
+- Coalesce only weak observations from verified live fixed-management children. Missing identities and behavioral detections retain normal processing; no helper name or script text grants trust.
+- Native driver paths must resolve against the actual Windows root, with traversal and sibling-directory safeguards. Unknown process images must not establish token theft.
+- Preserve original process-rule command/image/parent evidence. Deduplication must be atomic and must not let a weaker tier/action suppress a stronger response.
+- Full Windows Framework, signature/ACL, ETW and service/installer tests remain release gates. Portable tests do not establish those native guarantees.
 
 ### Incident lifecycle safety (3.3.3)
 

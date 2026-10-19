@@ -325,6 +325,15 @@ namespace Sentinel.Service
         public static IHostBuilder CreateHostBuilder(string[] args) =>
             Host.CreateDefaultBuilder(args)
                 .UseWindowsService()
+                .ConfigureLogging(logging =>
+                {
+                    // The default WindowsService EventLog provider can throw from any log call.
+                    // Keep the guarded critical-only SentinelEventLogWriter as the Event Log trail.
+                    logging.ClearProviders();
+                    logging.AddProvider(new DiagnosticFileLoggerProvider(Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                        "Sentinel", "Logs", "diagnostic.jsonl")));
+                })
                 .ConfigureAppConfiguration((_, cfg) => HostDiskJson.RemoveJsonSources(cfg))
                 .ConfigureServices((hostContext, services) =>
                 {
@@ -345,6 +354,7 @@ namespace Sentinel.Service
                     services.AddSingleton<DnsRepairService>();
                     services.AddSingleton<ISelfNetworkFirewall, WindowsSelfNetworkFirewall>();
                     services.AddHostedService<SelfNetworkIsolationService>();
+                    services.AddSingleton<ManagementChildRegistry>();
                     services.AddSingleton<IWindowsFirewallPolicyBridge, WindowsFirewallPolicyBridge>();
                     services.AddSingleton<FirewallPolicyStatus>();
                     services.AddHostedService<LocalFirewallPolicyService>();

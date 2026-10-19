@@ -214,17 +214,24 @@ namespace Sentinel.Core
 
                             await _detectionEngine.EmitAsync(new DetectionEvent
                             {
-                                RuleName = "Token Theft: Non-Service Process with SYSTEM Token",
+                                RuleName = string.IsNullOrEmpty(imagePath)
+                                    ? "Token Context: SYSTEM Token with Unknown Image"
+                                    : "Token Theft: Non-Service Process with SYSTEM Token",
                                 Evidence = $"Process '{processName}' (PID {pid}) at '{Truncate(imagePath, 120)}' holds a " +
-                                           $"{tokenInfo.Value.TokenUserName} token but is not a registered service or legitimate system process.",
-                                Reasoning = "A process that is not a Windows service or known system component is running with SYSTEM-level token privileges. " +
+                                           $"{tokenInfo.Value.TokenUserName} token. Image/service attribution may be incomplete.",
+                                Reasoning = string.IsNullOrEmpty(imagePath)
+                                    ? "The process image could not be resolved. SYSTEM token ownership alone does not establish token theft."
+                                    : "A process that is not a Windows service or known system component is running with SYSTEM-level token privileges. " +
                                             "This indicates token theft via DuplicateToken, ImpersonateLoggedOnUser, or make_token (MITRE T1134.001, T1134.003).",
                                 Confidence = confidence,
                                 Tier = confidence >= 0.80
                                     ? DetectionTier.Tier1Behavioral
                                     : DetectionTier.Tier2Indicator,
                                 AuthorizedResponse = response,
-                                SignalType = SignalType.CredentialTheft,
+                                SignalType = string.IsNullOrEmpty(imagePath) ? SignalType.Generic : SignalType.CredentialTheft,
+                                Metadata = string.IsNullOrEmpty(imagePath)
+                                    ? new Dictionary<string, string> { ["WeakObserveSeed"] = "true", ["ImageAttribution"] = "Unknown" }
+                                    : new Dictionary<string, string>(),
                                 ProcessName = processName,
                                 ProcessId = pid,
                             });
@@ -292,7 +299,10 @@ namespace Sentinel.Core
                                 Confidence = 0.55,
                                 Tier = DetectionTier.Tier2Indicator,
                                 AuthorizedResponse = ResponseAction.LogOnly,
-                                SignalType = SignalType.CredentialTheft,
+                                SignalType = string.IsNullOrEmpty(imagePath) ? SignalType.Generic : SignalType.CredentialTheft,
+                                Metadata = string.IsNullOrEmpty(imagePath)
+                                    ? new Dictionary<string, string> { ["WeakObserveSeed"] = "true", ["ImageAttribution"] = "Unknown" }
+                                    : new Dictionary<string, string>(),
                                 ProcessName = processName,
                                 ProcessId = pid,
                             });

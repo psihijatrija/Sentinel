@@ -152,15 +152,6 @@ namespace Sentinel.Core
             @"C:\Windows\SysWOW64\drivers",
         };
 
-        // Paths where legitimate drivers reside - new .sys outside these are suspicious
-        private static readonly string[] LegitimateDriverPaths = new[]
-        {
-            @"C:\Windows\System32\drivers",
-            @"C:\Windows\System32\DriverStore",
-            @"C:\Windows\SysWOW64\drivers",
-            @"C:\Program Files\Windows Defender",
-        };
-
         public DriverLoadMonitor(DetectionEngine detectionEngine, ILogger<DriverLoadMonitor> logger)
         {
             _detectionEngine = detectionEngine;
@@ -466,21 +457,14 @@ namespace Sentinel.Core
             _alertedDrivers.Add(serviceName);
 
             // Resolve the image path
-            var resolvedPath = imagePath;
-            if (imagePath.StartsWith(@"\??\"))
-                resolvedPath = imagePath[4..];
-            else if (imagePath.StartsWith("System32"))
-                resolvedPath = Path.Combine(Environment.SystemDirectory, imagePath.Replace("System32\\", ""));
-            else if (!PathNet48.IsPathFullyQualified(imagePath))
-                resolvedPath = Path.Combine(Environment.SystemDirectory, "drivers", imagePath);
+            var resolvedPath = DriverPathPolicy.Resolve(imagePath, Environment.GetFolderPath(Environment.SpecialFolder.Windows));
 
             // Check filename against known vulnerable drivers
             var fileName = Path.GetFileName(resolvedPath);
             bool isKnownVulnerableName = VulnerableDriverNames.Contains(fileName);
 
             // Check if loaded from a non-standard path
-            bool isNonStandardPath = !LegitimateDriverPaths.Any(p =>
-                resolvedPath.StartsWith(p));
+            bool isNonStandardPath = !DriverPathPolicy.IsStandard(resolvedPath, Environment.GetFolderPath(Environment.SpecialFolder.Windows));
 
             // Hash check
             string hash = "";

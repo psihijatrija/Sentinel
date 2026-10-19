@@ -71,13 +71,40 @@ namespace Sentinel.Tests
             return log;
         }
 
-        private DetectionEngine CreateEngine(IEnumerable<IDetectionRule> rules)
+        private DetectionEngine CreateEngine(IEnumerable<IDetectionRule> rules, ManagementChildRegistry? children = null)
         {
             return new DetectionEngine(
                 rules, _metrics, _logger, _responseEngine,
                 _iocScanner, _reputationService, _fileReputationEngine,
                 _correlationEngine, _scoringEngine,
-                NullLogger<DetectionEngine>.Instance);
+                NullLogger<DetectionEngine>.Instance, managementChildren: children);
+        }
+
+        [Fact]
+        public async Task ExpectedManagementNoise_CoalescesAcrossChildrenButKeepsExternalObservation()
+        {
+            var started = DateTime.UtcNow;
+            const string image = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+            var children = new ManagementChildRegistry(_ => (started, image));
+            children.RegisterIdentity(31001, started, image, image, true);
+            children.RegisterIdentity(31002, started, image, image, true);
+            var engine = CreateEngine(Array.Empty<IDetectionRule>(), children);
+            const string rule = "PowerShell: Encoded Command Observation";
+            try
+            {
+                foreach (int pid in new[] { 31001, 31002, 31003 })
+                    await engine.EmitAsync(new DetectionEvent { RuleName = rule, ProcessId = pid,
+                        ProcessName = "powershell", Evidence = "same script", SignalType = SignalType.Generic,
+                        Confidence = 0.5, Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
+                        Metadata = new Dictionary<string, string> { ["WeakObserveSeed"] = "true" } });
+                await WaitForLogAsync("31003");
+                var lines = ReadLog().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(line => line.Contains("\"type\":\"detection\"") && line.Contains(rule)).ToArray();
+                Assert.Equal(2, lines.Length);
+                Assert.Contains(lines, line => line.Contains("31001") && line.Contains("ExpectedManagementChild"));
+                Assert.Contains(lines, line => line.Contains("31003") && !line.Contains("ExpectedManagementChild"));
+            }
+            finally { engine.Stop(); }
         }
 
         [Theory]

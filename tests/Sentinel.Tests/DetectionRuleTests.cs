@@ -199,7 +199,7 @@ namespace Sentinel.Tests
             };
             var result = rule.Evaluate(MakeContext(pt));
             Assert.NotNull(result);
-            Assert.Equal("ReverseShellRule", result!.RuleName);
+            Assert.Equal("PowerShell: Encoded Command Observation", result!.RuleName);
             Assert.Equal(DetectionTier.Tier2Indicator, result.Tier);
             Assert.Equal(ResponseAction.LogOnly, result.AuthorizedResponse);
             Assert.Equal(SignalType.Generic, result.SignalType);

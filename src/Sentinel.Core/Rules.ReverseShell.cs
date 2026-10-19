@@ -68,7 +68,7 @@ namespace Sentinel.Core
                         // Encoded command alone -> Tier2 (log only, no kill)
                         return new DetectionEvent
                         {
-                            RuleName = Name,
+                            RuleName = "PowerShell: Encoded Command Observation",
                             ProcessName = pt.ProcessName,
                             ProcessId = pt.ProcessId,
                             SignalType = SignalType.Generic,
