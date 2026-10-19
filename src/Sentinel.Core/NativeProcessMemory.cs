@@ -103,6 +103,26 @@ namespace Sentinel.Core
             finally { CloseHandle(h); }
         }
 
+        internal static bool HasPeHeaders(byte[] bytes, int count)
+        {
+            if (count < 64 || count > bytes.Length || bytes[0] != 'M' || bytes[1] != 'Z') return false;
+            int pe = BitConverter.ToInt32(bytes, 0x3c);
+            if (pe < 64 || pe > count - 24 || BitConverter.ToUInt32(bytes, pe) != 0x00004550) return false;
+            ushort machine = BitConverter.ToUInt16(bytes, pe + 4);
+            ushort sections = BitConverter.ToUInt16(bytes, pe + 6);
+            ushort optionalSize = BitConverter.ToUInt16(bytes, pe + 20);
+            if (sections == 0 || sections > 96 || optionalSize < 64 || optionalSize > count - pe - 24) return false;
+            ushort magic = BitConverter.ToUInt16(bytes, pe + 24);
+            return ((machine == 0x14c && magic == 0x10b) || (machine == 0x8664 && magic == 0x20b)) &&
+                BitConverter.ToUInt32(bytes, pe + 24 + 56) > 0;
+        }
+
+        internal static bool LooksLikePePayload(IntPtr handle, IntPtr address)
+        {
+            var header = new byte[4096];
+            return CopyRemote(handle, address, header, out int count) && HasPeHeaders(header, count);
+        }
+
         public static int QuerySystemInfo(int infoClass, IntPtr buffer, int size, out int returnLength)
         {
             return NativeResolver.NtQuerySystemInformation(infoClass, buffer, size, out returnLength);

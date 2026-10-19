@@ -10,7 +10,15 @@ namespace Sentinel.Core
     {
         private readonly ConcurrentDictionary<int, List<DetectionEvent>> _signalBuffers = new();
         private Func<DetectionEvent, Task>? _emitCallback;
+        private readonly Func<int, string?> _imagePathResolver;
         private DateTime _lastPruneTime = DateTime.UtcNow;
+
+        public BehavioralCorrelationEngine() : this(ResolveImagePath) { }
+
+        internal BehavioralCorrelationEngine(Func<int, string?> imagePathResolver)
+        {
+            _imagePathResolver = imagePathResolver ?? throw new ArgumentNullException(nameof(imagePathResolver));
+        }
 
         private static readonly HashSet<string> ElectronAndJitApps = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -68,7 +76,7 @@ namespace Sentinel.Core
             var stem = Sentinel.Core.StringNet48.ReplaceIgnoreCase(signal.ProcessName, ".exe", "");
             if (ElectronAndJitApps.Contains(stem))
             {
-                var path = ResolveImagePath(pid);
+                var path = _imagePathResolver(pid);
                 if (!string.IsNullOrEmpty(path) && SecurityValidation.VerifyAuthenticodeSignature(path!))
                 {
                     if (signal.Tier != DetectionTier.Tier1Behavioral)
@@ -212,6 +220,18 @@ namespace Sentinel.Core
                         "a manually-mapped or hollowed local payload. Contained.");
                     return;
                 }
+            }
+
+            // Credential access by a process containing a memory-inspected PE payload is
+            // independently corroborated theft evidence, even before any recognizable C2.
+            // Do not accept generic RWX/JIT observations or watcher write/create heuristics.
+            if (HasInjectedCredentialRead(currentSignals))
+            {
+                await EmitCompositeAsync(pid, "Credential Theft: Unbacked PE + Store Read", 0.95,
+                    "An unbacked executable PE payload and a Kernel-File credential-store read were observed on the same PID within 15 seconds.",
+                    "Memory inspection confirmed a PE payload in unbacked executable memory, independently corroborated by a credential/session-store read. " +
+                    "Containment does not require an upload-volume threshold or recognized C2. This is theft-risk evidence, not proof of successful exfiltration.");
+                return;
             }
 
             if (types.Contains(SignalType.ProcessInjection) && types.Contains(SignalType.NetworkC2))
@@ -725,6 +745,36 @@ namespace Sentinel.Core
                     tagCoercionToolkit: true);
                 return;
             }
+        }
+
+        internal static bool HasInjectedCredentialRead(IReadOnlyList<DetectionEvent> signals)
+        {
+            var now = DateTime.UtcNow;
+            bool Marker(DetectionEvent s, string key, string value) =>
+                s.Metadata != null && s.Metadata.TryGetValue(key, out var actual) &&
+                string.Equals(actual, value, StringComparison.Ordinal);
+            bool Eligible(DetectionEvent s) => s.ProcessId > 4 &&
+                s.Timestamp <= now && now - s.Timestamp <= TimeSpan.FromSeconds(15) &&
+                !Marker(s, "ConsultantSignal", "true") &&
+                !ResponsePolicy.IsNonCorrelatingObserveNoise(s) &&
+                !ResponsePolicy.IsWeakObserveSeed(s);
+
+            foreach (var payload in signals.Where(s => Eligible(s) &&
+                s.RuleName == "Threat Intel: Remote Memory Injection (ALLOCVM_REMOTE + PROTECTVM_REMOTE)" &&
+                s.SignalType == SignalType.ProcessInjection && s.Confidence >= 0.95 &&
+                Marker(s, "UnbackedPePayload", "true")))
+            {
+                if (payload.Metadata == null || !payload.Metadata.TryGetValue("ProcessCreationTime", out var birth) ||
+                    !long.TryParse(birth, out var ticks) || ticks <= 0 || ticks > payload.Timestamp.ToFileTimeUtc())
+                    continue;
+                if (signals.Any(read => Eligible(read) && read.ProcessId == payload.ProcessId &&
+                    read.RuleName == "Sensitive File Access: ETW Credential Store Read" &&
+                    Marker(read, "SensitiveFileAccess", "true") && Marker(read, "AccessSource", "KernelFileRead") &&
+                    Marker(read, "ProcessCreationTime", birth) && ticks <= read.Timestamp.ToFileTimeUtc() &&
+                    Math.Abs((read.Timestamp - payload.Timestamp).TotalSeconds) <= 15))
+                    return true;
+            }
+            return false;
         }
 
         private async Task EmitCompositeAsync(

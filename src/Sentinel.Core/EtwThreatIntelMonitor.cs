@@ -33,6 +33,7 @@ namespace Sentinel.Core
         private Task? _monitorTask;
 
         private readonly ConcurrentDictionary<int, DateTimeOffset> _alertedPids = new();
+        private readonly ConcurrentDictionary<int, DateTimeOffset> _payloadAlertedPids = new();
         private static readonly TimeSpan AlertCooldown = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(5);
 
@@ -271,7 +272,9 @@ namespace Sentinel.Core
             var imagePath = SecurityValidation.GetProcessImagePath(proc.Id);
             if (!NativeProcessMemory.CanInspect(proc.Id, imagePath))
                 return;
-            if (_alertedPids.TryGetValue(proc.Id, out var last) &&
+            // A stack/thread observation must not suppress the independent PE inspection
+            // needed to corroborate credential theft in the same scan pass.
+            if (_payloadAlertedPids.TryGetValue(proc.Id, out var last) &&
                 DateTimeOffset.UtcNow - last < AlertCooldown)
                 return;
 
@@ -296,7 +299,8 @@ namespace Sentinel.Core
                 if (_dllUnload != null)
                     await _dllUnload.CheckAndUnloadAsync(proc.Id, name);
 
-                _alertedPids[proc.Id] = DateTimeOffset.UtcNow;
+                if (_payloadAlertedPids.Count >= 4096) _payloadAlertedPids.Clear();
+                _payloadAlertedPids[proc.Id] = DateTimeOffset.UtcNow;
                 await _detectionEngine.EmitAsync(new DetectionEvent
                 {
                     RuleName = "Threat Intel: Remote Memory Injection (ALLOCVM_REMOTE + PROTECTVM_REMOTE)",
@@ -313,6 +317,10 @@ namespace Sentinel.Core
                     Metadata = new Dictionary<string, string>
                     {
                         ["RwxRegionCount"] = rwx.Count.ToString(),
+                        // Only this memory-inspected path may supply this evidence marker.
+                        // JIT/RWX observations and call-stack heuristics do not qualify.
+                        ["UnbackedPePayload"] = mzRegions.Any(r => NativeProcessMemory.LooksLikePePayload(h, new IntPtr(r.Address))) ? "true" : "false",
+                        ["ProcessCreationTime"] = proc.StartTime.ToUniversalTime().ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture),
                         ["TotalRwxSize"] = rwx.Sum(r => r.Size).ToString(),
                         ["ImagePath"] = imagePath ?? ""
                     }

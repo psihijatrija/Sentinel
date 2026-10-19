@@ -18,7 +18,7 @@ the relevant map. Names expire after two minutes; matching reads are deduplicate
 system/unattributed PIDs are ignored. No file content or private key bytes are read.
 Normal reads by browsers, backups and security tools are expected and remain Tier2
 LogOnly. Process names never exempt the ETW read rule. An independent, high-confidence
-Tier1 C2 signal is required for the infostealer composite; ordinary outbound activity
+Tier1 C2 signal is required for the existing infostealer composite; ordinary outbound activity
 and low-confidence/weak network observations cannot complete that composite. There is
 no upload-volume minimum on this chain, but independent C2 detection is still required.
 A read event records an I/O request, not proof that data was successfully extracted.
@@ -68,3 +68,28 @@ cross-build/portable tests.
 - Existing dashboard tests: 16 passed. Existing standalone Worker tests: 8 passed.
 - Full .NET Framework and live native Windows checks require Windows CI. No detection
   rate, latency bound or guaranteed before-theft prevention result is claimed.
+
+
+## 3.3.2: early containment and upload observations
+
+An additional narrow credential-theft composite can act before recognizable C2:
+unbacked executable PE-header evidence from the suspect-PID memory scanner plus a
+Kernel-File credential read, both within 15 seconds on the same verified process
+lifetime. Reads alone remain log-only. See [design and exclusions](design.md#early-credential-theft-containment-332).
+This does not close memory-only theft, headerless/image-backed payloads, unavailable
+telemetry, or every case of low-volume theft without C2. No Candiru sample has been
+executed or validated against this rule.
+
+The host-wide outbound spike detector now compares against the prior baseline;
+previously including the current delta before testing a 10x threshold could suppress
+the spike itself. Volume is still un-attributed, observe-only evidence.
+
+Validation in this workspace (2026-10-19): full solution Release cross-build passed
+with zero warnings/errors using SDK 10.0.402. A temporary .NET 10 host exercised the
+built production Core assembly: 66 relevant checks passed, including 22 new spyware
+and spike regressions plus existing credential telemetry, infostealer and response
+policy checks. The existing native response/logging test could not run in that
+host (Windows/.NET Framework ACL API); it was excluded from the portable pass and
+remains in the normal Windows suite. These results do not establish native ETW
+delivery, memory-scan performance, false-positive rates or time-to-containment.
+No installer was built or published from this Linux environment.

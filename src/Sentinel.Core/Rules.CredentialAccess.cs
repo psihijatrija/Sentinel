@@ -16,6 +16,17 @@ namespace Sentinel.Core
                 file.ProcessId <= 4 || file.OperationType != "READ" ||
                 !CredentialReadTracker.IsSensitivePath(file.FilePath)) return null;
 
+            // Pin the lifetime when available. A delayed read from a previous PID occupant
+            // must not corroborate a payload in a replacement process.
+            string creationTime = "";
+            try
+            {
+                long created = WindowsProcessTreeOperations.GetCreationTime(file.ProcessId);
+                if (created > 0 && DateTime.FromFileTimeUtc(created) <= file.Timestamp)
+                    creationTime = created.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch { /* Unavailable identity retains the existing observe-only read path. */ }
+
             return new DetectionEvent
             {
                 RuleName = "Sensitive File Access: ETW Credential Store Read",
@@ -25,11 +36,12 @@ namespace Sentinel.Core
                 SignalType = SignalType.Generic,
                 Evidence = $"Kernel-File Read event attributed to PID {file.ProcessId}; target path is in FilePath metadata.",
                 Reasoning = "A credential/session store read was observed. Legitimate browsers and backup tools " +
-                    "also read these files. This alone never authorizes containment; independent C2 evidence is required.",
+                    "also read these files. This alone never authorizes containment; independent C2 or memory-inspected PE payload evidence is required.",
                 Metadata = new Dictionary<string, string>
                 {
                     ["SensitiveFileAccess"] = "true", ["FilePath"] = file.FilePath,
-                    ["AccessSource"] = "KernelFileRead", ["Ownership"] = "Unknown"
+                    ["AccessSource"] = "KernelFileRead", ["Ownership"] = "Unknown",
+                    ["ProcessCreationTime"] = creationTime
                 }
             };
         }

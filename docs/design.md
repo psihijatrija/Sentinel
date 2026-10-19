@@ -1036,3 +1036,32 @@ providers. `ScanResult.SecurityAudit` travels over the existing authenticated se
 IPC to the dashboard. The report is independent of detection/response and contains
 explicit collection states. The user may download collected JSON locally, with a
 privacy notice. See [coverage and status semantics](SECURITY_AUDIT.md).
+
+
+## Early credential-theft containment (3.3.2)
+
+The existing suspect-PID memory scanner can supply `UnbackedPePayload=true` only
+after reading PE headers from unbacked executable RWX memory (MZ, bounded PE offset,
+PE signature, supported machine/optional-header magic, section count and image size).
+MZ bytes alone and ordinary executable/JIT memory never supply this marker. Its
+PE-inspection cooldown is independent from stack/thread alerts.
+
+The behavioral correlator combines this specific scanner evidence with an attributed
+Kernel-File credential-store read. Both observations must be fresh within 15 seconds,
+refer to the same PID and carry the same positive Windows process creation time.
+Unknown identities, delayed reads predating process creation, weak/consultant signals,
+watcher write/create observations and unrelated processes are refused. The resulting
+credential-theft composite uses the existing Tier1 authorization and response pipeline;
+individual reads remain Tier2 LogOnly. No network or upload-volume leg is required.
+The image-path resolver is injectable for portable correlation regression tests.
+
+This is a narrow corroborated theft-risk rule, not proof of exfiltration or universal
+browser-exploit prevention. Headerless, image-backed, RX-only, missed/expired,
+inaccessible or unobserved payloads remain outside this rule. The suspect-PID trigger,
+scan/cooldown intervals and Kernel-File read coverage still limit detection. Legitimate
+manual-mapping software accessing credentials needs Windows false-positive validation.
+
+Host-wide upload spikes are compared with the previous baseline before learning the
+current sample. Spikes do not train the baseline. These observations remain Tier2,
+have no process attribution, and cannot authorize a response. Warmup and quiet
+low-volume HTTPS exfiltration remain limitations.

@@ -1,4 +1,11 @@
 # Changelog
+
+## [3.3.2] - 2026-10-19
+
+- Add early credential-theft correlation for memory-inspected unbacked PE headers plus a Kernel-File credential-store read on the same PID and verified process lifetime within 15 seconds. This path does not require recognized C2 or an upload-volume minimum. Generic JIT/RWX signals, MZ bytes alone, watcher writes, stale evidence and unknown/reused process identities cannot authorize it.
+- Separate PE-inspection alert cooldown from stack/thread observations so weaker observations cannot suppress the corroborating scan.
+- Fix outbound spike detection to compare against the previous baseline and avoid learning anomalies into that baseline. Host-wide volume remains Tier2 LogOnly and never authorizes containment.
+- Add positive/negative correlation, process-lifetime, PE-header and upload-threshold regressions. Native Windows tests and packaging are gated by the release workflow.
 ## [3.3.1] - 2026-10-18
 
 ### Added

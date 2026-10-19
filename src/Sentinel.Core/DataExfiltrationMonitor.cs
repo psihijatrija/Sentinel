@@ -29,8 +29,7 @@ namespace Sentinel.Core
 
         private static readonly TimeSpan Interval = TimeSpan.FromSeconds(15);
         private const long SpikeMultiplier = 10;
-        // HARDENING v1.3.0: Lowered from 20MB to 5MB. Previously, exfiltration under 200MB
-        // in a single 15s window went undetected. Now detects spikes above 50MB/15s.
+        // Absolute floor; otherwise compare against ten times the PREVIOUS baseline.
         private const long MinBaselineBytes = 5_000_000;
         private const int WarmupSamples = 10;
 
@@ -65,12 +64,15 @@ namespace Sentinel.Core
                         continue;
                     }
 
-                    // Update rolling baseline
-                    _baselineRate = (_baselineRate * 9 + delta) / 10;
+                    // Compare before learning. Including delta first makes a 10x detector
+                    // suppress its own spikes: 10 * ((9 * baseline + delta) / 10) >= delta.
+                    var baseline = _baselineRate;
+                    bool isSpike = IsOutboundSpike(delta, baseline);
+                    // Do not train on anomalies (including expected bulk-transfer spikes).
+                    if (!isSpike)
+                        _baselineRate = baseline - baseline / 10 + delta / 10;
 
-                    // Check for spike
-                    var threshold = Math.Max(MinBaselineBytes, _baselineRate * SpikeMultiplier);
-                    if (delta > threshold)
+                    if (isSpike)
                     {
                         // Torrent seeding / P2P / download managers: do not label as Exfil.
                         if (BulkTransferNoise.IsAnyBulkTransferProcessRunning(out var bulkClient))
@@ -148,6 +150,14 @@ namespace Sentinel.Core
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex) { _logger.LogDebug(ex, "[DataExfiltrationMonitor] Error"); }
             }
+        }
+
+        internal static bool IsOutboundSpike(long bytesSent, long previousBaseline)
+        {
+            if (bytesSent <= MinBaselineBytes || previousBaseline < 0) return false;
+            // Avoid overflow in baseline * SpikeMultiplier for extreme counters.
+            return previousBaseline <= long.MaxValue / SpikeMultiplier &&
+                   bytesSent > previousBaseline * SpikeMultiplier;
         }
 
         private static long GetTotalBytesSent()

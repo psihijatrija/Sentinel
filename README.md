@@ -18,7 +18,7 @@ ATT&CK techniques that fired.
 Sentinel operates offline: online reputation, live intelligence feeds, connectivity probes, and automatic outbound reporting have been removed. The service maintains firewall blocks for Sentinel's non-loopback traffic, mirrors them into supported local Group Policy, and monitors unapproved inbound exceptions for re-enables. Outbound connectivity and narrow DHCP/IPv6 control traffic are preserved; domain conflicts are reported. The authenticated local dashboard remains available. The Agent runs without elevation and delegates required administrator operations to the installed service. The service still hosts system sensors and response; it is not a minimal privilege broker. See [offline operation and validation](docs/OFFLINE_VALIDATION.md).
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Source version:** 3.3.1 (`version.txt`). A remote `v3.2.8` tag exists, but points to source declaring 3.2.5; see the [version discrepancy](docs/CHANGELOG.md#328---tag-present-version-metadata-inconsistent).
+**Source version:** 3.3.2 (`version.txt`). A remote `v3.2.8` tag exists, but points to source declaring 3.2.5; see the [version discrepancy](docs/CHANGELOG.md#328---tag-present-version-metadata-inconsistent).
 
 On-demand investigation reports and hardening status:
 [read-only security audit](docs/SECURITY_AUDIT.md).
