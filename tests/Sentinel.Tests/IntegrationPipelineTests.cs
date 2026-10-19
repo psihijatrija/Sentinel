@@ -258,9 +258,9 @@ namespace Sentinel.Tests
             var fusedContext = _fusionEngine.FeedEvent(telemetry);
             _detectionEngine.SubmitTelemetry(fusedContext);
 
-            var logContent = await WaitForLogAsync("ReverseShellRule", "\"ActionTaken\":\"LOG\"");
+            var logContent = await WaitForLogAsync("PowerShell: Encoded Command Observation", "\"ActionTaken\":\"LOG\"");
             // Should still be logged
-            Assert.Contains("ReverseShellRule", logContent);
+            Assert.Contains("PowerShell: Encoded Command Observation", logContent);
             // But response should be LOG, not KILL
             Assert.Contains("\"ActionTaken\":\"LOG\"", logContent);
             Assert.DoesNotContain("\"ActionTaken\":\"KILL\"", logContent);

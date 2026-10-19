@@ -1,3 +1,7 @@
+## Windows CI corrections for 3.3.4
+
+Verified weak firewall-helper observations emitted directly by monitors use the same coalescing/scoring path as rule-derived observations; other direct signals retain immediate dispatch. Custom `SecureCacheStore` paths now contain their own entropy and DPAPI machine-secret files and do not modify production key ACLs. The default production store retains its existing paths and SYSTEM-only key ACLs. Existing custom-path caches derived from the old global installation material can become invalid and regenerate; this is a cache boundary change, not a production-store migration. Native DPAPI persistence and complete Framework regression results require Windows validation.
+
 ## Log reliability and evidence (3.3.4)
 
 The service removes the default host EventLog ILogger provider, whose write exceptions could terminate the ETW thread. A bounded diagnostic JSONL provider writes under `%ProgramData%\Sentinel\Logs` (5 MiB plus one rotated file); sink/formatting failures fall back to Trace without recursion. The existing guarded, critical-only `SentinelEventLogWriter` remains the Windows Event Log trail. Agent logging and the primary events/audit writers are unchanged.

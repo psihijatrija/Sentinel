@@ -9,6 +9,11 @@
 - Label encoded PowerShell without socket command-loop evidence as an observation. Coalesce three weak observation classes only for signed, exact-image, live firewall-helper children launched by Sentinel; behavioral detections remain armed and unknown/reused PIDs receive no exemption.
 - Preserve process-rule command line, image and parent metadata. Make dedup admission atomic and separate weaker versus stronger tiers/actions.
 
+### Windows CI corrections
+- Update the remaining pipeline assertion to the encoded-command observation label. Route verified weak direct-monitor emissions through the same coalescing path as rule-based observations, leaving all other direct/terminal dispatch unchanged.
+- Scope custom cache key material to its own directory instead of touching production installation keys and SYSTEM-only ACLs. Production default paths and key ACLs are unchanged. Custom-path caches created with the old shared key may need regeneration.
+- Add custom-store key-location and cross-instance persistence regressions. The original Windows run reported 3010 passing and three failing tests; the corrected full Windows run remains pending.
+
 ### Validation and limits
 - Service and test projects cross-build with zero warnings/errors. All 22 dashboard, 8 Worker and 45 firewall-policy checks pass. Nineteen portable regression cases pass using production logging, path, coverage and child-attribution logic. The portable child tests inject identity and signature boundaries; they do not test Windows signature APIs. Add a Framework integration test for helper coalescing versus external processes, pending Windows execution.
 - Native ETW/provider permissions, Event Log service failure, signature/catalog checks, protected-directory ACLs, complete Framework tests and installer packaging remain Windows validation gates. Protected-provider access denial is reported, not bypassed. No certificate removal or new driver-file quarantine authority is added.

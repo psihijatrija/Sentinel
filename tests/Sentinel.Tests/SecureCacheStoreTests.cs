@@ -51,6 +51,27 @@ namespace Sentinel.Tests
         }
 
         [Fact]
+        public void CustomStore_KeepsKeyMaterialLocal_AndLoadsAcrossInstances()
+        {
+            Assert.True(File.Exists(Path.Combine(_tempDir, ".install_entropy")));
+            Assert.True(File.Exists(Path.Combine(_tempDir, ".machine_secret.dpapi")));
+            _store.Save("restart", "key", "persistent");
+            var restarted = new SecureCacheStore(_tempDir);
+            Assert.Equal("persistent", restarted.Load("restart", "key"));
+        }
+
+        [Fact]
+        public void SeparateCustomStore_DoesNotChangeRestartKey()
+        {
+            var otherDirectory = Path.Combine(_tempDir, "other-store");
+            _store.Save("restart", "key", "first");
+            var other = new SecureCacheStore(otherDirectory);
+            other.Save("restart", "key", "other");
+            Assert.Equal("first", new SecureCacheStore(_tempDir).Load("restart", "key"));
+            Assert.Equal("other", new SecureCacheStore(otherDirectory).Load("restart", "key"));
+        }
+
+        [Fact]
         public void Load_NonExistent_ReturnsNull()
         {
             var loaded = _store.Load("nonexistent", "nokey");

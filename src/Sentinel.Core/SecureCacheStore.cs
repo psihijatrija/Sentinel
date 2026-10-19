@@ -86,10 +86,10 @@ namespace Sentinel.Core
             }
 
             // Generate a boot-nonce-bound HMAC key
-            _hmacKey = GenerateBootBoundKey();
+            _hmacKey = GenerateBootBoundKey(_secureDir, isDefaultPath);
         }
 
-        private static byte[] GenerateBootBoundKey()
+        private static byte[] GenerateBootBoundKey(string secureDirectory, bool protectKeyAcl)
         {
             // SECURITY v1.4.4: Removed predictable components (boot time from PID 4, process ID).
             // Boot time is publicly readable by any standard user. Process ID is visible in task
@@ -123,12 +123,13 @@ namespace Sentinel.Core
             // first taking ownership / escalating to SYSTEM.
             try
             {
-                var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-                var entropyFile = Path.Combine(programData, "Sentinel", "Secure", ".install_entropy");
+                // Explicit stores (including isolated test stores) must not read or mutate
+                // the production installation's key files or their SYSTEM-only ACLs.
+                var entropyFile = Path.Combine(secureDirectory, ".install_entropy");
                 if (File.Exists(entropyFile))
                 {
                     // Best-effort re-lock on every load (upgrades from older ACLs)
-                    LockEntropyFileAcl(entropyFile);
+                    if (protectKeyAcl) LockEntropyFileAcl(entropyFile);
                     var entropy = File.ReadAllBytes(entropyFile);
                     if (entropy.Length == 32)
                     {
@@ -147,7 +148,7 @@ namespace Sentinel.Core
                     if (!Directory.Exists(dir))
                         Directory.CreateDirectory(dir);
                     File.WriteAllBytes(entropyFile, entropy);
-                    LockEntropyFileAcl(entropyFile);
+                    if (protectKeyAcl) LockEntropyFileAcl(entropyFile);
                     ms.Write(entropy);
                 }
             }
@@ -158,19 +159,18 @@ namespace Sentinel.Core
             // still needs LocalMachine DPAPI unprotect on this host to reconstruct the key.
             try
             {
-                var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-                var secretPath = Path.Combine(programData, "Sentinel", "Secure", ".machine_secret.dpapi");
+                var secretPath = Path.Combine(secureDirectory, ".machine_secret.dpapi");
                 byte[] plainSecret;
                 if (File.Exists(secretPath))
                 {
-                    LockEntropyFileAcl(secretPath);
+                    if (protectKeyAcl) LockEntropyFileAcl(secretPath);
                     var cipher = File.ReadAllBytes(secretPath);
                     var plain = UnprotectStatic(cipher);
-                    plainSecret = plain != null && plain.Length == 32 ? plain : CreateAndPersistMachineSecret(secretPath);
+                    plainSecret = plain != null && plain.Length == 32 ? plain : CreateAndPersistMachineSecret(secretPath, protectKeyAcl);
                 }
                 else
                 {
-                    plainSecret = CreateAndPersistMachineSecret(secretPath);
+                    plainSecret = CreateAndPersistMachineSecret(secretPath, protectKeyAcl);
                 }
                 ms.Write(plainSecret, 0, plainSecret.Length);
             }
@@ -203,7 +203,7 @@ namespace Sentinel.Core
             return System.Security.Cryptography.Sha256Net48.HashData(ms.ToArray());
         }
 
-        private static byte[] CreateAndPersistMachineSecret(string secretPath)
+        private static byte[] CreateAndPersistMachineSecret(string secretPath, bool protectKeyAcl)
         {
             var secret = new byte[32];
             using (var rng = RandomNumberGenerator.Create())
@@ -216,7 +216,7 @@ namespace Sentinel.Core
             var cipher = ProtectStatic(secret);
             if (cipher != null && cipher.Length > 0)
                 File.WriteAllBytes(secretPath, cipher);
-            LockEntropyFileAcl(secretPath);
+            if (protectKeyAcl) LockEntropyFileAcl(secretPath);
             return secret;
         }
 

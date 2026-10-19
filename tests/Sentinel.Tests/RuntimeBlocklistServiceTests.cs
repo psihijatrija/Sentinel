@@ -160,8 +160,8 @@ namespace Sentinel.Tests
         public void Blocks_PersistAcrossRestart()
         {
             var first = NewService();
-            first.BlockDomain("persist.example");
-            first.BlockIp("198.51.100.9");
+            Assert.True(first.BlockDomain("persist.example"));
+            Assert.True(first.BlockIp("198.51.100.9"));
 
             // New instance over the same store dir = simulated restart.
             var second = NewService();

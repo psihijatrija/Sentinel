@@ -146,7 +146,14 @@ namespace Sentinel.Core
             // were counted, leaving monitors (Ephemeral, Hardware, DNS, NamedPipe, etc.) invisible
             // in ops metrics.
             _metrics.RecordDetectionWithoutLatency();
-            await HandleDetectionEventAsync(detectionEvent);
+            // Direct monitor observations bypass rule evaluation, but verified management
+            // children must use the same bounded noise admission as rule-based observations.
+            // Keep all other direct/terminal signals on their immediate dispatch path.
+            if (ManagementChildRegistry.IsRoutineObservation(detectionEvent) &&
+                _managementChildren?.IsCurrentChild(detectionEvent.ProcessId) == true)
+                await ProcessDetectionAsync(detectionEvent);
+            else
+                await HandleDetectionEventAsync(detectionEvent);
         }
 
         /// <summary>
