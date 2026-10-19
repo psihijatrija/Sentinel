@@ -1,6 +1,10 @@
 # Sentinel engineering assessment and improvement record
 
-## Current addendum: 3.2.5 follow-up review (2026-10-18)
+## Current addendum: 3.3.3 (2026-10-19)
+
+Fixed two incident-lifecycle gaps: missing receipts could allow actionable incidents to expire, and older incident cleanup could remove a newer PID mapping. The full Release cross-build passes with zero warnings/errors, 30 JavaScript tests pass, and 23 incident tests pass in a temporary modern-.NET host using production incident/logger source. Four tests fail when the old expiry/mapping behavior is restored. The host required source compilation because Framework ACL bindings cannot execute unchanged under modern .NET; Windows validation remains required. No rating is raised on this evidence alone. See [engineering gates](ENGINEERING_GATES.md) for remaining implementation and validation criteria.
+
+## Historical addendum: 3.2.5 follow-up review (2026-10-18)
 
 Reviewed five commits after `4acc2de` through `4a5c973`: proxy drift observation, DNS adapter identity, native DNS harness corrections and pipe-authorization fixture reliability. The full Release cross-build passed with zero warnings/errors, all 24 JavaScript checks passed, and 45 existing DNS/proxy regressions passed in a temporary modern-.NET host against production Core. No confirmed regression was found in that scope. Windows Framework, pipe-token and live DNS checks were not run here; this does not renew the historical Windows results below or change numeric ratings. See the [review record](REGRESSION_REVIEW_2026-10-18.md).
 

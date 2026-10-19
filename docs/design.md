@@ -1,3 +1,7 @@
+## Incident housekeeping safety (3.3.3)
+
+`IncidentManager` retains Open/Active incidents with actionable evidence until a verified response is recorded; a missing receipt does not become resolution after an inactivity timeout. Incomplete responses remain unresolved. Observation-only incidents retain the existing ten-minute expiry, and verified Responded incidents may close after five minutes of inactivity. Reopening/closing updates the lifecycle timestamp. PID mapping cleanup atomically matches both PID and closing incident ID, preserving a newer owner and receipt routing. This does not add process-generation identity to incident grouping, durable incident-manager storage, automatic response retries or restart recovery.
+
 ## Interrupted DNS recovery (3.2.5)
 
 `DnsRepairRecord` saves PendingFrom/PendingTarget alongside the original snapshot before mutation. The explicit dns_recover operation shares the real administrator-token/UAC boundary. Recovery accepts only saved static family combinations, unchanged protocol support, a fresh fingerprint and no newer transaction; it never runs automatically at startup. Failed recovery rolls back to the newly approved current state while retaining the original target. A disposable Windows job tests the production native backend/audit/transaction code with a temporary fixture journal and an independent emergency restore; it does not claim production SYSTEM-journal ACL or reboot/power-loss validation.

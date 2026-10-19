@@ -81,6 +81,7 @@ namespace Sentinel.Core
                     detection.AuthorizedResponse != ResponseAction.LogOnly)
                 {
                     incident.State = IncidentState.Active;
+                    incident.LastStateChange = DateTimeOffset.UtcNow;
                     incident.ResponseAction = null;
                     incident.RespondedAt = null;
                     incident.LastResponse = null;
@@ -303,8 +304,10 @@ namespace Sentinel.Core
         // 
 
         private void ProcessLifecycles(object? state)
+            => ProcessLifecyclesAt(DateTimeOffset.UtcNow);
+
+        internal void ProcessLifecyclesAt(DateTimeOffset now)
         {
-            var now = DateTimeOffset.UtcNow;
             var toClose = new List<string>();
 
             foreach (var (id, incident) in _activeIncidents)
@@ -317,16 +320,20 @@ namespace Sentinel.Core
                     {
                         incident.State = IncidentState.Closed;
                         incident.ClosedAt = now;
+                        incident.LastStateChange = now;
                         toClose.Add(id);
                     }
 
-                    // Auto-close stale open/active incidents (no new detections in 10 minutes)
+                    // Inactivity is not proof that an actionable detection was resolved.
+                    // A missing receipt must remain visible just like a failed response.
                     if ((incident.State == IncidentState.Open || incident.State == IncidentState.Active) &&
                         now - incident.LastActivity > TimeSpan.FromMinutes(10) &&
+                        incident.LastActionableDetectionAt == null &&
                         (incident.LastResponse == null || incident.LastResponse.RequestedAction == nameof(ResponseAction.LogOnly)))
                     {
                         incident.State = IncidentState.Closed;
                         incident.ClosedAt = now;
+                        incident.LastStateChange = now;
                         incident.ResponseAction = "AutoClosed (stale)";
                         toClose.Add(id);
                     }
@@ -352,7 +359,10 @@ namespace Sentinel.Core
                     // Remove PID mappings for closed incident
                     foreach (var pid in closed.InvolvedPids)
                     {
-                        _pidToIncident.TryRemove(pid, out _);
+                        // A newer incident may already own this PID. Remove only the
+                        // exact mapping being closed, atomically with the value check.
+                        ((ICollection<KeyValuePair<int, string>>)_pidToIncident)
+                            .Remove(new KeyValuePair<int, string>(pid, id));
                     }
                 }
 

@@ -19,7 +19,8 @@ namespace Sentinel.Tests
         {
             _tempDir = Path.Combine(Path.GetTempPath(), "sentinel_inc_test_" + Guid.NewGuid().ToString("N")[..8]);
             Directory.CreateDirectory(_tempDir);
-            _ancestry = new ProcessAncestryCache();
+            // These grouping/lifecycle tests use synthetic PIDs, not live Windows processes.
+            _ancestry = new ProcessAncestryCache(_ => null, refresh: false);
             _logger = new JsonlEventLogger(Path.Combine(_tempDir, "events.jsonl"));
             _manager = new IncidentManager(_ancestry, _logger, NullLogger<IncidentManager>.Instance);
         }
@@ -27,6 +28,7 @@ namespace Sentinel.Tests
         public void Dispose()
         {
             _manager.Dispose();
+            _ancestry.Dispose();
             _logger.DisposeAsync().AsTask().GetAwaiter().GetResult();
             try { Directory.Delete(_tempDir, true); } catch { }
         }
@@ -197,6 +199,92 @@ namespace Sentinel.Tests
             var inc = _manager.RegisterDetection(d);
 
             Assert.Equal(IncidentSeverity.Low, inc.Severity);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ActionableIncidentWithoutReceiptNeverExpiresAsResolved(bool multipleDetections)
+        {
+            var incident = _manager.RegisterDetection(MakeDetection());
+            if (multipleDetections) _manager.RegisterDetection(MakeDetection(rule: "Second rule"));
+            _manager.ProcessLifecyclesAt(incident.LastActivity.AddHours(1));
+
+            Assert.NotEqual(IncidentState.Closed, incident.State);
+            Assert.Null(incident.ClosedAt);
+            Assert.Null(incident.ResponseAction);
+            Assert.Same(incident, _manager.GetIncidentForPid(1000));
+            Assert.Contains(incident, _manager.GetActiveIncidents());
+        }
+
+        [Fact]
+        public void ObservationOnlyIncidentStillExpiresWithoutClaimingVerifiedResponse()
+        {
+            var detection = MakeDetection(tier: DetectionTier.Tier2Indicator);
+            detection.AuthorizedResponse = ResponseAction.LogOnly;
+            var incident = _manager.RegisterDetection(detection);
+            var tick = incident.LastActivity.AddMinutes(11);
+            _manager.ProcessLifecyclesAt(tick);
+
+            Assert.Equal(IncidentState.Closed, incident.State);
+            Assert.Equal(tick, incident.LastStateChange);
+            Assert.Equal("AutoClosed (stale)", incident.ResponseAction);
+            Assert.Null(incident.RespondedAt);
+            Assert.Null(_manager.GetIncidentForPid(1000));
+        }
+
+        [Fact]
+        public void ClosingOlderIncidentPreservesTheNewerPidOwnerAndReceiptRouting()
+        {
+            var older = _manager.RegisterDetection(MakeDetection());
+            _manager.RecordResponse(older.Id, VerifiedResponse(1000));
+            older.LastActivity = DateTimeOffset.UtcNow.AddMinutes(-6);
+            var newer = _manager.RegisterDetection(MakeDetection(rule: "Fresh evidence"));
+            Assert.NotEqual(older.Id, newer.Id);
+
+            _manager.ProcessLifecyclesAt(DateTimeOffset.UtcNow);
+
+            Assert.Equal(IncidentState.Closed, older.State);
+            Assert.Same(newer, _manager.GetIncidentForPid(1000));
+            _manager.RecordResponseByPid(1000, VerifiedResponse(1000));
+            Assert.Equal(IncidentState.Responded, newer.State);
+            Assert.Single(newer.ResponseAttempts);
+            Assert.Equal(IncidentState.Closed, older.State);
+        }
+
+        [Fact]
+        public void ReopenedIncidentWithoutNewReceiptCannotExpireBehindAnOldSuccess()
+        {
+            var incident = _manager.RegisterDetection(MakeDetection());
+            _manager.RecordResponse(incident.Id, VerifiedResponse(1000));
+            _manager.RegisterDetection(MakeDetection(rule: "New actionable evidence"));
+            _manager.ProcessLifecyclesAt(incident.LastActivity.AddHours(1));
+
+            Assert.Equal(IncidentState.Active, incident.State);
+            Assert.Null(incident.LastResponse);
+            Assert.Null(incident.RespondedAt);
+            Assert.Null(incident.ClosedAt);
+        }
+
+        [Theory]
+        [InlineData(ResponseExecutionStatus.Refused)]
+        [InlineData(ResponseExecutionStatus.Attempted)]
+        [InlineData(ResponseExecutionStatus.Failed)]
+        [InlineData(ResponseExecutionStatus.PartiallyCompleted)]
+        public void IncompleteResponseRemainsUnresolvedAfterHousekeeping(ResponseExecutionStatus status)
+        {
+            var incident = _manager.RegisterDetection(MakeDetection());
+            var result = new ResponseExecutionResult
+            {
+                ProcessId = 1000, RequestedAction = "KillProcessTree", CompletedAt = DateTimeOffset.UtcNow
+            };
+            result.Add("ProcessTree", "1000", status, "Fixture incomplete response.");
+            _manager.RecordResponse(incident.Id, result);
+            _manager.ProcessLifecyclesAt(incident.LastActivity.AddHours(1));
+
+            Assert.Equal(IncidentState.Active, incident.State);
+            Assert.Equal(status, incident.ResponseStatus);
+            Assert.Null(incident.ClosedAt);
         }
     }
 }

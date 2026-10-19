@@ -1,6 +1,13 @@
 # Sentinel - Requirements
 
-**Version: 3.2.5**
+**Version: 3.3.3**
+
+### Incident lifecycle safety (3.3.3)
+
+- Inactivity must not resolve an incident with actionable evidence when its response receipt is missing or incomplete. Fresh actionable evidence must reopen a previously responded incident without inheriting the earlier success.
+- Closing an older incident must not remove a PID mapping owned by a newer incident. PID-routed receipts must continue to reach that newer incident.
+- Observation-only expiry must remain distinct from verified response. Reopening and closure must update lifecycle timestamps.
+- These requirements govern current-process state; durable incident restoration and process-generation-aware grouping remain separate engineering gates.
 
 ---
 

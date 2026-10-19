@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.3.3] - 2026-10-19
+
+### Fixed
+- Keep actionable incidents open/active when no response receipt arrives. Ten minutes of inactivity no longer closes them as stale, including incidents reopened by fresh actionable evidence after a prior verified response. Refused, attempted, failed and partial responses remain unresolved; observation-only incidents still expire normally.
+- Remove a closing incident's PID mapping only when it still points to that incident. Cleanup of an older incident cannot detach a newer incident or silently lose subsequent PID-routed receipts.
+- Update lifecycle timestamps on reopening and closure. Incident tests now inject synthetic process identities rather than depending on live Windows PIDs.
+
+### Validation and limits
+- Full Release solution cross-build: zero warnings/errors. All 22 dashboard and 8 standalone Worker checks pass. A temporary modern-.NET host runs 23 incident tests using production incident/logger source, including 9 new cases; restoring the old expiry/mapping behavior makes 4 of those tests fail. This validates the targeted logic, not Windows ACLs or service behavior.
+- Added measurable [engineering gates](ENGINEERING_GATES.md). No numeric rating increase is claimed. Full Windows Framework/native testing and installer publication remain CI gates; incident state is still in memory and is not restored after a service restart.
+
 ## [3.3.2] - 2026-10-19
 
 - Add early credential-theft correlation for memory-inspected unbacked PE headers plus a Kernel-File credential-store read on the same PID and verified process lifetime within 15 seconds. This path does not require recognized C2 or an upload-volume minimum. Generic JIT/RWX signals, MZ bytes alone, watcher writes, stale evidence and unknown/reused process identities cannot authorize it.

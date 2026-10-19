@@ -1,6 +1,6 @@
 # Sentinel documentation
 
-Current source version: **3.2.7** (`version.txt`). The remote **v3.2.8** tag points to `4a5c973`, whose source version is 3.2.5; tag, current source and installer versions are not synchronized. See the [version discrepancy](CHANGELOG.md#328---tag-present-version-metadata-inconsistent). The focused 2026-10-18 regression review covers 3.2.5 follow-up changes through `4a5c973`; it does not validate the later 3.2.6/3.2.7 changes. `version.txt` is the product version source. A document's old feature-introduction version does not identify the current product version.
+Current source version: **3.3.3** (`version.txt`). This patch preserves unresolved actionable incidents and prevents older incident cleanup from deleting newer PID mappings. The [engineering gates](ENGINEERING_GATES.md) describe the evidence still required for higher ratings. Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
 
 ## Current guidance
 
@@ -8,6 +8,7 @@ Current source version: **3.2.7** (`version.txt`). The remote **v3.2.8** tag poi
 | --- | --- |
 | [DNS repair](DNS_REPAIR.md) | Administrator-approved resolver repair, restoration, verification and platform limits |
 | [Capability matrix](CAPABILITY_MATRIX.md) | Current remediation coverage and concrete remaining work |
+| [Engineering gates](ENGINEERING_GATES.md) | Measurable improvement criteria, 3.3.3 evidence and remaining validation |
 | [Design](design.md) | Runtime architecture, offline operation, privilege boundaries, firewall enforcement and verified response outcomes |
 | [Requirements](requirements.md) | Current functional/safety contracts, including 3.2.2 certificate and response corrections |
 | [Constraints](constraints.md) | Implementation and response limits |
