@@ -600,16 +600,30 @@ namespace Sentinel.Core
                     return TerminalFamily.Ransomware.ToCanonicalString();
             }
 
-            var haystack = string.Join(" ",
-                detection.RuleName ?? "",
-                detection.Evidence ?? "",
-                detection.Reasoning ?? "");
+            // SECURITY (audit #1): classify ONLY against the monitor-authored RuleName.
+            // Evidence and Reasoning routinely embed the observed process command line
+            // verbatim (e.g. "...executing: bcdedit /set ... recoveryenabled No",
+            // "...connected to beacon host..."), so matching kill-grade fragments against
+            // them let an attacker-chosen command line self-classify a benign/observe-only
+            // detection into a kill-grade terminal family. RuleName is written by the
+            // monitor, not the target. Monitors that need a precise, non-string-inferred
+            // family set detection.Family (checked above) or a terminal SignalType - those
+            // are fully attacker-free anchors and remain authoritative.
+            // A handful of monitors interpolate a process image name into the RuleName
+            // inside parentheses, e.g. "Script: Anomalous Parent-Child (winword->Potato)"
+            // or "Servicing: Anomalous Child (TrustedInstaller->beacon)". An attacker can
+            // name their binary "Potato.exe"/"beacon.exe" to smuggle a single-token kill-grade
+            // fragment into that parenthesized span. Strip any "(...)" segments before
+            // matching so classification sees only the fixed, monitor-authored rule text.
+            // The TerminalOutcomes fragments are all literal keywords/prefixes that never
+            // live inside those parentheses, so this loses no legitimate classification.
+            var ruleName = StripInterpolatedSegments(detection.RuleName ?? "");
 
             foreach (var (outcome, fragments) in TerminalOutcomes)
             {
                 foreach (var f in fragments)
                 {
-                    if (haystack.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (ruleName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
                         return outcome;
                 }
             }
@@ -626,6 +640,29 @@ namespace Sentinel.Core
         /// </summary>
         public static TerminalFamily? ClassifyTerminalFamily(DetectionEvent detection)
             => TerminalFamilies.FromCanonicalString(ClassifyTerminalOutcome(detection));
+
+        /// <summary>
+        /// Removes parenthesized "(...)" spans from a rule name before kill-grade fragment
+        /// matching. Those spans are the only place monitors interpolate attacker-influenced
+        /// process image names (e.g. "Script: Anomalous Parent-Child (parent->child)"), so a
+        /// binary named to contain a kill-grade token cannot smuggle that token into the
+        /// classifier. Fixed monitor-authored fragments never appear inside parentheses.
+        /// </summary>
+        internal static string StripInterpolatedSegments(string ruleName)
+        {
+            if (string.IsNullOrEmpty(ruleName) || ruleName.IndexOf('(') < 0)
+                return ruleName;
+
+            var sb = new System.Text.StringBuilder(ruleName.Length);
+            int depth = 0;
+            foreach (var c in ruleName)
+            {
+                if (c == '(') { depth++; continue; }
+                if (c == ')') { if (depth > 0) depth--; continue; }
+                if (depth == 0) sb.Append(c);
+            }
+            return sb.ToString();
+        }
 
         public static bool IsBenignInstallerNoise(DetectionEvent detection)
         {
@@ -731,7 +768,9 @@ namespace Sentinel.Core
                 string.Equals(flag, "true", StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            var r = detection.RuleName ?? "";
+            // SECURITY (audit #2): strip parenthesized process-name interpolation so a
+            // binary named to contain an attack-class token cannot solo-trigger a kill.
+            var r = StripInterpolatedSegments(detection.RuleName ?? "");
             return r.StartsWith("Covert Mesh:", StringComparison.OrdinalIgnoreCase)
                 || r.StartsWith("Covert Webhook:", StringComparison.OrdinalIgnoreCase);
         }
@@ -754,7 +793,11 @@ namespace Sentinel.Core
             if (IsCovertChannelTerminal(detection))
                 return true;
 
-            var r = detection.RuleName ?? "";
+            // SECURITY (audit #2): strip parenthesized process-name interpolation (e.g.
+            // "Script: Anomalous Parent-Child (winword->AMSI Bypass Detected)") so an
+            // attacker-chosen image name cannot smuggle an attack-class token into a
+            // solo-kill IndexOf match. StartsWith checks below are unaffected.
+            var r = StripInterpolatedSegments(detection.RuleName ?? "");
             return r.StartsWith("LPE Scaffold: Privilege Escalation Tool", StringComparison.OrdinalIgnoreCase)
                 || r.StartsWith("CVE Class: Kernel Exploit Loader", StringComparison.OrdinalIgnoreCase)
                 || r.StartsWith("CVE Class: ClickFix Encoded", StringComparison.OrdinalIgnoreCase)
@@ -875,7 +918,7 @@ namespace Sentinel.Core
             if (rootPid > 4 && rootPid != pid)
             {
                 if (EvaluateBuffer(RootBuffers, rootPid, signalEntry, window, minSignals, minTerminalConf,
-                        detection, out var rootOutcome))
+                        detection, out var rootOutcome, requireStrictCorroboration: true))
                 {
                     TagChainConfirmed(detection, rootOutcome!);
                     return true;
@@ -885,8 +928,54 @@ namespace Sentinel.Core
             return false;
         }
 
-        /// <summary>Product arming check. Callers must still enforce tier and action-specific authority.</summary>
+        /// <summary>
+        /// Final gate before a destructive (kill/quarantine) response. Returns true only when
+        /// the product is armed (ActiveResponse) AND the detection actually carries a
+        /// legitimately-granted kill authorization - i.e. it is Tier1 and was promoted by a
+        /// chain confirmation, a multi-signal composite, or a kill-grade terminal family at
+        /// sufficient confidence.
+        ///
+        /// SECURITY (audit #8): this method previously ignored <paramref name="detection"/>
+        /// entirely and returned <c>config.ActiveResponse</c>, despite a name that implies it
+        /// vets the detection. A caller trusting it as the authorization check could kill on a
+        /// detection whose kill-grade label was set in error upstream. It now re-asserts the
+        /// authorization as defense-in-depth. Callers must still enforce action-specific
+        /// authority (e.g. certificate distrust policy) for non-process remediations.
+        /// </summary>
         public static bool MayPerformDestructiveResponse(DetectionEvent detection, SentinelConfig config)
+        {
+            if (config == null || !config.ActiveResponse || detection == null)
+                return false;
+
+            // A valid destructive authorization is Tier1 and backed by one of the three
+            // proof paths the tier law recognizes. Anything else is observe-only.
+            if (detection.Tier != DetectionTier.Tier1Behavioral)
+                return false;
+
+            bool chainConfirmed = detection.Metadata != null &&
+                detection.Metadata.TryGetValue(ChainConfirmedKey, out var cc) &&
+                string.Equals(cc, "true", StringComparison.OrdinalIgnoreCase);
+
+            if (chainConfirmed || IsNukeComposite(detection) || IsDllUnloadExempt(detection))
+                return true;
+
+            // A solo kill-grade terminal (e.g. the attack-class "10") at sufficient confidence.
+            if (IsKillGradeTerminal(detection) &&
+                detection.Confidence >= (config.MinTier1Confidence > 0
+                    ? config.MinTier1Confidence
+                    : DefaultMinTier1Confidence))
+                return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Legacy arming-only check: true when the product is armed, independent of the
+        /// detection's authorization. Kept for call sites that have already enforced tier
+        /// and chain authority themselves and only need the master ActiveResponse switch.
+        /// Prefer <see cref="MayPerformDestructiveResponse"/> at the final kill gate.
+        /// </summary>
+        public static bool IsResponseArmed(SentinelConfig config)
             => config != null && config.ActiveResponse;
 
         /// <summary>Product arming check for existing inline host-mutation policies.</summary>
@@ -996,7 +1085,7 @@ namespace Sentinel.Core
             public DateTime LastActivity { get; set; } = DateTime.UtcNow;
         }
 
-        private readonly record struct SignalEntry(string RuleName, string? Outcome, double Confidence, DateTime When);
+        private readonly record struct SignalEntry(string RuleName, string? Outcome, double Confidence, DateTime When, int Pid);
 
         // v2.0.3: TTL sweep state - prevents stale PID buffers from accumulating
         // and false-positive chain-nukes on recycled PIDs.
@@ -1020,13 +1109,16 @@ namespace Sentinel.Core
                     bool stale;
                     lock (buffer)
                     {
-                        stale = buffer.LastActivity < cutoff && buffer.Entries.Count == 0
-                                || buffer.LastActivity < cutoff;
-                        if (stale)
-                        {
+                        // A buffer is a removal candidate once it has been idle past the
+                        // window+grace cutoff. (audit #7: the previous condition was
+                        // "(old && empty) || old", which collapses to just "old" - the first
+                        // clause was dead. Simplified to the intended single predicate.)
+                        bool idlePastCutoff = buffer.LastActivity < cutoff;
+                        if (idlePastCutoff)
                             buffer.Entries.RemoveAll(e => e.When < cutoff);
-                            stale = buffer.Entries.Count == 0;
-                        }
+                        // Only evict when nothing recent remains, so a buffer that saw a fresh
+                        // signal between the idle check and the prune is not dropped mid-chain.
+                        stale = idlePastCutoff && buffer.Entries.Count == 0;
                     }
                     if (stale && dict.TryRemove(kvp.Key, out _))
                         removed++;
@@ -1055,7 +1147,7 @@ namespace Sentinel.Core
             }
             if (outcome != null && conf < minTerminalConf)
                 outcome = null;
-            return new SignalEntry(detection.RuleName ?? "unknown", outcome, conf, DateTime.UtcNow);
+            return new SignalEntry(detection.RuleName ?? "unknown", outcome, conf, DateTime.UtcNow, detection.ProcessId);
         }
 
         /// <summary>
@@ -1071,7 +1163,8 @@ namespace Sentinel.Core
             int minSignals,
             double minTerminalConf,
             DetectionEvent detection,
-            out string? outcome)
+            out string? outcome,
+            bool requireStrictCorroboration = false)
         {
             outcome = null;
             var buffer = buffers.GetOrAdd(bufferKey, _ => new PidSignalBuffer());
@@ -1086,12 +1179,14 @@ namespace Sentinel.Core
                     .Select(e => e.RuleName)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Count();
-                var terminal = buffer.Entries
+                var terminalEntry = buffer.Entries
                     .Where(e => e.Outcome != null && e.Confidence >= minTerminalConf)
-                    .Select(e => e.Outcome)
-                    .FirstOrDefault(o => o != null);
+                    .Cast<SignalEntry?>()
+                    .FirstOrDefault(e => e!.Value.Outcome != null);
+                var terminal = terminalEntry?.Outcome;
 
-                if (distinctRules >= minSignals && terminal != null)
+                if (distinctRules >= minSignals && terminal != null &&
+                    CorroborationSatisfied(buffer, terminalEntry!.Value, requireStrictCorroboration))
                 {
                     outcome = terminal;
                     return true;
@@ -1103,13 +1198,47 @@ namespace Sentinel.Core
                     .Select(e => e.Outcome!)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                if (terminalFamilies.Count >= 2)
+                if (terminalFamilies.Count >= 2 &&
+                    CorroborationSatisfied(buffer, terminalEntry ?? entry, requireStrictCorroboration))
                 {
                     outcome = string.Join("+", terminalFamilies);
                     return true;
                 }
             }
             return false;
+        }
+
+        /// <summary>
+        /// SECURITY (audit #5): In the cross-PID ancestry (root) buffer, signals from
+        /// UNRELATED sibling processes under a widely-shared launcher accumulate together.
+        /// Without this guard, two independent benign children - each emitting exactly one
+        /// signal, one of which happens to classify as a terminal family - could satisfy
+        /// "minSignals distinct rules + one terminal leg" and manufacture a kill on a PID
+        /// that was never itself suspicious.
+        ///
+        /// Strict corroboration requires the terminal leg's OWN process to have contributed
+        /// at least one additional distinct signal (self-corroboration), so a lone terminal
+        /// hit on one PID cannot be completed purely by noise from an unrelated sibling.
+        /// The per-PID buffer path (non-strict) is unaffected: there every entry shares the
+        /// same PID by construction, so this always passes.
+        /// </summary>
+        private static bool CorroborationSatisfied(
+            PidSignalBuffer buffer, SignalEntry terminalLeg, bool requireStrict)
+        {
+            if (!requireStrict)
+                return true;
+
+            int terminalPid = terminalLeg.Pid;
+            if (terminalPid <= 4)
+                return false; // unattributed terminal leg cannot self-corroborate
+
+            int selfSignals = buffer.Entries
+                .Where(e => e.Pid == terminalPid)
+                .Select(e => e.RuleName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+
+            return selfSignals >= 2;
         }
 
         /// <summary>

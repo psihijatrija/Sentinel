@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.3.5] - 2026-10-20
+
+### Security (red-team audit of kill-authority and IPC boundary)
+- Classify terminal outcomes from the monitor-authored `RuleName` only, never from `Evidence`/`Reasoning`. Those fields embed the observed command line verbatim, so a benign or attacker-chosen command line (for example one containing `bcdedit /set ... recover off` or `beacon`) could previously self-classify a non-terminal detection into a kill-grade family. Detections that need a precise family still declare a typed `Family` or a terminal `SignalType`; those remain authoritative.
+- Strip parenthesized interpolation spans from a rule name before kill-grade matching. A few monitors embed an observed process image name inside `(...)` (for example `Script: Anomalous Parent-Child (parent->child)`), so a binary named to contain a kill-grade token (`Potato.exe`, `AMSI Bypass Detected.exe`) can no longer smuggle that token into classification or the single-signal attack-class kill path. Genuine rule names with the token outside parentheses still fire.
+- Require elevated administrator approval for the `cert_distrust` IPC operation, matching the existing DNS repair gate. Removing a certificate from the machine Root store is privileged host mutation; token possession alone is no longer sufficient. The agent client requests identification-level impersonation for this operation so the service can check the caller token.
+- Harden the administrator-client check to verify token elevation type via `GetTokenInformation`. A split-token administrator who has not elevated is rejected even when `IsInRole(Administrator)` reports true, so the DNS repair and certificate operations genuinely sit behind the UAC boundary. The check fails closed on any error.
+- Require strict self-corroboration on the cross-process ancestry (root) chain buffer. Signals from unrelated sibling processes under a widely shared launcher can no longer combine into a confirmed kill unless the terminal leg's own process contributed at least one additional distinct signal. The per-process chain path is unchanged.
+- Vet the detection at the final destructive-response gate instead of returning only the arming state. A detection must be Tier1 and backed by chain confirmation, a multi-signal composite, a DLL-unload exemption, or a kill-grade terminal family at sufficient confidence. Added an explicit arming-only helper for call sites that have already enforced tier and chain authority.
+- Simplify a stale buffer-sweep predicate whose first clause was dead (`(old && empty) || old` collapses to `old`); behavior is unchanged, intent is now explicit.
+
+### Validation and limits
+- Full Release solution cross-build: zero warnings/errors. The full Windows test suite passes (3027 passed, 1 pre-existing Windows-native DNS smoke test skipped), including fourteen new regression cases covering command-line classification, process-name interpolation stripping, the destructive-response gate and the root-buffer corroboration guard.
+- The `cert_distrust` and administrator-elevation changes alter runtime privilege behavior on the live IPC path. The portable test suite cannot exercise a real elevated versus non-elevated pipe client; those two controls are verified by build and code structure and still require a manual Windows check with an elevated versus non-elevated administrator caller. No new quarantine, certificate-removal, or driver-file authority is added.
+
 ## [3.3.4] - 2026-10-19
 
 ### Fixed

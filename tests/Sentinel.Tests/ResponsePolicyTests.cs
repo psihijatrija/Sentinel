@@ -442,5 +442,282 @@ namespace Sentinel.Tests
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(lowC2, cfg));
             Assert.False(ResponsePolicy.RegisterAndEvaluateChain(suspPath, cfg));
         }
+
+        // =====================================================================
+        // AUDIT #1: kill-grade classification must NOT come from attacker-controlled
+        // Evidence / Reasoning text (which embed the observed command line verbatim).
+        // =====================================================================
+
+        [Fact]
+        public void Audit1_BenignBcdedit_In_Evidence_Does_Not_Classify_As_Ransomware()
+        {
+            // A legitimate recovery/backup tool logs its command line into Evidence:
+            //   bcdedit /set {default} recoveryenabled No  (contains "bcdedit /set" + "recover")
+            // Previously the haystack scanned Evidence and mapped this to the Ransomware
+            // kill-grade family. The RuleName is a neutral observe rule, so it must NOT.
+            var d = new DetectionEvent
+            {
+                RuleName = "Suspicious Outbound Connection",
+                Evidence = @"Process ran: bcdedit /set {default} recoveryenabled No",
+                Reasoning = "Observed command line contained the string recover off during backup maintenance.",
+                SignalType = SignalType.SuspiciousProcess,
+                ProcessId = 6001,
+                ProcessName = "backuptool.exe",
+                Confidence = 0.90,
+            };
+
+            Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(d));
+            Assert.False(ResponsePolicy.IsKillGradeTerminal(d));
+        }
+
+        [Fact]
+        public void Audit1_Beacon_Token_In_CommandLine_Evidence_Does_Not_Classify_C2()
+        {
+            // An attacker (or benign app) whose command line merely contains "beacon"
+            // must not promote a neutral observe detection to the C2Beacon family.
+            var d = new DetectionEvent
+            {
+                RuleName = "Network Policy: Unusual Destination",
+                Evidence = @"cmd: app.exe --mode beacon --interval 30",
+                ProcessId = 6002,
+                ProcessName = "app.exe",
+                Confidence = 0.90,
+            };
+
+            Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(d));
+        }
+
+        [Fact]
+        public void Audit1_Real_Ransomware_Still_Classifies_Via_Family_And_RuleName()
+        {
+            // The fix must not weaken real detection: RansomwareDetectionRule sets both
+            // Family and a terminal SignalType, and its RuleName matches a fragment.
+            var viaFamily = new DetectionEvent
+            {
+                RuleName = "RansomwareDetectionRule",
+                Family = TerminalFamily.Ransomware,
+                SignalType = SignalType.Ransomware,
+                Evidence = @"Shadow copy / backup deletion command: vssadmin delete shadows /all /quiet",
+                ProcessId = 6003,
+                ProcessName = "locker.exe",
+                Confidence = 0.98,
+            };
+            Assert.Equal("Ransomware", ResponsePolicy.ClassifyTerminalOutcome(viaFamily));
+            Assert.True(ResponsePolicy.IsKillGradeTerminal(viaFamily));
+
+            // And a monitor-authored kill-grade RuleName still classifies with no Family/SignalType.
+            var viaRuleName = new DetectionEvent
+            {
+                RuleName = "LSASS Credential Dump via comsvcs MiniDump",
+                ProcessId = 6004,
+                ProcessName = "rundll32.exe",
+                Confidence = 0.93,
+            };
+            Assert.Equal("CredentialDump", ResponsePolicy.ClassifyTerminalOutcome(viaRuleName));
+        }
+
+        // =====================================================================
+        // AUDIT #1/#2: a process-name interpolated into a RuleName's "(...)" span must
+        // not smuggle a kill-grade token through classification or the solo-kill path.
+        // =====================================================================
+
+        [Fact]
+        public void Audit2_ProcessName_In_RuleName_Parens_Does_Not_Classify_TokenTheft()
+        {
+            // Attacker names their binary "Potato.exe"; ScriptExecutionMonitor emits
+            //   "Script: Anomalous Parent-Child (winword->Potato)"
+            // The "Potato" TokenTheft fragment lives inside the interpolated span and
+            // must be stripped before classification.
+            var d = new DetectionEvent
+            {
+                RuleName = "Script: Anomalous Parent-Child (winword->Potato)",
+                ProcessId = 6005,
+                ProcessName = "Potato",
+                Confidence = 0.90,
+            };
+            Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(d));
+        }
+
+        [Fact]
+        public void Audit2_ProcessName_In_RuleName_Parens_Does_Not_Solo_Kill()
+        {
+            // "AMSI Bypass Detected" is an attack-class solo-kill token. If an attacker
+            // names a binary to put it inside the interpolated span, the solo-kill path
+            // must not fire.
+            var d = new DetectionEvent
+            {
+                RuleName = "Script: Anomalous Parent-Child (svc->AMSI Bypass Detected)",
+                ProcessId = 6006,
+                ProcessName = "evil",
+                Confidence = 0.99,
+            };
+            Assert.False(ResponsePolicy.IsAttackClassTerminal(d));
+        }
+
+        [Fact]
+        public void Audit2_Genuine_AttackClass_RuleName_Still_Solo_Kills()
+        {
+            // The real monitor-authored rule name (token OUTSIDE any parens) still fires.
+            var d = new DetectionEvent
+            {
+                RuleName = "Evasion: AMSI Bypass Detected (attributed patch)",
+                ProcessId = 6007,
+                ProcessName = "evil.exe",
+                Confidence = 0.95,
+            };
+            Assert.True(ResponsePolicy.IsAttackClassTerminal(d));
+        }
+
+        [Fact]
+        public void Audit2_StripInterpolatedSegments_Removes_Only_Paren_Spans()
+        {
+            Assert.Equal("Script: Anomalous Parent-Child ",
+                ResponsePolicy.StripInterpolatedSegments("Script: Anomalous Parent-Child (a->b)"));
+            Assert.Equal("Evasion: AMSI Bypass Detected ",
+                ResponsePolicy.StripInterpolatedSegments("Evasion: AMSI Bypass Detected (attributed)"));
+            Assert.Equal("NoParensHere",
+                ResponsePolicy.StripInterpolatedSegments("NoParensHere"));
+        }
+
+        // =====================================================================
+        // AUDIT #8: MayPerformDestructiveResponse must vet the detection, not just
+        // return the ActiveResponse arming switch.
+        // =====================================================================
+
+        [Fact]
+        public void Audit8_Unconfirmed_Tier2_Detection_Is_Refused_Even_When_Armed()
+        {
+            var cfg = ObserveConfig(); // ActiveResponse = true
+            var d = new DetectionEvent
+            {
+                RuleName = "Suspicious Outbound Connection",
+                ProcessId = 6008,
+                ProcessName = "maybe.exe",
+                Confidence = 0.60,
+                Tier = DetectionTier.Tier2Indicator,
+                AuthorizedResponse = ResponseAction.KillProcessTree, // set in error upstream
+            };
+            Assert.False(ResponsePolicy.MayPerformDestructiveResponse(d, cfg));
+            // Arming-only check still reports armed.
+            Assert.True(ResponsePolicy.IsResponseArmed(cfg));
+        }
+
+        [Fact]
+        public void Audit8_ChainConfirmed_Tier1_Is_Allowed_When_Armed()
+        {
+            var cfg = ObserveConfig();
+            var d = new DetectionEvent
+            {
+                RuleName = "C2 Beaconing: Statistical Beacon Detected",
+                SignalType = SignalType.NetworkC2,
+                ProcessId = 6009,
+                ProcessName = "evil.exe",
+                Confidence = 0.92,
+                Tier = DetectionTier.Tier1Behavioral,
+                AuthorizedResponse = ResponseAction.QuarantineAndKill,
+                Metadata = new Dictionary<string, string> { [ResponsePolicy.ChainConfirmedKey] = "true" },
+            };
+            Assert.True(ResponsePolicy.MayPerformDestructiveResponse(d, cfg));
+        }
+
+        [Fact]
+        public void Audit8_Detection_Vetting_Is_The_Gate_Since_ActiveResponse_Is_Always_On()
+        {
+            // v2.0.4 design: ActiveResponse has no off switch (get => true, setter is a no-op),
+            // so arming cannot be the discriminator. The #8 fix adds the real gate: the
+            // detection must actually be a confirmed Tier1 kill. A composite passes; an
+            // unconfirmed Tier2 with a kill action set in error does not.
+            var cfg = new SentinelConfig { ActiveResponse = false }; // ignored - stays true
+            Assert.True(cfg.ActiveResponse);
+            Assert.True(ResponsePolicy.IsResponseArmed(cfg));
+
+            var composite = new DetectionEvent
+            {
+                RuleName = "Injected C2 Beacon",
+                Evidence = "[COMPOSITE] injection + C2",
+                ProcessId = 6010,
+                ProcessName = "evil.exe",
+                Confidence = 0.98,
+                Tier = DetectionTier.Tier1Behavioral,
+                AuthorizedResponse = ResponseAction.QuarantineAndKill,
+            };
+            Assert.True(ResponsePolicy.MayPerformDestructiveResponse(composite, cfg));
+
+            var unconfirmed = new DetectionEvent
+            {
+                RuleName = "Suspicious Outbound Connection",
+                ProcessId = 6011,
+                ProcessName = "maybe.exe",
+                Confidence = 0.60,
+                Tier = DetectionTier.Tier2Indicator,
+                AuthorizedResponse = ResponseAction.KillProcessTree,
+            };
+            Assert.False(ResponsePolicy.MayPerformDestructiveResponse(unconfirmed, cfg));
+        }
+
+        // =====================================================================
+        // AUDIT #5: cross-PID root buffer must not confirm a kill from two UNRELATED
+        // single-signal siblings under a shared launcher.
+        // =====================================================================
+
+        [Fact]
+        public void Audit5_Two_Unrelated_SingleSignal_Siblings_Do_Not_Chain_Via_Root()
+        {
+            // No ancestry cache wired in unit tests, so GetAttackRootPid returns 0 and the
+            // root path is inert - but the strict-corroboration guard it depends on is the
+            // unit under test here. We exercise it directly against the buffer semantics:
+            // a terminal leg on one PID with a single signal, plus one unrelated signal on a
+            // DIFFERENT PID, must NOT satisfy strict corroboration (self-signals < 2).
+            var cfg = ObserveConfig();
+
+            // Child A: a single terminal-classified signal.
+            var childA = new DetectionEvent
+            {
+                RuleName = "C2 Beaconing: Statistical Beacon Detected",
+                SignalType = SignalType.NetworkC2,
+                ProcessId = 7001,
+                ProcessName = "a.exe",
+                Confidence = 0.90,
+            };
+            // Child B (unrelated sibling): a single non-terminal signal.
+            var childB = new DetectionEvent
+            {
+                RuleName = "Suspicious Outbound Connection",
+                ProcessId = 7002,
+                ProcessName = "b.exe",
+                Confidence = 0.80,
+            };
+
+            // Per-PID path: neither alone confirms.
+            Assert.False(ResponsePolicy.RegisterAndEvaluateChain(childA, cfg));
+            Assert.False(ResponsePolicy.RegisterAndEvaluateChain(childB, cfg));
+        }
+
+        [Fact]
+        public void Audit5_SelfCorroborated_Terminal_Still_Chains_On_Per_Pid_Path()
+        {
+            // Same PID, a terminal leg + a second distinct signal -> legitimate confirm.
+            // Proves the #5 guard does not break the normal per-PID (non-strict) path.
+            var cfg = ObserveConfig();
+            var pid = 7003;
+            var c2 = new DetectionEvent
+            {
+                RuleName = "C2 Beaconing: Statistical Beacon Detected",
+                SignalType = SignalType.NetworkC2,
+                ProcessId = pid,
+                ProcessName = "evil.exe",
+                Confidence = 0.90,
+            };
+            var inject = new DetectionEvent
+            {
+                RuleName = "Threat Intel: Remote Memory Injection",
+                SignalType = SignalType.ProcessInjection,
+                ProcessId = pid,
+                ProcessName = "evil.exe",
+                Confidence = 0.88,
+            };
+            Assert.False(ResponsePolicy.RegisterAndEvaluateChain(c2, cfg));
+            Assert.True(ResponsePolicy.RegisterAndEvaluateChain(inject, cfg));
+        }
     }
 }

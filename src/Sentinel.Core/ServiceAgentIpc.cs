@@ -529,6 +529,16 @@ namespace Sentinel.Core
                         // Remediate a distrusted certificate: remove from Root, pin to Disallowed.
                         // Mirrors Registry\Certificates.reg. Fail-closed: CertRemediator refuses
                         // any thumbprint not on the authoritative distrust list.
+                        // SECURITY (audit #3): removing a certificate from the machine Root store
+                        // is privileged host mutation with the same blast radius as DNS repair,
+                        // so it requires an elevated administrator caller - matching the dns_*
+                        // gate. Possession of the IPC token (granted to any interactive session)
+                        // is necessary but NOT sufficient for this operation.
+                        if (!IsAdministratorClient(pipe))
+                        {
+                            response = JsonSerializer.Serialize(new { ok = false, error = "Elevated administrator approval is required." });
+                            break;
+                        }
                         response = HandleCertDistrust(body);
                         break;
                     default:
@@ -553,7 +563,21 @@ namespace Sentinel.Core
                 pipe.RunAsClient(() =>
                 {
                     using var identity = WindowsIdentity.GetCurrent(true);
-                    administrator = identity != null && new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                    if (identity == null)
+                        return;
+
+                    // SECURITY (audit #4): the UAC boundary. A non-elevated admin's process
+                    // carries the *filtered* token, whose Administrators group is present only
+                    // in a deny-only (SE_GROUP_USE_FOR_DENY_ONLY) state - IsInRole can still
+                    // report true for it on some configurations. To genuinely require elevation
+                    // (not merely admin-group membership), also check the token elevation type:
+                    // a Limited token (split-token admin who has NOT elevated) is rejected even
+                    // if IsInRole(Administrator) is true. Default/Full tokens pass.
+                    bool inRole = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                    if (!inRole)
+                        return;
+
+                    administrator = IsTokenElevated(identity.Token);
                 });
             }
             catch (System.Security.SecurityException) { return false; }
@@ -561,6 +585,43 @@ namespace Sentinel.Core
             catch (IOException) { return false; }
             catch (InvalidOperationException) { return false; }
             return administrator;
+        }
+
+        private enum TokenElevationType { Default = 1, Full = 2, Limited = 3 }
+        private const int TokenInformationElevationType = 18;
+
+        [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetTokenInformation(
+            IntPtr tokenHandle,
+            int tokenInformationClass,
+            out int tokenInformation,
+            int tokenInformationLength,
+            out int returnLength);
+
+        /// <summary>
+        /// Returns true when the token represents an elevated (Full) or non-split
+        /// (Default) admin context, and false for a Limited split token (admin who has
+        /// not gone through UAC). Fails closed to false on any error so a privileged op
+        /// is never authorized on an inconclusive elevation check.
+        /// </summary>
+        private static bool IsTokenElevated(IntPtr tokenHandle)
+        {
+            try
+            {
+                if (tokenHandle == IntPtr.Zero)
+                    return false;
+                if (!GetTokenInformation(tokenHandle, TokenInformationElevationType,
+                        out int typeValue, sizeof(int), out _))
+                    return false;
+                var elevationType = (TokenElevationType)typeValue;
+                // Full = elevated split token. Default = non-split (e.g. built-in Administrator
+                // or UAC disabled) where the single token is already fully privileged.
+                // Limited = split-token admin that has NOT elevated -> reject.
+                return elevationType == TokenElevationType.Full
+                    || elevationType == TokenElevationType.Default;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -663,7 +724,8 @@ namespace Sentinel.Core
             {
                 using var pipe = new NamedPipeClientStream(
                     ".", ServiceAgentIpc.InstancePipeName, PipeDirection.InOut, PipeOptions.Asynchronous,
-                    op == "dns_repair" || op == "dns_restore" || op == "dns_recover" ? TokenImpersonationLevel.Identification : TokenImpersonationLevel.None);
+                    op == "dns_repair" || op == "dns_restore" || op == "dns_recover" || op == "cert_distrust"
+                        ? TokenImpersonationLevel.Identification : TokenImpersonationLevel.None);
                 var connectTask = pipe.ConnectAsync(timeoutMs);
                 await connectTask.ConfigureAwait(false);
                 if (!pipe.IsConnected) return null;

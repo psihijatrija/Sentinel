@@ -1,6 +1,6 @@
 # Sentinel documentation
 
-Current source version: **3.3.3** (`version.txt`). This patch preserves unresolved actionable incidents and prevents older incident cleanup from deleting newer PID mappings. The [engineering gates](ENGINEERING_GATES.md) describe the evidence still required for higher ratings. Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
+Current source version: **3.3.5** (`version.txt`). This patch is a red-team hardening pass on the kill-authority path and the Service/Agent IPC boundary: terminal classification no longer reads attacker-controlled evidence text, `cert_distrust` requires elevated administrator approval, the UAC boundary check verifies token elevation, cross-process chain confirmation requires self-corroboration, and the final destructive-response gate vets the detection rather than only the arming state. See the [changelog](CHANGELOG.md) and [design](design.md). The [engineering gates](ENGINEERING_GATES.md) describe the evidence still required for higher ratings. Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
 
 ## Current guidance
 
