@@ -27,28 +27,15 @@ namespace Sentinel.Tests
         {
             tempDir = Path.Combine(Path.GetTempPath(), "sentinel_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(tempDir);
-            var eventLogger = new JsonlEventLogger(Path.Combine(tempDir, "events.jsonl"));
-            var metrics = new SentinelMetrics();
-            var responseEngine = new AdvancedResponseEngine(
-                new SentinelConfig { ActiveResponse = false }, metrics, eventLogger, new QuarantineManager(tempDir));
-            var cache = new SecureCacheStore(tempDir);
-            var iocScanner = new IoCScanner(cache);
-            var reputation = new HashReputationService(cache, new ThreatReportingConfig(), NullLogger<HashReputationService>.Instance);
-            var signerTrust = new SignerTrustService(NullLogger<SignerTrustService>.Instance);
-            var allowlist = new AllowlistService(cache, NullLogger<AllowlistService>.Instance, signerTrust);
-            var fileRep = new FileReputationEngine(reputation, signerTrust, cache, NullLogger<FileReputationEngine>.Instance);
-            var scoring = new ScoringEngine(allowlist, new SafeProcessExemptionRegistry(), NullLogger<ScoringEngine>.Instance);
-            var detectionEngine = new DetectionEngine(
-                new System.Collections.Generic.List<IDetectionRule>(), metrics, eventLogger, responseEngine,
-                iocScanner, reputation, fileRep, new BehavioralCorrelationEngine(), scoring,
-                NullLogger<DetectionEngine>.Instance);
-            return new MonitorRegistry(detectionEngine, eventLogger, NullLogger<MonitorRegistry>.Instance);
+            // State/progress tests do not emit detections or journal events. Avoid constructing
+            // the response engine and Windows ACL-backed logger for an isolated registry test.
+            return new MonitorRegistry(null!, null!, NullLogger<MonitorRegistry>.Instance);
         }
 
         [Fact]
         public void DisabledMonitor_IsReportedDisabled_NotRunning_NotFailed()
         {
-            var reg = NewRegistry(out var dir);
+            using var reg = NewRegistry(out var dir);
             try
             {
                 reg.Register("OptionalX", MonitorCategory.ThreatIntel, null);
@@ -69,7 +56,7 @@ namespace Sentinel.Tests
         [Fact]
         public void Heartbeat_DoesNotResurrectADisabledMonitor()
         {
-            var reg = NewRegistry(out var dir);
+            using var reg = NewRegistry(out var dir);
             try
             {
                 reg.Register("OptionalX", MonitorCategory.ThreatIntel, null);
@@ -93,6 +80,77 @@ namespace Sentinel.Tests
             Assert.IsAssignableFrom<IDisabledMonitor>(m);
             Assert.Equal("EtwThreatIntelMonitor", m.Name);
             Assert.False(string.IsNullOrWhiteSpace(((IDisabledMonitor)m).DisabledReason));
+        }
+
+        [Fact]
+        public void StartupCompletionDoesNotBecomeFakeRunningAfterHeartbeat()
+        {
+            using var reg = NewRegistry(out var dir);
+            try
+            {
+                reg.Register("OfflineLoader", MonitorCategory.ThreatIntel);
+                reg.MarkCompleted("OfflineLoader", "Loaded offline bundle; no live feed.");
+                reg.Heartbeat("OfflineLoader");
+                reg.SupervisorHeartbeat("OfflineLoader");
+                Assert.Equal(0, reg.GetStats().Running);
+                Assert.Equal(1, reg.GetStats().Completed);
+                Assert.Empty(reg.GetUnhealthyMonitors());
+            }
+            finally { TryDelete(dir); }
+        }
+
+        [Fact]
+        public void SupervisorLivenessCannotClearACollectionFailure()
+        {
+            using var reg = NewRegistry(out var dir);
+            try
+            {
+                reg.Register("Dns", MonitorCategory.NetworkMonitoring);
+                reg.MarkStarted("Dns");
+                reg.ReportProgress("Dns", new SensorProgressSnapshot { State = "Failed", Error = "Access denied" });
+                reg.SupervisorHeartbeat("Dns");
+                Assert.Equal(1, reg.GetStats().Running);
+                Assert.Equal(1, reg.GetStats().Unhealthy);
+                Assert.Single(reg.GetUnhealthyMonitors());
+            }
+            finally { TryDelete(dir); }
+        }
+
+        [Fact]
+        public void WatchdogGracePreservesObservedHeartbeatEvidence()
+        {
+            using var reg = NewRegistry(out var dir);
+            try
+            {
+                var old = DateTimeOffset.UtcNow.AddMinutes(-4);
+                for (int i = 0; i < 4; i++)
+                {
+                    reg.Register("Stale" + i, MonitorCategory.SystemIntegrity);
+                    reg.MarkStarted("Stale" + i);
+                }
+                foreach (var status in reg.GetAllStatuses()) status.LastHeartbeat = old;
+                typeof(MonitorRegistry).GetMethod("WatchdogTick", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.Invoke(reg, new object?[] { null });
+                Assert.All(reg.GetAllStatuses(), status => Assert.Equal(old, status.LastHeartbeat));
+                Assert.Equal(4, reg.GetStats().Unhealthy);
+            }
+            finally { TryDelete(dir); }
+        }
+
+        [Fact]
+        public void VerifiedWorkerCanRecoverSchedulingTimeoutWithoutErasingCollectionError()
+        {
+            using var reg = NewRegistry(out var dir);
+            try
+            {
+                reg.Register("Worker", MonitorCategory.SystemIntegrity);
+                reg.MarkFailed("Worker", new InvalidOperationException("Heartbeat timeout (200s)"));
+                reg.ReportProgress("Worker", new SensorProgressSnapshot { State = "Failed", Error = "Channel absent" });
+                reg.SupervisorHeartbeat("Worker", workerVerified: true);
+                Assert.Equal(1, reg.GetStats().Running);
+                Assert.Equal(1, reg.GetStats().Unhealthy);
+            }
+            finally { TryDelete(dir); }
         }
 
         private static void TryDelete(string dir)

@@ -206,10 +206,8 @@ namespace Sentinel.Core
         /// </summary>
         public VpnShieldConfig VpnShield { get; set; } = new();
         // Optional modern detection extensions
-        // NOTE: EnableIntelThreatIntel stays FALSE by default on purpose - IntelFeedUrl below is
-        // a PLACEHOLDER (example.com). Enabling it without a real feed URL just polls a dead
-        // host. Set a real IntelFeedUrl via config and flip this to true to use it.
-        public bool EnableIntelThreatIntel { get; set; } = false;
+        // Local process-memory injection scanner. It does not use an online IOC feed.
+        public bool EnableIntelThreatIntel { get; set; } = true;
         public string IntelFeedUrl { get; set; } = "https://intel-ti-feed.example.com/iocs.json";
         // NOTE: these two flags are currently NOT read by any consumer (no wired monitor/engine
         // references them). Left FALSE so the config does not advertise behavior that does not

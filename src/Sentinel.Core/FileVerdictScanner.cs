@@ -10,8 +10,10 @@ using Microsoft.Extensions.Logging;
 
 namespace Sentinel.Core
 {
-    public class FileVerdictScanner : BackgroundService
+    public class FileVerdictScanner : BackgroundService, ISensorProgressSource
     {
+        public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(30))
+            { Scope = "File watcher subscription checks; does not prove every file was delivered/scanned. Overflow faults the supervised worker for restart and reconciliation." };
         private readonly HashReputationService _reputationService;
         private readonly FileVerdictAds _verdictAds;
         private readonly FileReputationEngine _reputationEngine;
@@ -102,7 +104,11 @@ namespace Sentinel.Core
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            stoppingToken = lifetime.Token;
+            ReleaseWatchers(); // a group restart must not accumulate duplicate subscriptions
             _logger.LogInformation("[FileVerdictScanner] Starting lazy verdict scan and file watchers...");
+            string? startupError = null;
 
             // Start drive watchers for all scannable file types - PRIORITY: new files scanned immediately
             var drives = DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady);
@@ -120,17 +126,73 @@ namespace Sentinel.Core
                     };
                     watcher.Created += OnFileCreated;
                     watcher.Renamed += OnFileRenamed;
-                    watcher.EnableRaisingEvents = true;
+                    watcher.Error += OnWatcherError;
                     _watchers.Add(watcher);
+                    watcher.EnableRaisingEvents = true;
                 }
                 catch (Exception ex)
                 {
+                    startupError = $"File watcher unavailable for {drive.Name}: {ex.Message}";
+                    Progress.Failed(startupError);
                     _logger.LogWarning(ex, "Failed to start FileSystemWatcher for drive {Drive}", drive.Name);
                 }
             }
 
             // Lazy background walk - scans every file on every NTFS volume, skipping those already marked
-            _ = Task.Run(async () => await WalkDrivesAsync(stoppingToken), stoppingToken);
+            var walk = Task.Run(() => WalkDrivesAsync(stoppingToken), stoppingToken);
+            try
+            {
+                if (startupError != null) throw new InvalidOperationException(startupError);
+                Progress.Succeeded();
+                await SuperviseWatchersAsync(walk, () =>
+                {
+                    var error = Progress.Snapshot().Error;
+                    if (error != null) throw new InvalidOperationException(error);
+                    if (_watchers.Count == 0 || _watchers.Any(w => !w.EnableRaisingEvents))
+                    {
+                        Progress.Failed("No complete set of active file watcher subscriptions.");
+                        throw new InvalidOperationException(Progress.Snapshot().Error);
+                    }
+                    Progress.Succeeded();
+                }, stoppingToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lifetime.Cancel();
+                ReleaseWatchers();
+                try { await walk.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { /* normal worker cancellation */ }
+            }
+        }
+
+        internal static async Task SuperviseWatchersAsync(Task initialWalk, Action verifySubscriptions, CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (initialWalk.IsFaulted) await initialWalk.ConfigureAwait(false);
+                verifySubscriptions();
+                // Finishing the initial scan does not finish real-time file watching.
+                await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            }
+        }
+
+        private void ReleaseWatchers()
+        {
+            foreach (var watcher in _watchers)
+            {
+                watcher.Created -= OnFileCreated;
+                watcher.Renamed -= OnFileRenamed;
+                watcher.Error -= OnWatcherError;
+                watcher.Dispose();
+            }
+            _watchers.Clear();
+        }
+
+        private void OnWatcherError(object sender, ErrorEventArgs e)
+        {
+            var error = e.GetException();
+            Progress.Failed("File watcher lost coverage: " + error.Message);
+            _logger.LogWarning(error, "File watcher overflow/failure; file coverage requires reconciliation");
         }
 
         private static bool IsScannable(string filePath)
@@ -616,12 +678,7 @@ namespace Sentinel.Core
         {
             _apiThrottle.Dispose();
             _scanTaskThrottle.Dispose();
-            foreach (var watcher in _watchers)
-            {
-                watcher.Created -= OnFileCreated;
-                watcher.Renamed -= OnFileRenamed;
-                watcher.Dispose();
-            }
+            ReleaseWatchers();
             base.Dispose();
         }
     }

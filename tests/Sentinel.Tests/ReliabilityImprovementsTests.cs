@@ -238,7 +238,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task OptionalMonitorThatCompletesIsNotRestartedForever()
+        public async Task DeclaredStartupTaskThatCompletesIsNotRestartedForever()
         {
             using var monitor = new OptionalMonitor();
             using var group = new MonitorGroup(new MonitorGroupConfig
@@ -255,8 +255,9 @@ namespace Sentinel.Tests
             await group.StopAsync(CancellationToken.None);
         }
 
-        private sealed class OptionalMonitor : BackgroundService
+        private sealed class OptionalMonitor : BackgroundService, IMonitorStartupTask
         {
+            public string CompletionDescription => "Test startup operation completed.";
             public int Starts;
             protected override Task ExecuteAsync(CancellationToken stoppingToken)
             {

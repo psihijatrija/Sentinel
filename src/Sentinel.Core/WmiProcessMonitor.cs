@@ -24,7 +24,18 @@ namespace Sentinel.Core
         /// When true, WMI process monitoring is active (ETW failed or hasn't started).
         /// Set to false by EtwProcessMonitor once ETW session is processing events.
         /// </summary>
+        public bool IsDisabled => _disabled;
         public bool IsActive => !_disabled && _watcher != null;
+        private long _lastSnapshotUtcTicks;
+        public bool IsSnapshotHealthy => !_disabled && Interlocked.Read(ref _lastSnapshotUtcTicks) > 0 &&
+            DateTime.UtcNow - new DateTime(Interlocked.Read(ref _lastSnapshotUtcTicks), DateTimeKind.Utc) < TimeSpan.FromSeconds(10);
+
+        public void Enable()
+        {
+            if (!_disabled) return;
+            _disabled = false;
+            Start();
+        }
 
         public WmiProcessMonitor(
             TelemetryFusionEngine fusionEngine,
@@ -47,6 +58,8 @@ namespace Sentinel.Core
         public void Disable()
         {
             _disabled = true;
+            _fastPollTimer?.Dispose();
+            _fastPollTimer = null;
             try
             {
                 _watcher?.Stop();
@@ -164,6 +177,17 @@ namespace Sentinel.Core
                         _ancestryCache.RecordProcessStart(pid, 0, name, imagePath);
 
                         _behavioralBaseline?.RecordProcess(name, imagePath, 0, "");
+                        // With no WMI watcher, snapshots are the actual collection path.
+                        // Parent/command-line are unknown rather than fabricated.
+                        if (_watcher == null)
+                        {
+                            var context = _fusionEngine.FeedEvent(new ProcessTelemetry
+                            {
+                                Type = "process", ProcessId = pid, ProcessName = name,
+                                ImagePath = imagePath, Timestamp = DateTime.UtcNow
+                            });
+                            _detectionEngine.SubmitTelemetry(context);
+                        }
                     }
                     catch { }
                     finally
@@ -171,8 +195,9 @@ namespace Sentinel.Core
                         proc.Dispose();
                     }
                 }
+                Interlocked.Exchange(ref _lastSnapshotUtcTicks, DateTime.UtcNow.Ticks);
             }
-            catch { }
+            catch (Exception ex) { Debug.WriteLine($"Process snapshot failed: {ex.Message}"); }
         }
 
         private void OnProcessStarted(object sender, EventArrivedEventArgs e)

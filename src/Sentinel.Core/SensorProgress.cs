@@ -12,6 +12,8 @@ namespace Sentinel.Core
         private DateTimeOffset? _lastSuccess;
         private DateTimeOffset? _gapStarted;
         private long _cycles;
+        private long _observations;
+        public string Scope { get; set; } = "Collection progress only; does not prove complete telemetry coverage";
         private string? _error;
 
         public SensorProgress(TimeSpan maximumSilence, Func<DateTimeOffset>? utcNow = null)
@@ -21,14 +23,14 @@ namespace Sentinel.Core
             _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         }
 
-        public void Succeeded()
+        public void Succeeded(long observations = 0)
         {
             lock (_gate)
             {
                 var now = _utcNow();
                 if (_lastSuccess.HasValue && now - _lastSuccess.Value > _maximumSilence)
                     _gapStarted ??= _lastSuccess.Value + _maximumSilence;
-                _lastSuccess = now; _cycles++; _error = null;
+                _lastSuccess = now; _cycles++; _observations += observations; _error = null;
             }
         }
 
@@ -47,7 +49,7 @@ namespace Sentinel.Core
                 return new SensorProgressSnapshot
                 {
                     State = _error != null ? "Failed" : stale ? "Stale" : _lastSuccess.HasValue ? "Healthy" : "Unknown",
-                    LastSuccess = _lastSuccess, SuccessfulCycles = _cycles, Error = _error,
+                    LastSuccess = _lastSuccess, SuccessfulCycles = _cycles, Observations = _observations, Scope = Scope, Error = _error,
                     GapStarted = _gapStarted, MaximumSilenceSeconds = _maximumSilence.TotalSeconds
                 };
             }
@@ -75,6 +77,7 @@ namespace Sentinel.Core
         public string Scope { get; set; } = "Collection progress only; does not prove complete telemetry coverage";
         public DateTimeOffset? LastSuccess { get; set; }
         public long SuccessfulCycles { get; set; }
+        public long Observations { get; set; }
         public double MaximumSilenceSeconds { get; set; }
         public DateTimeOffset? GapStarted { get; set; }
         public string? Error { get; set; }

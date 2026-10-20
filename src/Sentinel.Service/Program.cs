@@ -496,19 +496,22 @@ namespace Sentinel.Service
                     services.AddSingleton<SentinelOrchestrator>();
 
                     // IMonitor implementations (started by SentinelService)
+                    services.AddSingleton<IDnsEventLogSource, WindowsDnsEventSource>();
+                    services.AddSingleton<IRealtimeDnsTelemetry>(sp => sp.GetRequiredService<EtwEventDispatcher>());
+                    services.AddSingleton<IDnsEventSource, UnifiedDnsEventSource>();
                     services.AddSingleton<IMonitor, DnsQueryMonitor>();
                     services.AddSingleton<IMonitor, EtwProcessMonitor>();
 
                     // Conditional registration for optional monitors
-                    if (config.EnableIntelThreatIntel && SystemCapabilities.EtwAvailable)
-                        services.AddSingleton<EtwThreatIntelMonitor>();
+                    if (config.EnableIntelThreatIntel)
+                        services.AddSingleton<IMonitor, EtwThreatIntelMonitor>();
                     else
-                        services.AddSingleton<IMonitor, DisabledMonitor<EtwThreatIntelMonitor>>();
+                        services.AddSingleton<IMonitor>(sp => new DisabledMonitor<EtwThreatIntelMonitor>(
+                            sp.GetRequiredService<ILogger<DisabledMonitor<EtwThreatIntelMonitor>>>(),
+                            "Local injection scanner explicitly disabled by EnableIntelThreatIntel=false."));
 
-                    if (SystemCapabilities.WmiAvailable)
-                        services.AddSingleton<WmiProcessMonitor>();
-                    else
-                        services.AddSingleton<IMonitor, DisabledMonitor<WmiProcessMonitor>>();
+                    // The process snapshot fallback does not require WMI or Event Log.
+                    services.AddSingleton<WmiProcessMonitor>();
 
                     services.AddSingleton<FileActivityMonitor>();
                     services.AddSingleton<NetworkMonitor>();

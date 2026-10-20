@@ -75,7 +75,7 @@ namespace Sentinel.Core
                 _states[monitor] = new MonitorState();
                 // Register with the health registry up front so the dashboard reflects
                 // the full monitor roster even before staggered startup completes.
-                _registry?.Register(GetMonitorName(monitor), _config.Category);
+                _registry?.Register(GetMonitorName(monitor), _config.Category, progressSource: monitor as ISensorProgressSource);
             }
         }
 
@@ -145,13 +145,21 @@ namespace Sentinel.Core
                         background.ExecuteTask is { IsCompleted: true } completed)
                     {
                         state.IsRunning = false;
+                        if (completed.Status == TaskStatus.RanToCompletion && monitor is IMonitorStartupTask startup)
+                        {
+                            state.Completed = true;
+                            _registry?.MarkCompleted(GetMonitorName(monitor), startup.CompletionDescription);
+                            _logger.LogInformation("Startup task {Monitor} completed: {Reason}", GetMonitorName(monitor), startup.CompletionDescription);
+                            continue;
+                        }
                         if (completed.Status == TaskStatus.RanToCompletion)
                         {
-                            // Optional sensors may deliberately exit on unsupported/debloated
-                            // Windows. Do not restart them forever or claim active coverage.
+                            // An optional worker may exit on stripped Windows. Preserve the gap,
+                            // but do not restart a permanently unsupported source indefinitely.
                             state.Completed = true;
-                            _registry?.MarkStopped(GetMonitorName(monitor));
-                            _logger.LogInformation("Monitor {Monitor} completed; active coverage unavailable", GetMonitorName(monitor));
+                            const string reason = "Worker exited without continuous coverage; inspect diagnostic log for unavailable Windows components or initialization failure.";
+                            _registry?.MarkUnavailable(GetMonitorName(monitor), reason);
+                            _logger.LogWarning("Monitor {Monitor} unavailable: {Reason}", GetMonitorName(monitor), reason);
                             continue;
                         }
                         state.Failed = true;
@@ -163,7 +171,7 @@ namespace Sentinel.Core
                     if (state.IsRunning)
                     {
                         // Liveness is separate from successful sensor collection.
-                        _registry?.SupervisorHeartbeat(GetMonitorName(monitor));
+                        _registry?.SupervisorHeartbeat(GetMonitorName(monitor), monitor is BackgroundService { ExecuteTask: { IsCompleted: false } });
                         if (monitor is ISensorProgressSource source)
                             _registry?.ReportProgress(GetMonitorName(monitor), source.Progress.Snapshot());
                         continue;
@@ -241,7 +249,7 @@ namespace Sentinel.Core
             finally
             {
                 state.IsRunning = false;
-                _registry?.MarkStopped(GetMonitorName(monitor));
+                if (!state.Completed) _registry?.MarkStopped(GetMonitorName(monitor));
 
                 if (dispose && monitor is IDisposable disposable)
                 {

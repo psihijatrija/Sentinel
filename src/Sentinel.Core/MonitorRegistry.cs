@@ -36,25 +36,8 @@ namespace Sentinel.Core
         private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan CriticalTimeout = TimeSpan.FromMinutes(3);
 
-        // Liveness-vs-stall discrimination.
-        //
-        // The watchdog runs on a Timer; when the whole process stalls (GC pause under memory
-        // pressure, thread-pool starvation, a long blocking call), the Timer callback is itself
-        // delayed. When it finally fires it sees EVERY monitor as stale at once and - before
-        // this guard - failed and restart-churned the entire fleet, permanently losing the few
-        // monitors that then exhausted their restart cap. That is a false positive: a frozen
-        // process cannot distinguish a dead monitor from a starved heartbeat loop.
-        //
-        // Two guards make a systemic stall a single transient event instead of a fleet wipe:
-        //  1. Tick-gap guard: if the gap since the previous tick is itself past the critical
-        //     timeout, the watchdog (and therefore the heartbeat loop) was frozen. Grant one
-        //     grace tick so live monitors can re-heartbeat before any are judged.
-        //  2. Mass-staleness guard: if more than this fraction of running monitors are stale in
-        //     a single tick, that is a process-wide stall, not simultaneous independent deaths;
-        //     log once and grant a grace tick rather than failing them all.
-        private static readonly double MassStaleFraction = 0.5;
-        private DateTimeOffset _lastTickUtc = DateTimeOffset.UtcNow;
-        private bool _graceTickPending;
+        private readonly object _watchdogGate = new();
+        private readonly WatchdogGracePolicy _grace = new(DateTimeOffset.UtcNow);
 
         // After a monitor runs healthy for this long since its last failure, its accrued
         // failure count is forgiven so the restart giveup cap only reflects RAPID repeated
@@ -75,7 +58,7 @@ namespace Sentinel.Core
         /// <summary>
         /// Registers a monitor for supervision. Called during startup sequencing.
         /// </summary>
-        public void Register(string name, MonitorCategory category, object? serviceInstance = null)
+        public void Register(string name, MonitorCategory category, object? serviceInstance = null, ISensorProgressSource? progressSource = null)
         {
             _monitors[name] = new MonitorStatus
             {
@@ -85,7 +68,8 @@ namespace Sentinel.Core
                 RegisteredAt = DateTimeOffset.UtcNow,
                 LastHeartbeat = DateTimeOffset.UtcNow,
                 ServiceInstance = serviceInstance,
-                Progress = serviceInstance is ISensorProgressSource ? new SensorProgressSnapshot() :
+                ProgressSource = progressSource ?? serviceInstance as ISensorProgressSource,
+                Progress = progressSource != null || serviceInstance is ISensorProgressSource ? new SensorProgressSnapshot() :
                     new SensorProgressSnapshot { State = "Unsupported", Scope = "This sensor does not expose collection progress; task liveness is reported separately" }
             };
             _logger.LogDebug("[MonitorRegistry] Registered: {Name} ({Category})", name, category);
@@ -102,7 +86,7 @@ namespace Sentinel.Core
                 // A disabled or stopped monitor is in a truthful terminal state; a stray
                 // heartbeat (e.g. the service's blanket owned-monitor heartbeat loop) must not
                 // silently resurrect it or fake liveness on something that is not running.
-                if (status.State == MonitorState.Disabled || status.State == MonitorState.Stopped)
+                if (status.State == MonitorState.Disabled || status.State == MonitorState.Stopped || status.State == MonitorState.Completed || status.State == MonitorState.Unavailable || status.State == MonitorState.Standby)
                     return;
 
                 var nowUtc = DateTimeOffset.UtcNow;
@@ -131,10 +115,18 @@ namespace Sentinel.Core
         }
 
         /// <summary>A supervisor can prove task liveness, never sensor progress.</summary>
-        public void SupervisorHeartbeat(string name)
+        public void SupervisorHeartbeat(string name, bool workerVerified = false)
         {
-            if (_monitors.TryGetValue(name, out var status))
-                status.LastHeartbeat = DateTimeOffset.UtcNow;
+            if (!_monitors.TryGetValue(name, out var status)) return;
+            // Only an observed live worker can recover a watchdog scheduling timeout.
+            // Collection errors remain independent and continue to require attention.
+            if (workerVerified && status.State == MonitorState.Failed &&
+                status.LastError?.StartsWith("Heartbeat timeout", StringComparison.Ordinal) == true)
+            {
+                status.State = MonitorState.Running;
+                status.LastError = null;
+            }
+            if (status.State == MonitorState.Running) status.LastHeartbeat = DateTimeOffset.UtcNow;
         }
 
         public void ReportProgress(string name, SensorProgressSnapshot progress)
@@ -216,7 +208,49 @@ namespace Sentinel.Core
         /// </summary>
         public IReadOnlyList<MonitorStatus> GetAllStatuses()
         {
+            RefreshProgress();
             return _monitors.Values.OrderBy(m => m.Category).ThenBy(m => m.Name).ToList();
+        }
+
+        private void RefreshProgress()
+        {
+            foreach (var status in _monitors.Values)
+                if (status.ProgressSource is ISensorProgressSource source)
+                    status.Progress = source.Progress.Snapshot();
+        }
+
+        public void SetStandby(string name, bool standby, string reason)
+        {
+            if (!_monitors.TryGetValue(name, out var status)) return;
+            if (standby && status.State == MonitorState.Running)
+            {
+                status.State = MonitorState.Standby;
+                status.LastError = reason;
+            }
+            else if (!standby && status.State == MonitorState.Standby)
+            {
+                status.State = MonitorState.Running;
+                status.LastError = null;
+                status.LastHeartbeat = DateTimeOffset.UtcNow;
+            }
+        }
+
+        public void MarkUnavailable(string name, string reason)
+        {
+            if (_monitors.TryGetValue(name, out var status))
+            {
+                status.State = MonitorState.Unavailable;
+                status.LastError = reason;
+            }
+        }
+
+        public void MarkCompleted(string name, string reason)
+        {
+            if (_monitors.TryGetValue(name, out var status))
+            {
+                status.State = MonitorState.Completed;
+                status.LastError = reason;
+            }
         }
 
         /// <summary>
@@ -224,23 +258,35 @@ namespace Sentinel.Core
         /// </summary>
         public IReadOnlyList<MonitorStatus> GetUnhealthyMonitors()
         {
+            RefreshProgress();
             var now = DateTimeOffset.UtcNow;
             return _monitors.Values
-                .Where(m => m.State == MonitorState.Failed || m.Progress.State == "Failed" || m.Progress.State == "Stale" ||
-                           (m.State == MonitorState.Running && now - m.LastHeartbeat > HeartbeatTimeout) ||
+                .Where(m => m.State == MonitorState.Failed || m.State == MonitorState.Unavailable || m.Progress.State == "Failed" || m.Progress.State == "Stale" ||
+                           (m.State == MonitorState.Running && (now - m.LastHeartbeat > HeartbeatTimeout ||
+                               m.Progress.State == "Unknown" && now - m.RegisteredAt > TimeSpan.FromSeconds(30))) ||
                            m.State == MonitorState.Starting && now - m.RegisteredAt > TimeSpan.FromSeconds(30))
                 .ToList();
         }
 
-        public MonitorRegistryStats GetStats() => new()
+        public MonitorRegistryStats GetStats()
         {
-            TotalRegistered = _monitors.Count,
-            Running = _monitors.Count(m => m.Value.State == MonitorState.Running),
-            Failed = _monitors.Count(m => m.Value.State == MonitorState.Failed),
-            Stale = _monitors.Count(m => m.Value.State == MonitorState.Running &&
-                                         DateTimeOffset.UtcNow - m.Value.LastHeartbeat > HeartbeatTimeout),
-            Disabled = _monitors.Count(m => m.Value.State == MonitorState.Disabled)
-        };
+            RefreshProgress();
+            return new MonitorRegistryStats
+            {
+                TotalRegistered = _monitors.Count,
+                Running = _monitors.Count(m => m.Value.State == MonitorState.Running),
+                Failed = _monitors.Count(m => m.Value.State == MonitorState.Failed),
+                Stale = _monitors.Count(m => m.Value.State == MonitorState.Running &&
+                                             DateTimeOffset.UtcNow - m.Value.LastHeartbeat > HeartbeatTimeout),
+                Disabled = _monitors.Count(m => m.Value.State == MonitorState.Disabled),
+                Completed = _monitors.Count(m => m.Value.State == MonitorState.Completed),
+                Standby = _monitors.Count(m => m.Value.State == MonitorState.Standby),
+                Unhealthy = GetUnhealthyMonitors().Count,
+                CollectionHealthy = _monitors.Count(m => m.Value.Progress.State == "Healthy"),
+                CollectionUnverified = _monitors.Count(m => m.Value.State == MonitorState.Running &&
+                    (m.Value.Progress.State == "Unknown" || m.Value.Progress.State == "Unsupported"))
+            };
+        }
 
         // 
         // Watchdog - crash detection and alerting
@@ -248,55 +294,20 @@ namespace Sentinel.Core
 
         private void WatchdogTick(object? state)
         {
+            if (!System.Threading.Monitor.TryEnter(_watchdogGate)) return;
+            try { CheckWatchdog(); }
+            finally { System.Threading.Monitor.Exit(_watchdogGate); }
+        }
+
+        private void CheckWatchdog()
+        {
             var now = DateTimeOffset.UtcNow;
 
-            // --- Guard 1: tick-gap. If the watchdog Timer itself was delayed well past its
-            // interval, the process was stalled and the heartbeat loop could not run either.
-            // Reset every running monitor's heartbeat clock and skip judgment for one tick so
-            // genuinely-live monitors are not failed for a freeze they did not cause.
-            var tickGap = now - _lastTickUtc;
-            _lastTickUtc = now;
-            if (tickGap > CriticalTimeout)
+            int running = _monitors.Values.Count(s => s.State == MonitorState.Running);
+            int stale = _monitors.Values.Count(s => s.State == MonitorState.Running && now - s.LastHeartbeat > CriticalTimeout);
+            if (_grace.ShouldDefer(now, CriticalTimeout, running, stale))
             {
-                _logger.LogWarning(
-                    "[MonitorRegistry] WATCHDOG: process stall detected - {Seconds:F0}s since last tick " +
-                    "(expected ~{Interval:F0}s). Granting a grace tick; not failing monitors this round.",
-                    tickGap.TotalSeconds, WatchdogInterval.TotalSeconds);
-                foreach (var s in _monitors.Values)
-                    if (s.State == MonitorState.Running) s.LastHeartbeat = now;
-                _graceTickPending = true;
-                return;
-            }
-
-            // --- Guard 2: mass-staleness. Count how many running monitors are stale this tick.
-            // If more than MassStaleFraction of them are stale simultaneously, that is a
-            // process-wide stall whose heartbeat starvation was shared, not many independent
-            // monitor deaths. Grant a grace tick instead of a fleet-wide restart storm.
-            int runningCount = 0, staleCount = 0;
-            foreach (var s in _monitors.Values)
-            {
-                if (s.State != MonitorState.Running) continue;
-                runningCount++;
-                if (now - s.LastHeartbeat > CriticalTimeout) staleCount++;
-            }
-            if (runningCount >= 4 && staleCount > runningCount * MassStaleFraction)
-            {
-                _logger.LogWarning(
-                    "[MonitorRegistry] WATCHDOG: {Stale}/{Running} running monitors stale in one tick - " +
-                    "treating as a systemic process stall, not independent deaths. Granting a grace tick.",
-                    staleCount, runningCount);
-                foreach (var s in _monitors.Values)
-                    if (s.State == MonitorState.Running) s.LastHeartbeat = now;
-                _graceTickPending = true;
-                return;
-            }
-
-            // A single grace tick was granted last round after a stall; let heartbeats land
-            // before resuming judgment so a slow-to-reheartbeat monitor is not failed on the
-            // very next tick.
-            if (_graceTickPending)
-            {
-                _graceTickPending = false;
+                _logger.LogWarning("Watchdog scheduling/collection gap: {Stale}/{Running} stale. Deferring restart once; observed heartbeat timestamps are preserved.", stale, running);
                 return;
             }
 
@@ -472,7 +483,10 @@ namespace Sentinel.Core
         // terminal state - NOT a failure. The watchdog never evaluates it and the dashboard
         // reports it separately so a deliberately-off monitor is never counted as "running"
         // nor flagged as "failed/needs attention".
-        Disabled
+        Disabled,
+        Completed,
+        Unavailable,
+        Standby
     }
 
     public enum MonitorCategory
@@ -502,6 +516,8 @@ namespace Sentinel.Core
         public int FailureCount { get; set; }
         public DateTimeOffset? LastFailure { get; set; }
         public string? LastError { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public ISensorProgressSource? ProgressSource { get; set; }
         public object? ServiceInstance { get; set; }
     }
 
@@ -515,5 +531,10 @@ namespace Sentinel.Core
         // absent OS capability). Reported separately so the dashboard can show an honest
         // "N running, M disabled" instead of padding the running count or flagging a failure.
         public int Disabled { get; set; }
+        public int Completed { get; set; }
+        public int Standby { get; set; }
+        public int Unhealthy { get; set; }
+        public int CollectionHealthy { get; set; }
+        public int CollectionUnverified { get; set; }
     }
 }

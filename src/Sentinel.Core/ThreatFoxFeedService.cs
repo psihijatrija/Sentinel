@@ -56,7 +56,7 @@ namespace Sentinel.Core
     /// from the ThreatFox API (abuse.ch). Covers SHA-256 hashes, IPs, and domain indicators.
     /// Thread-safe for concurrent Query calls from DetectionEngine rules.
     /// </summary>
-    public sealed class ThreatFoxFeedService : BackgroundService
+    public sealed class ThreatFoxFeedService : BackgroundService, IMonitorStartupTask
     {
         private readonly IoCScanner _iocScanner;
         private readonly ILogger<ThreatFoxFeedService> _logger;
@@ -69,6 +69,8 @@ namespace Sentinel.Core
         // Domain-specific index for fast O(1) lookup from DnsQueryMonitor
         private readonly ConcurrentDictionary<string, ThreatFoxIoc> _domainStore =
             new(StringComparer.OrdinalIgnoreCase);
+
+        public string CompletionDescription => $"Offline IOC initialization completed: {_store.Count} entries. Online refresh is removed; an empty store provides no IOC matches.";
 
         public int LoadedIocCount      => _store.Count;
         public bool IsLiveFeedActive   { get; private set; }
@@ -148,7 +150,7 @@ namespace Sentinel.Core
             if (!File.Exists(BundlePath))
             {
                 _logger.LogInformation(
-                    "[ThreatFoxFeedService] No offline bundle at {Path} - starting empty until live refresh.",
+                    "[ThreatFoxFeedService] No offline bundle at {Path} - no offline IOC coverage; online refresh is removed.",
                     BundlePath);
                 return;
             }

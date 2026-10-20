@@ -23,11 +23,13 @@ namespace Sentinel.Core.Monitors
     public class DisabledMonitor<T> : IMonitor, IDisabledMonitor where T : class
     {
         private readonly ILogger<DisabledMonitor<T>> _log;
-        public DisabledMonitor(ILogger<DisabledMonitor<T>> log) => _log = log;
+        public DisabledMonitor(ILogger<DisabledMonitor<T>> log, string reason = "No disable reason supplied; configuration requires investigation.")
+        {
+            _log = log;
+            DisabledReason = reason;
+        }
         public string Name => typeof(T).Name;
-        public string DisabledReason =>
-            $"{typeof(T).Name} is not running: its optional feature is switched off by config " +
-            "or a required OS capability is unavailable on this system.";
+        public string DisabledReason { get; }
         public Task StartAsync(CancellationToken ct)
         {
             _log?.LogInformation(
