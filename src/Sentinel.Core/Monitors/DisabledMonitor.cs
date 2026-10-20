@@ -3,18 +3,36 @@ using Microsoft.Extensions.Logging;
 namespace Sentinel.Core.Monitors
 {
     /// <summary>
-    /// Generic no‑op monitor used when a required platform capability is missing.
-    /// It implements <see cref="IMonitor"/> so the DI container can resolve the type,
-    /// but its <c>StartAsync</c> simply logs a warning and returns.
+    /// Marker for an <see cref="IMonitor"/> that is intentionally not running - an optional
+    /// feature switched off by config, or a genuinely-absent OS capability. The service
+    /// registers these in the terminal <c>Disabled</c> state so the watchdog never evaluates
+    /// them and the dashboard reports them honestly as "disabled", never as running or failed.
     /// </summary>
-    public class DisabledMonitor<T> : IMonitor where T : class
+    public interface IDisabledMonitor
+    {
+        /// <summary>Human-readable reason the monitor is not running (shown on the dashboard).</summary>
+        string DisabledReason { get; }
+    }
+
+    /// <summary>
+    /// Generic no‑op monitor used when an optional feature is off or a required platform
+    /// capability is missing. It implements <see cref="IMonitor"/> so the DI container can
+    /// resolve the type, and <see cref="IDisabledMonitor"/> so the service records it as an
+    /// honest "disabled" rather than letting the watchdog flag a non-heartbeating no-op.
+    /// </summary>
+    public class DisabledMonitor<T> : IMonitor, IDisabledMonitor where T : class
     {
         private readonly ILogger<DisabledMonitor<T>> _log;
         public DisabledMonitor(ILogger<DisabledMonitor<T>> log) => _log = log;
         public string Name => typeof(T).Name;
+        public string DisabledReason =>
+            $"{typeof(T).Name} is not running: its optional feature is switched off by config " +
+            "or a required OS capability is unavailable on this system.";
         public Task StartAsync(CancellationToken ct)
         {
-            _log?.LogWarning("{Monitor} disabled – required OS capability is unavailable.", typeof(T).Name);
+            _log?.LogInformation(
+                "{Monitor} is disabled by configuration/capability - not started (this is expected, not a failure).",
+                typeof(T).Name);
             return Task.CompletedTask;
         }
         public Task StopAsync() => Task.CompletedTask;

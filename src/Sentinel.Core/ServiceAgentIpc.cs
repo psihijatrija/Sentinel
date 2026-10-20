@@ -469,6 +469,10 @@ namespace Sentinel.Core
                             monitorsRegistered = stats?.TotalRegistered ?? 0,
                             monitorsRunning = stats?.Running ?? 0,
                             monitorsFailed = stats?.Failed ?? 0,
+                            // Monitors intentionally off (optional feature disabled / capability
+                            // absent). Reported so the dashboard shows an honest breakdown rather
+                            // than treating a deliberately-off monitor as missing or failed.
+                            monitorsDisabled = stats?.Disabled ?? 0,
                             plugins = _plugins.TotalCount,
                             firewallPolicy = _firewallPolicy?.Json
                         });

@@ -706,8 +706,15 @@ function loadStatus() {{
     }});
     apiCall('/api/health', {{}}, function(health) {{
         if (health && health.ok) {{
-            document.getElementById('ov-monitors').textContent =
-                health.monitorsRunning + '/' + health.monitorsRegistered + ' monitors running';
+            // Honest breakdown: the needs-attention denominator must not include monitors
+            // that are intentionally off (optional feature disabled / capability absent).
+            // Show running out of the ACTIVE (expected-to-run) total, and surface the disabled
+            // count separately so a deliberately-off monitor is never read as missing/failed.
+            var disabled = health.monitorsDisabled || 0;
+            var active = health.monitorsRegistered - disabled;
+            var text = health.monitorsRunning + '/' + active + ' monitors running';
+            if (disabled > 0) {{ text += ' (' + disabled + ' disabled by config)'; }}
+            document.getElementById('ov-monitors').textContent = text;
         }}
     }});
 }}

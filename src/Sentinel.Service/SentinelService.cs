@@ -256,8 +256,24 @@ namespace Sentinel.Service
                 try
                 {
                     await monitor.StartAsync(CancellationToken.None);
-                    _monitorRegistry.MarkStarted(monitor.Name);
-                    _logger.LogInformation("Started monitor: {Monitor}", monitor.Name);
+
+                    // An intentionally-disabled monitor (optional feature off, or a genuinely
+                    // absent OS capability) is a no-op that never heartbeats. Record it in the
+                    // honest terminal Disabled state so the watchdog never flags it and the
+                    // dashboard reports it as "disabled", not as running or failed. This is the
+                    // correct fix for the miscounted EtwThreatIntelMonitor: it was never broken,
+                    // it is off by default (EnableIntelThreatIntel=false), but was being counted
+                    // and then watchdog-killed as if it should be running.
+                    if (monitor is Sentinel.Core.Monitors.IDisabledMonitor disabled)
+                    {
+                        _monitorRegistry.MarkDisabled(monitor.Name, disabled.DisabledReason);
+                        _logger.LogInformation("Monitor disabled (expected): {Monitor}", monitor.Name);
+                    }
+                    else
+                    {
+                        _monitorRegistry.MarkStarted(monitor.Name);
+                        _logger.LogInformation("Started monitor: {Monitor}", monitor.Name);
+                    }
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)

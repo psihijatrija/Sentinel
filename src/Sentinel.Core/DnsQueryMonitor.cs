@@ -90,7 +90,12 @@ namespace Sentinel.Core
             _pollInterval = TimeSpan.FromSeconds(config.DnsPollIntervalSeconds > 0 ? config.DnsPollIntervalSeconds : 15);
         }
 
-        private const string DnsChannelName = "Microsoft-Windows-DNS Client Events/Operational";
+        // The real Windows log/channel name is "Microsoft-Windows-DNS-Client/Operational"
+        // (hyphens, owning provider "Microsoft-Windows-DNS-Client"). The previous literal
+        // "Microsoft-Windows-DNS Client Events/Operational" does not exist on Windows, so BOTH
+        // the read query and the enable attempt silently failed ("channel could not be found")
+        // and the monitor was permanently blind. Verified against Get-WinEvent -ListLog.
+        private const string DnsChannelName = "Microsoft-Windows-DNS-Client/Operational";
 
         /// <summary>
         /// Whether enabling the DNS Client Operational analytic channel (a proactive host
@@ -178,7 +183,7 @@ namespace Sentinel.Core
                     try
                     {
                         var query = new System.Diagnostics.Eventing.Reader.EventLogQuery(
-                            "Microsoft-Windows-DNS Client Events/Operational",
+                            DnsChannelName,
                             System.Diagnostics.Eventing.Reader.PathType.LogName,
                             "*[System[(EventID=3006 or EventID=3008)]]");
 

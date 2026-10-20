@@ -50,10 +50,14 @@ namespace Sentinel.Core
             "EventLog-Security", "EventLog-System", "EventLog-Application",
             "SentinelUnifiedTrace", "DiagTrack", "Circular Kernel Context Logger",
             "UBPM", "NetTrace", "NtfsLog", "WdiContextLog",
-            // v2.6.0: DNS Client Operational log - DnsQueryMonitor reads event IDs 3006/3008 from
-            // this session. An attacker disabling it blinds all DNS-layer detections (DGA, rapid
-            // query, covert mesh, webhook sink correlations).
-            "Microsoft-Windows-DNS Client Events/Operational",
+            // v2.6.0: DNS Client Operational log - DnsQueryMonitor reads event IDs 3006/3008
+            // from this channel. An attacker disabling it blinds all DNS-layer detections (DGA,
+            // rapid query, covert mesh, webhook sink correlations).
+            // NOTE: this is an event-LOG channel ("Microsoft-Windows-DNS-Client/Operational"),
+            // not an ETW trace session, so it does NOT appear in QueryAllTracesW enumeration and
+            // this entry never matches here. Channel-state tamper detection (enabled->disabled)
+            // is tracked separately as future work; kept here only to document the dependency.
+            "Microsoft-Windows-DNS-Client/Operational",
         };
 
         // Command patterns indicating ETW manipulation

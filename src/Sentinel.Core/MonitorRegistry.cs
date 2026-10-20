@@ -99,6 +99,12 @@ namespace Sentinel.Core
         {
             if (_monitors.TryGetValue(name, out var status))
             {
+                // A disabled or stopped monitor is in a truthful terminal state; a stray
+                // heartbeat (e.g. the service's blanket owned-monitor heartbeat loop) must not
+                // silently resurrect it or fake liveness on something that is not running.
+                if (status.State == MonitorState.Disabled || status.State == MonitorState.Stopped)
+                    return;
+
                 var nowUtc = DateTimeOffset.UtcNow;
                 status.LastHeartbeat = nowUtc;
                 status.HeartbeatCount++;
@@ -180,6 +186,21 @@ namespace Sentinel.Core
         }
 
         /// <summary>
+        /// Marks a monitor as intentionally disabled (optional feature off by config, or a
+        /// genuinely-absent OS capability). This is a truthful terminal state, not a failure:
+        /// the watchdog never evaluates it and it is reported in its own dashboard bucket so it
+        /// is neither counted as running nor flagged as failed.
+        /// </summary>
+        public void MarkDisabled(string name, string? reason = null)
+        {
+            if (_monitors.TryGetValue(name, out var status))
+            {
+                status.State = MonitorState.Disabled;
+                status.LastError = reason; // used as the human-readable "why" on the dashboard
+            }
+        }
+
+        /// <summary>
         /// Marks a monitor as cleanly stopped.
         /// </summary>
         public void MarkStopped(string name)
@@ -217,7 +238,8 @@ namespace Sentinel.Core
             Running = _monitors.Count(m => m.Value.State == MonitorState.Running),
             Failed = _monitors.Count(m => m.Value.State == MonitorState.Failed),
             Stale = _monitors.Count(m => m.Value.State == MonitorState.Running &&
-                                         DateTimeOffset.UtcNow - m.Value.LastHeartbeat > HeartbeatTimeout)
+                                         DateTimeOffset.UtcNow - m.Value.LastHeartbeat > HeartbeatTimeout),
+            Disabled = _monitors.Count(m => m.Value.State == MonitorState.Disabled)
         };
 
         // 
@@ -444,7 +466,13 @@ namespace Sentinel.Core
         Running,
         Failed,
         Recovering,
-        Stopped
+        Stopped,
+        // Intentionally not running: an optional monitor whose feature is switched off by
+        // config or whose required OS capability is genuinely absent. This is a truthful,
+        // terminal state - NOT a failure. The watchdog never evaluates it and the dashboard
+        // reports it separately so a deliberately-off monitor is never counted as "running"
+        // nor flagged as "failed/needs attention".
+        Disabled
     }
 
     public enum MonitorCategory
@@ -483,5 +511,9 @@ namespace Sentinel.Core
         public int Running { get; set; }
         public int Failed { get; set; }
         public int Stale { get; set; }
+        // Monitors intentionally not running (optional feature off by config, or a genuinely
+        // absent OS capability). Reported separately so the dashboard can show an honest
+        // "N running, M disabled" instead of padding the running count or flagging a failure.
+        public int Disabled { get; set; }
     }
 }
