@@ -36,6 +36,31 @@ namespace Sentinel.Core
         private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan CriticalTimeout = TimeSpan.FromMinutes(3);
 
+        // Liveness-vs-stall discrimination.
+        //
+        // The watchdog runs on a Timer; when the whole process stalls (GC pause under memory
+        // pressure, thread-pool starvation, a long blocking call), the Timer callback is itself
+        // delayed. When it finally fires it sees EVERY monitor as stale at once and - before
+        // this guard - failed and restart-churned the entire fleet, permanently losing the few
+        // monitors that then exhausted their restart cap. That is a false positive: a frozen
+        // process cannot distinguish a dead monitor from a starved heartbeat loop.
+        //
+        // Two guards make a systemic stall a single transient event instead of a fleet wipe:
+        //  1. Tick-gap guard: if the gap since the previous tick is itself past the critical
+        //     timeout, the watchdog (and therefore the heartbeat loop) was frozen. Grant one
+        //     grace tick so live monitors can re-heartbeat before any are judged.
+        //  2. Mass-staleness guard: if more than this fraction of running monitors are stale in
+        //     a single tick, that is a process-wide stall, not simultaneous independent deaths;
+        //     log once and grant a grace tick rather than failing them all.
+        private static readonly double MassStaleFraction = 0.5;
+        private DateTimeOffset _lastTickUtc = DateTimeOffset.UtcNow;
+        private bool _graceTickPending;
+
+        // After a monitor runs healthy for this long since its last failure, its accrued
+        // failure count is forgiven so the restart giveup cap only reflects RAPID repeated
+        // failures, never slow accumulation across the whole process lifetime.
+        private static readonly TimeSpan HealthyRecoveryWindow = TimeSpan.FromMinutes(10);
+
         public MonitorRegistry(
             DetectionEngine detectionEngine,
             JsonlEventLogger eventLogger,
@@ -74,12 +99,27 @@ namespace Sentinel.Core
         {
             if (_monitors.TryGetValue(name, out var status))
             {
-                status.LastHeartbeat = DateTimeOffset.UtcNow;
+                var nowUtc = DateTimeOffset.UtcNow;
+                status.LastHeartbeat = nowUtc;
                 status.HeartbeatCount++;
                 if (status.State == MonitorState.Starting || status.State == MonitorState.Recovering)
                 {
                     status.State = MonitorState.Running;
-                    status.StartedAt = DateTimeOffset.UtcNow;
+                    status.StartedAt = nowUtc;
+                }
+
+                // Failure-count decay. The restart cap (giveup after >5 failures) must only trip
+                // on RAPID repeated failures, not slow accumulation over the whole process
+                // lifetime - otherwise a handful of transient blips spread across hours
+                // permanently abandons an otherwise-healthy monitor (the ETW/DNS monitors hit
+                // this). Once a monitor has run healthy for HealthyRecoveryWindow since its last
+                // failure, forgive the accrued failures so its restart budget is restored.
+                if (status.FailureCount > 0 && status.State == MonitorState.Running &&
+                    status.LastFailure.HasValue &&
+                    nowUtc - status.LastFailure.Value > HealthyRecoveryWindow)
+                {
+                    status.FailureCount = 0;
+                    status.LastError = null;
                 }
             }
         }
@@ -187,6 +227,56 @@ namespace Sentinel.Core
         private void WatchdogTick(object? state)
         {
             var now = DateTimeOffset.UtcNow;
+
+            // --- Guard 1: tick-gap. If the watchdog Timer itself was delayed well past its
+            // interval, the process was stalled and the heartbeat loop could not run either.
+            // Reset every running monitor's heartbeat clock and skip judgment for one tick so
+            // genuinely-live monitors are not failed for a freeze they did not cause.
+            var tickGap = now - _lastTickUtc;
+            _lastTickUtc = now;
+            if (tickGap > CriticalTimeout)
+            {
+                _logger.LogWarning(
+                    "[MonitorRegistry] WATCHDOG: process stall detected - {Seconds:F0}s since last tick " +
+                    "(expected ~{Interval:F0}s). Granting a grace tick; not failing monitors this round.",
+                    tickGap.TotalSeconds, WatchdogInterval.TotalSeconds);
+                foreach (var s in _monitors.Values)
+                    if (s.State == MonitorState.Running) s.LastHeartbeat = now;
+                _graceTickPending = true;
+                return;
+            }
+
+            // --- Guard 2: mass-staleness. Count how many running monitors are stale this tick.
+            // If more than MassStaleFraction of them are stale simultaneously, that is a
+            // process-wide stall whose heartbeat starvation was shared, not many independent
+            // monitor deaths. Grant a grace tick instead of a fleet-wide restart storm.
+            int runningCount = 0, staleCount = 0;
+            foreach (var s in _monitors.Values)
+            {
+                if (s.State != MonitorState.Running) continue;
+                runningCount++;
+                if (now - s.LastHeartbeat > CriticalTimeout) staleCount++;
+            }
+            if (runningCount >= 4 && staleCount > runningCount * MassStaleFraction)
+            {
+                _logger.LogWarning(
+                    "[MonitorRegistry] WATCHDOG: {Stale}/{Running} running monitors stale in one tick - " +
+                    "treating as a systemic process stall, not independent deaths. Granting a grace tick.",
+                    staleCount, runningCount);
+                foreach (var s in _monitors.Values)
+                    if (s.State == MonitorState.Running) s.LastHeartbeat = now;
+                _graceTickPending = true;
+                return;
+            }
+
+            // A single grace tick was granted last round after a stall; let heartbeats land
+            // before resuming judgment so a slow-to-reheartbeat monitor is not failed on the
+            // very next tick.
+            if (_graceTickPending)
+            {
+                _graceTickPending = false;
+                return;
+            }
 
             foreach (var (name, status) in _monitors)
             {

@@ -90,12 +90,71 @@ namespace Sentinel.Core
             _pollInterval = TimeSpan.FromSeconds(config.DnsPollIntervalSeconds > 0 ? config.DnsPollIntervalSeconds : 15);
         }
 
+        private const string DnsChannelName = "Microsoft-Windows-DNS Client Events/Operational";
+
+        /// <summary>
+        /// Whether enabling the DNS Client Operational analytic channel (a proactive host
+        /// mutation - it changes OS event-log configuration) is permitted. Follows the always-on
+        /// hardening posture (<see cref="ProductPosture.AllowsProactiveHostLockdown"/>), so a
+        /// null/default config still allows it. Exposed for the default-deny seam test required
+        /// by docs/constraints.md.
+        /// </summary>
+        internal static bool MayEnableDnsChannel(SentinelConfig? config) =>
+            ProductPosture.AllowsProactiveHostLockdown(config);
+
         public Task StartAsync(CancellationToken ct)
         {
+            EnsureDnsChannelEnabled();
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _monitorTask = Task.Run(() => PollLoop(_cts.Token), _cts.Token);
             _logger.LogInformation("[{Monitor}] Started (event log polling mode)", Name);
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// The DNS Client Operational channel is an analytic channel that Windows ships
+        /// DISABLED by default. While it is off this monitor has no telemetry and every
+        /// DNS-layer detection (DGA, rapid-query, covert mesh, webhook sink) is blind. Sentinel
+        /// runs as SYSTEM and legitimately owns this telemetry source, so enable the channel on
+        /// start via the managed EventLog configuration API (no wevtutil / shell invocation -
+        /// EtwProviderTamperMonitor flags 'wevtutil sl ... enabled:false' and we must not look
+        /// like that, nor build shell command strings).
+        ///
+        /// This is a proactive host mutation, so it is gated on
+        /// <see cref="MayEnableDnsChannel"/> (the always-on hardening posture). Best-effort: a
+        /// failure degrades to cache-based detection, it never prevents the monitor from running.
+        /// </summary>
+        private void EnsureDnsChannelEnabled()
+        {
+            if (!MayEnableDnsChannel(_config))
+            {
+                _logger.LogInformation(
+                    "[{Monitor}] Posture does not permit enabling the '{Channel}' channel; degrading to cache-based DNS detection only",
+                    Name, DnsChannelName);
+                return;
+            }
+            try
+            {
+                using var session = new System.Diagnostics.Eventing.Reader.EventLogSession();
+                var cfg = new System.Diagnostics.Eventing.Reader.EventLogConfiguration(DnsChannelName, session);
+                if (cfg.IsEnabled)
+                {
+                    _logger.LogDebug("[{Monitor}] DNS Client Operational channel already enabled", Name);
+                    return;
+                }
+                cfg.IsEnabled = true;
+                cfg.SaveChanges();
+                _logger.LogInformation(
+                    "[{Monitor}] Enabled the '{Channel}' analytic channel (was disabled - DNS-layer detection would otherwise be blind)",
+                    Name, DnsChannelName);
+            }
+            catch (Exception ex)
+            {
+                // UnauthorizedAccess, EventLogNotFound (stripped image), or provider refusal.
+                _logger.LogWarning(ex,
+                    "[{Monitor}] Could not enable the '{Channel}' channel; degrading to cache-based DNS detection only",
+                    Name, DnsChannelName);
+            }
         }
 
         private async Task PollLoop(CancellationToken ct)

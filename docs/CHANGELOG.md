@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.3.6] - 2026-10-20
+
+### Fixed (monitor liveness and firewall-policy reconciliation)
+- Stop a transient process stall from marking the whole monitor fleet failed. The watchdog runs on a timer, so when the process froze (observed under a memory-pressure GC pause) the timer and the service heartbeat loop were both delayed, and the next watchdog pass saw every monitor as stale at once and restart-churned the fleet - the few monitors that then exhausted their restart cap stayed down permanently. The watchdog now distinguishes a systemic stall from independent monitor deaths with two guards: a tick-gap guard (if the watchdog's own interval was delayed past the critical timeout the process was frozen) and a mass-staleness guard (more than half of running monitors stale in a single tick is a shared freeze, not simultaneous deaths). Either grants one grace tick for live monitors to re-heartbeat instead of failing them.
+- Forgive a monitor's accrued failure count after sustained healthy uptime. The restart give-up cap previously counted failures across the whole process lifetime, so a handful of transient blips spread over hours permanently abandoned an otherwise-healthy monitor. The count now resets after ten minutes of healthy running since the last failure, so the cap reflects rapid repeated failures only.
+- Fix a `NullReferenceException` that aborted every firewall-policy reconciliation pass (the "firewall policy needs attention" state). `ProcessModule.get_FileName()` can throw a bare NRE on an unreadable main-module handle (exited, protected, or cross-bitness process), which the exception filter did not catch, so the exception escaped and left the policy perpetually "not verified" while looping errors. Reading the main-module path is now isolated and the NRE is caught in both child-registration paths; an unresolved path fails closed and grants no exemption.
+
+### Changed
+- Enable the Windows DNS Client Operational analytic channel on `DnsQueryMonitor` start. The channel ships disabled by default, which left the DNS-layer detections (DGA, rapid-query, covert-mesh and webhook-sink correlation) without telemetry. Sentinel runs as SYSTEM and legitimately owns this source, so it enables the channel through the managed EventLog configuration API - never `wevtutil`/shell, which `EtwProviderTamperMonitor` flags and which would build a shell command string. This is a proactive host mutation and gates on the always-on hardening posture (`ProductPosture.AllowsProactiveHostLockdown`); if it cannot be enabled the monitor degrades to cache-based detection rather than failing.
+
+### Validation and limits
+- Full Release cross-build: zero warnings/errors. Full portable test suite passes (3028 passed, 1 pre-existing Windows-native DNS smoke test skipped), including the new default-deny seam test for the DNS-channel host mutation. No detection tier or response contract changed: the watchdog's existing "Anti-Tamper: Monitor Crashed/Killed" detection remains Tier2/Tier1 LogOnly and only its firing condition narrowed. No new kill, quarantine, certificate-removal or driver-file authority is added.
+- The watchdog timer path and the live DNS-channel enablement are Windows-runtime behaviors; they are verified by build, code structure and the portable posture-gate test, and the end-to-end stall-recovery and channel-enable effects remain a Windows validation gate.
+
 ## [3.3.5] - 2026-10-20
 
 ### Security (red-team audit of kill-authority and IPC boundary)

@@ -22,13 +22,39 @@ namespace Sentinel.Core
         {
             try
             {
-                string? actual = child.MainModule?.FileName;
-                if (!string.Equals(actual, expectedPath, StringComparison.OrdinalIgnoreCase) ||
+                // ProcessModule.get_FileName() can throw a bare NullReferenceException on .NET
+                // Framework when the main module handle is unreadable (exited / protected /
+                // cross-bitness process). A null-conditional on MainModule does NOT guard that
+                // internal throw, so the NRE escaped and aborted every firewall reconciliation
+                // pass. SafeGetMainModuleFileName() isolates and swallows it -> null -> no match.
+                string? actual = SafeGetMainModuleFileName(child);
+                if (actual == null ||
+                    !string.Equals(actual, expectedPath, StringComparison.OrdinalIgnoreCase) ||
                     !SecurityValidation.VerifyAuthenticodeSignature(expectedPath)) return false;
-                return RegisterIdentity(child.Id, child.StartTime.ToUniversalTime(), actual!, expectedPath, true);
+                return RegisterIdentity(child.Id, child.StartTime.ToUniversalTime(), actual, expectedPath, true);
             }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is NotSupportedException)
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is NotSupportedException || ex is NullReferenceException)
             { return false; } // Unknown identity receives no noise exemption.
+        }
+
+        /// <summary>
+        /// Reads a process's main-module path without letting ProcessModule's internal
+        /// NullReferenceException (unreadable module handle) escape. Any failure to resolve a
+        /// trustworthy path returns null, which the callers treat as "unknown identity" and
+        /// fail closed - no exemption is ever granted on an unresolved path.
+        /// </summary>
+        private static string? SafeGetMainModuleFileName(Process process)
+        {
+            try
+            {
+                if (process.HasExited) return null;
+                string? path = process.MainModule?.FileName;
+                return string.IsNullOrEmpty(path) ? null : path;
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is NotSupportedException || ex is NullReferenceException)
+            {
+                return null;
+            }
         }
         internal void Remove(int pid) => _children.TryRemove(pid, out _);
         internal bool IsCurrentChild(int pid)
@@ -45,10 +71,11 @@ namespace Sentinel.Core
             try
             {
                 using var process = Process.GetProcessById(pid);
-                string? path = process.MainModule?.FileName;
-                if (!process.HasExited && !string.IsNullOrEmpty(path)) return (process.StartTime.ToUniversalTime(), path!);
+                if (process.HasExited) return null;
+                string? path = SafeGetMainModuleFileName(process);
+                if (!string.IsNullOrEmpty(path)) return (process.StartTime.ToUniversalTime(), path!);
             }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is ArgumentException || ex is NotSupportedException)
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is ArgumentException || ex is NotSupportedException || ex is NullReferenceException)
             { /* Unavailable identity receives no exemption. */ }
             return null;
         }
