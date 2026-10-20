@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.3.7] - 2026-10-20
+
+### Fixed
+- Restore real-time DNS query collection using the DNS provider's actual query events (3006/3008), replacing the server-configuration IDs 1001/1002. Feed the DNS monitor from the existing ETW session without requiring the Operational log channel; use structured named-field event-log reads as fallback. Bound buffering, report query loss, preserve the record cursor, and keep malformed records from blocking later valid events. DNS detections in this monitor retain their unattributed response boundary.
+- Keep `FileVerdictScanner` supervised after its initial drive walk, observe walk failures, and restart/reconcile through the monitor group when watcher subscriptions fail or overflow.
+- Register and start the local injection scanner through `IMonitor`. Enable its compiled default and remove its incorrect dependency on a placeholder feed URL and registry-key capability probe. Restore delivery of WMI-free process snapshots to detection; report their reduced short-lived-process/command-line coverage explicitly.
+- Bound watchdog scheduling grace without overwriting observed heartbeat timestamps. A live worker can recover a scheduling timeout without clearing a separate collection failure.
+
+### Changed
+- Distinguish running tasks, completed startup operations, standby fallback, unavailable sources, and collection progress. The offline ThreatFox loader and retired-feed firewall cleanup are startup tasks, not continuous online monitors. WMI/snapshots paused while process ETW works are shown on standby.
+- Keep the main dashboard attention state visible for collection errors, including delayed status replies. Label collection without progress instrumentation as unverified, expose per-sensor reasons and cumulative ETW loss counters, and retain the full registered roster.
+- Add [monitor-health documentation](monitor-health.md) and `tools/Test-SentinelSensorHealth.ps1` for read-only diagnostics with an optional benign DNS probe.
+
+### Validation and limits
+- Windows CI for the implementation passed: 3,059 native Framework tests passed, 1 skipped, 0 failed; warnings-as-errors build had 0 warnings and 0 errors. DNS repair/restoration and local/Group Policy firewall smoke checks passed, along with 25 dashboard tests, Worker tests, and firewall-policy regressions. Release publication independently retests the exact merged commit.
+- Target-machine telemetry verification remains necessary. The supplied logs record access denied for the protected Threat-Intelligence provider and native ETW event loss; this release does not claim to remove those limitations or rule out missing Windows components. An empty local injection-scan candidate board does not establish protected-provider coverage.
+- Correction to the 3.3.6 notes: `DnsQueryMonitor` had no implemented DNS-cache fallback. 3.3.7 supplies real-time ETW plus structured event-log collection and reports failures explicitly. No online feeds are restored, and no new response authority or provider-permission bypass is added.
+
 ## [3.3.6] - 2026-10-20
 
 ### Fixed (monitor liveness and firewall-policy reconciliation)

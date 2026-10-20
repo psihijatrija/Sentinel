@@ -1,4 +1,4 @@
-# Monitor collection and task health
+# Monitor collection and task health (3.3.7)
 
 A running task is not proof of telemetry delivery. The health endpoint retains the full registered
 roster and reports task state, collection progress, unverified collection, and per-sensor errors.

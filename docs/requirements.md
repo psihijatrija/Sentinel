@@ -1,6 +1,15 @@
 # Sentinel - Requirements
 
-**Version: 3.3.4**
+**Version: 3.3.7**
+
+### Sensor collection and supervision (3.3.7)
+
+- Process DNS query events using the provider's query schema and event IDs. Real-time collection must not depend on the Operational channel being available; report unavailable fallback and query loss explicitly.
+- Continuous file watching must remain supervised after an initial walk completes. Observe worker/subscription failures and retain the group restart/reconciliation path.
+- A supervisor heartbeat must not prove collection success or erase collection errors. Scheduling grace must be bounded and preserve the last observed heartbeat.
+- Completed startup tasks, standby fallback and unavailable sources must remain distinct from Running. The dashboard must retain the registered roster, expose per-sensor reasons, and keep failed or unverified collection visible.
+- The local injection scanner must be started through the monitor collection without a placeholder online-feed dependency. Protected-provider access denial and an empty suspect board must not be presented as full injection telemetry coverage.
+- Validate release commits on Windows and document target-machine telemetry limitations; CI success alone does not prove a modified Windows image retains every required source.
 
 ### Log reliability (3.3.4)
 
