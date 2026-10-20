@@ -11,8 +11,10 @@ using Microsoft.Extensions.Logging;
 
 namespace Sentinel.Core
 {
-    public sealed class ThreatIntelFeedBlocker : BackgroundService
+    public sealed class ThreatIntelFeedBlocker : BackgroundService, IMonitorStartupTask
     {
+        public string CompletionDescription => "Legacy online-feed firewall cleanup completed. Online feed blocking is retired; this task supplies no active feed coverage.";
+
         private readonly DetectionEngine _detectionEngine;
         private readonly JsonlEventLogger _eventLogger;
         private readonly SentinelConfig _config;

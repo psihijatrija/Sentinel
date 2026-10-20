@@ -473,6 +473,18 @@ namespace Sentinel.Core
                             // absent). Reported so the dashboard shows an honest breakdown rather
                             // than treating a deliberately-off monitor as missing or failed.
                             monitorsDisabled = stats?.Disabled ?? 0,
+                            startupTasksCompleted = stats?.Completed ?? 0,
+                            monitorsStandby = stats?.Standby ?? 0,
+                            monitorsUnhealthy = stats?.Unhealthy ?? 0,
+                            collectionHealthy = stats?.CollectionHealthy ?? 0,
+                            collectionUnverified = stats?.CollectionUnverified ?? 0,
+                            etwHealth = _etw?.LastHealthSnapshot,
+                            monitorDetails = _registry?.GetAllStatuses().Select(m => new
+                            {
+                                name = m.Name, state = m.State.ToString(), reason = m.LastError,
+                                collection = m.Progress,
+                                queriesProcessed = (m.ServiceInstance as DnsQueryMonitor)?.QueriesProcessed
+                            }).ToArray(),
                             plugins = _plugins.TotalCount,
                             firewallPolicy = _firewallPolicy?.Json
                         });

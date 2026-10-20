@@ -272,6 +272,7 @@ select.rp-input {{ font-family: 'Segoe UI', sans-serif; }}
     <div class=""content"">
         <!-- OVERVIEW -->
         <div class=""page active"" id=""page-overview"">
+            <details><summary>Sensor health and coverage details</summary><pre id=""ov-monitor-details"" style=""white-space:pre-wrap;word-break:break-word""></pre></details>
             <div class=""cards"">
                 <div class=""card""><div class=""card-label"">Service Status</div><div class=""card-value success"" id=""ov-status"">Active</div><div class=""card-sub"" id=""ov-monitors"">Loading...</div></div>
                 <div class=""card""><div class=""card-label"">Detections Today</div><div class=""card-value"" id=""ov-detections"">0</div><div class=""card-sub"">Last 24 hours</div></div>
@@ -681,7 +682,10 @@ function ensureCsrf(callback) {{
 
 //  Status 
 function loadStatus() {{
+    var request = (loadStatus.request || 0) + 1;
+    loadStatus.request = request;
     apiCall('/api/status', {{}}, function(data) {{
+        if (request !== loadStatus.request) return;
         if (data && data.ok) {{
             document.getElementById('version').textContent = 'v' + data.version;
             var badge = document.getElementById('status-badge');
@@ -703,19 +707,52 @@ function loadStatus() {{
                 document.getElementById('ov-status').className = 'card-value danger';
             }}
         }}
-    }});
-    apiCall('/api/health', {{}}, function(health) {{
+        apiCall('/api/health', {{}}, function(health) {{
+        if (request !== loadStatus.request) return;
         if (health && health.ok) {{
-            // Honest breakdown: the needs-attention denominator must not include monitors
-            // that are intentionally off (optional feature disabled / capability absent).
-            // Show running out of the ACTIVE (expected-to-run) total, and surface the disabled
-            // count separately so a deliberately-off monitor is never read as missing/failed.
-            var disabled = health.monitorsDisabled || 0;
-            var active = health.monitorsRegistered - disabled;
-            var text = health.monitorsRunning + '/' + active + ' monitors running';
-            if (disabled > 0) {{ text += ' (' + disabled + ' disabled by config)'; }}
-            document.getElementById('ov-monitors').textContent = text;
+            var text = health.monitorsRunning + '/' + health.monitorsRegistered + ' tasks running';
+            if (health.startupTasksCompleted) {{ text += '; ' + health.startupTasksCompleted + ' startup tasks completed'; }}
+            if (health.monitorsStandby) {{ text += '; ' + health.monitorsStandby + ' fallback on standby'; }}
+            if (health.monitorsDisabled) {{ text += '; ' + health.monitorsDisabled + ' disabled'; }}
+            text += '; ' + (health.collectionHealthy || 0) + ' collection checks healthy';
+            if (health.collectionUnverified) {{ text += '; ' + health.collectionUnverified + ' without collection verification'; }}
+            if (health.monitorsUnhealthy) {{ text += '; NEEDS ATTENTION: ' + health.monitorsUnhealthy; }}
+            var element = document.getElementById('ov-monitors');
+            element.textContent = text;
+            element.className = 'card-sub';
+            element.style.color = health.monitorsUnhealthy ? '#f87171' : '';
+            // textContent/title keep diagnostic messages out of HTML execution.
+            element.title = (health.monitorDetails || []).map(function(m) {{
+                return m.name + ': ' + m.state + '; collection=' + m.collection.State +
+                    (m.collection.Error ? '; ' + m.collection.Error : '') + (m.reason ? '; ' + m.reason : '');
+            }}).join('\n');
+            if (health.etwHealth) {{
+                element.title += '\nETW session cumulative native events lost: ' + health.etwHealth.NativeEventsLost +
+                    '; buffers lost: ' + health.etwHealth.NativeBuffersLost + '; dispatch drops: ' + health.etwHealth.DispatchDrops;
+            }}
+            document.getElementById('ov-monitor-details').textContent = element.title;
+            if (health.monitorsUnhealthy) {{
+                document.getElementById('ov-status').textContent = 'Needs attention';
+                document.getElementById('ov-status').className = 'card-value danger';
+                var statusText = document.getElementById('status-text');
+                if (!statusText.textContent || statusText.textContent.toLowerCase().indexOf('attention') < 0) {{
+                    statusText.textContent = 'Sensor coverage needs attention';
+                }}
+                document.getElementById('status-badge').className = 'status-badge inactive';
+            }} else if (health.collectionUnverified && document.getElementById('ov-status').textContent === 'Active') {{
+                document.getElementById('ov-status').textContent = 'Collection unverified';
+                document.getElementById('ov-status').className = 'card-value warning';
+                document.getElementById('status-text').textContent = 'Service running; collection partly unverified';
+            }}
+        }} else {{
+            document.getElementById('ov-monitors').textContent = 'Sensor collection health unavailable';
+            if (data && data.serviceRunning && data.firewallPolicyCompliant) {{
+                document.getElementById('ov-status').textContent = 'Collection unavailable';
+                document.getElementById('ov-status').className = 'card-value warning';
+                document.getElementById('status-text').textContent = 'Service running; sensor health unavailable';
+            }}
         }}
+        }});
     }});
 }}
 

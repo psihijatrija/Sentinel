@@ -20,9 +20,12 @@ namespace Sentinel.Core
     /// (credential access, C2 beaconing, etc.) that feed into the correlation engine.
     /// Partial mitigation: memory-mapped section hash comparison (future work).
     /// </summary>
-    public sealed class EtwThreatIntelMonitor : IMonitor, IDisposable
+    public sealed class EtwThreatIntelMonitor : IMonitor, IDisposable, ISensorProgressSource, IMonitorWorker
     {
         public string Name => "EtwThreatIntelMonitor";
+        public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(30))
+            { Scope = "Local suspect-PID scan cycles; an empty candidate board does not prove protected Threat-Intelligence provider availability. See EtwSessionGuard." };
+        public bool IsWorkerRunning => _monitorTask is { IsCompleted: false };
 
         private readonly DetectionEngine _detectionEngine;
         private readonly TelemetryFusionEngine _fusionEngine;
@@ -81,9 +84,14 @@ namespace Sentinel.Core
                 try
                 {
                     await ScanSuspectPidsAsync(ct).ConfigureAwait(false);
+                    Progress.Succeeded();
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-                catch { }
+                catch (Exception ex)
+                {
+                    Progress.Failed(ex.Message);
+                    _logger.LogWarning(ex, "Local injection scan cycle failed");
+                }
                 try { await Task.Delay(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
             }

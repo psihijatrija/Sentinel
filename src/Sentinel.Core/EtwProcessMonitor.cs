@@ -5,21 +5,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Sentinel.Core
 {
-    /// <summary>
-    /// Process monitoring via ETW - delegates to UnifiedEtwSession when active.
-    /// 
-    /// When UnifiedEtwSession.IsActive is true:
-    ///   - ETW provides process events at ~50ms latency
-    ///   - WmiProcessMonitor is disabled to prevent duplicate events
-    /// 
-    /// When UnifiedEtwSession.IsActive is false (current state):
-    ///   - WmiProcessMonitor provides fallback telemetry (~1-2s latency)
-    ///   - All detection rules and correlation still function identically
-    ///   - Only difference is detection latency, not coverage
-    /// </summary>
-    public sealed class EtwProcessMonitor : IMonitor
+    /// <summary>Checks the process provider and ETW consumer continuously. Falls back to
+    /// WMI/process snapshots when unavailable, reporting the resulting coverage reduction.</summary>
+    public sealed class EtwProcessMonitor : IMonitor, ISensorProgressSource, IMonitorHealthCheck
     {
         public string Name => "EtwProcessMonitor";
+        public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(20))
+            { Scope = "Kernel process provider enabled and ETW consumer alive; this check alone does not prove process-start delivery." };
 
         private readonly UnifiedEtwSession _unifiedSession;
         private readonly WmiProcessMonitor? _wmiProcessMonitor;
@@ -37,19 +29,27 @@ namespace Sentinel.Core
 
         public Task StartAsync(CancellationToken ct)
         {
-            if (_unifiedSession.IsActive)
+            CheckHealth();
+
+            return Task.CompletedTask;
+        }
+
+        public void CheckHealth()
+        {
+            if (_unifiedSession.IsProviderActive(UnifiedEtwSession.Providers.KernelProcess))
             {
                 _wmiProcessMonitor?.Disable();
-                _logger.LogInformation(
-                    "[{Monitor}] UnifiedEtwSession active - process events at ~50ms. WMI disabled.", Name);
+                Progress.Succeeded();
             }
             else
             {
-                _logger.LogInformation(
-                    "[{Monitor}] UnifiedEtwSession inactive - WmiProcessMonitor provides fallback (~1-2s).", Name);
+                _wmiProcessMonitor?.Enable();
+                // A snapshot fallback is useful but not equivalent to event telemetry:
+                // it misses processes shorter than the polling interval and has no command line.
+                Progress.Failed(_wmiProcessMonitor?.IsSnapshotHealthy == true
+                    ? "Kernel process ETW unavailable; process snapshots active with reduced coverage (short-lived processes/command lines)."
+                    : "Kernel process ETW unavailable; no verified process snapshot fallback.");
             }
-
-            return Task.CompletedTask;
         }
 
         public Task StopAsync()

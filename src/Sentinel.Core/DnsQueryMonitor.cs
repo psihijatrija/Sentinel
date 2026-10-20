@@ -22,9 +22,14 @@ namespace Sentinel.Core
     /// - Rapid query volume to single domains (beaconing/tunneling)
     /// - High-entropy domain names (DGA - domain generation algorithms)
     /// </summary>
-    public sealed class DnsQueryMonitor : IMonitor, IDisposable
+    public sealed class DnsQueryMonitor : IMonitor, IDisposable, ISensorProgressSource, IMonitorWorker
     {
         public string Name => "DnsQueryMonitor";
+        public SensorProgress Progress { get; }
+        public bool IsWorkerRunning => _monitorTask is { IsCompleted: false };
+        public long QueriesProcessed => Interlocked.Read(ref _queriesProcessed);
+        private long _queriesProcessed;
+        private readonly IDnsEventSource _eventSource;
 
         private readonly DetectionEngine _detectionEngine;
         private readonly SentinelConfig _config;
@@ -77,10 +82,12 @@ namespace Sentinel.Core
             DetectionEngine detectionEngine,
             SentinelConfig config,
             ILogger<DnsQueryMonitor> logger,
+            IDnsEventSource eventSource,
             PersistentConnectionMonitor? persistentConnMon = null,
             ContextBus? contextBus = null,
             ThreatFoxFeedService? threatFoxFeed = null)
         {
+            _eventSource = eventSource;
             _detectionEngine = detectionEngine;
             _config = config;
             _logger = logger;
@@ -88,140 +95,85 @@ namespace Sentinel.Core
             _contextBus = contextBus;
             _threatFoxFeed = threatFoxFeed;
             _pollInterval = TimeSpan.FromSeconds(config.DnsPollIntervalSeconds > 0 ? config.DnsPollIntervalSeconds : 15);
+            Progress = new SensorProgress(TimeSpan.FromSeconds(Math.Max(30, _pollInterval.TotalSeconds * 3)))
+                { Scope = "DNS collection reads; Observations counts parsed query-start events, not detections. No cache fallback." };
         }
 
-        // The real Windows log/channel name is "Microsoft-Windows-DNS-Client/Operational"
-        // (hyphens, owning provider "Microsoft-Windows-DNS-Client"). The previous literal
-        // "Microsoft-Windows-DNS Client Events/Operational" does not exist on Windows, so BOTH
-        // the read query and the enable attempt silently failed ("channel could not be found")
-        // and the monitor was permanently blind. Verified against Get-WinEvent -ListLog.
-        private const string DnsChannelName = "Microsoft-Windows-DNS-Client/Operational";
-
-        /// <summary>
-        /// Whether enabling the DNS Client Operational analytic channel (a proactive host
-        /// mutation - it changes OS event-log configuration) is permitted. Follows the always-on
-        /// hardening posture (<see cref="ProductPosture.AllowsProactiveHostLockdown"/>), so a
-        /// null/default config still allows it. Exposed for the default-deny seam test required
-        /// by docs/constraints.md.
-        /// </summary>
         internal static bool MayEnableDnsChannel(SentinelConfig? config) =>
             ProductPosture.AllowsProactiveHostLockdown(config);
 
         public Task StartAsync(CancellationToken ct)
         {
-            EnsureDnsChannelEnabled();
+            ct.ThrowIfCancellationRequested();
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _monitorTask = Task.Run(() => PollLoop(_cts.Token), _cts.Token);
-            _logger.LogInformation("[{Monitor}] Started (event log polling mode)", Name);
             return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// The DNS Client Operational channel is an analytic channel that Windows ships
-        /// DISABLED by default. While it is off this monitor has no telemetry and every
-        /// DNS-layer detection (DGA, rapid-query, covert mesh, webhook sink) is blind. Sentinel
-        /// runs as SYSTEM and legitimately owns this telemetry source, so enable the channel on
-        /// start via the managed EventLog configuration API (no wevtutil / shell invocation -
-        /// EtwProviderTamperMonitor flags 'wevtutil sl ... enabled:false' and we must not look
-        /// like that, nor build shell command strings).
-        ///
-        /// This is a proactive host mutation, so it is gated on
-        /// <see cref="MayEnableDnsChannel"/> (the always-on hardening posture). Best-effort: a
-        /// failure degrades to cache-based detection, it never prevents the monitor from running.
-        /// </summary>
-        private void EnsureDnsChannelEnabled()
-        {
-            if (!MayEnableDnsChannel(_config))
-            {
-                _logger.LogInformation(
-                    "[{Monitor}] Posture does not permit enabling the '{Channel}' channel; degrading to cache-based DNS detection only",
-                    Name, DnsChannelName);
-                return;
-            }
-            try
-            {
-                using var session = new System.Diagnostics.Eventing.Reader.EventLogSession();
-                var cfg = new System.Diagnostics.Eventing.Reader.EventLogConfiguration(DnsChannelName, session);
-                if (cfg.IsEnabled)
-                {
-                    _logger.LogDebug("[{Monitor}] DNS Client Operational channel already enabled", Name);
-                    return;
-                }
-                cfg.IsEnabled = true;
-                cfg.SaveChanges();
-                _logger.LogInformation(
-                    "[{Monitor}] Enabled the '{Channel}' analytic channel (was disabled - DNS-layer detection would otherwise be blind)",
-                    Name, DnsChannelName);
-            }
-            catch (Exception ex)
-            {
-                // UnauthorizedAccess, EventLogNotFound (stripped image), or provider refusal.
-                _logger.LogWarning(ex,
-                    "[{Monitor}] Could not enable the '{Channel}' channel; degrading to cache-based DNS detection only",
-                    Name, DnsChannelName);
-            }
         }
 
         private async Task PollLoop(CancellationToken ct)
         {
-            // Monitor DNS Client event log (Event ID 3006 = DNS query completed)
-            long lastRecordId = 0;
-
+            bool initialized = false;
+            bool warned = false;
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
-                    await Task.Delay(_pollInterval, ct);
-                    PruneStats();
-
-                    // Read recent DNS Client Operational log events
-                    // HARDENING: Removed time filter (timediff <= 30000). Previously, events older
-                    // than 30s were invisible even if lastRecordId hadn't processed them yet.
-                    // A fast C2 that resolves a domain between polls could age out before the next
-                    // poll cycle. Now we rely solely on lastRecordId for deduplication - this is
-                    // correct because the record ID monotonically increases and we never re-process.
-                    try
+                    if (!initialized)
                     {
-                        var query = new System.Diagnostics.Eventing.Reader.EventLogQuery(
-                            DnsChannelName,
-                            System.Diagnostics.Eventing.Reader.PathType.LogName,
-                            "*[System[(EventID=3006 or EventID=3008)]]");
-
-                        using var reader = new System.Diagnostics.Eventing.Reader.EventLogReader(query);
-                        System.Diagnostics.Eventing.Reader.EventRecord? record;
-                        while ((record = reader.ReadEvent()) != null)
-                        {
-                            using (record)
-                            {
-                                var recordId = record.RecordId ?? 0;
-                                if (recordId <= lastRecordId) continue;
-                                lastRecordId = recordId;
-
-                                var domain = record.FormatDescription()?.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                                    .FirstOrDefault()?.Trim() ?? "";
-                                if (!string.IsNullOrEmpty(domain))
-                                {
-                                    ProcessDnsQuery(domain, 0);
-                                }
-                            }
-                        }
+                        _eventSource.Initialize(MayEnableDnsChannel(_config));
+                        initialized = true;
                     }
-                    catch (Exception ex)
+                    var queries = _eventSource.ReadQueries(ct);
+                    if (_eventSource is IDnsEventSourceDiagnostics diagnostics)
+                        Progress.Scope = diagnostics.CollectionMode + "; Observations counts parsed query starts; " +
+                            diagnostics.DroppedQueries + " real-time queue drops since startup. No cache fallback.";
+                    int processed = 0;
+                    string? parseError = null;
+                    foreach (var query in queries)
                     {
-                        _logger.LogDebug(ex, "[{Monitor}] DNS event log read failed, using cache-based detection only", Name);
+                        if (query.Error != null) { parseError = query.Error; continue; }
+                        // Preserve the observe-only boundary for unattributed DNS.
+                        ProcessDnsQuery(query.Domain, 0);
+                        Interlocked.Increment(ref _queriesProcessed);
+                        processed++;
+                    }
+                    PruneStats();
+                    Progress.Succeeded(processed); // Even an empty successful read proves a collection cycle, not test-query arrival.
+                    if (_eventSource is IDnsEventSourceDiagnostics loss && loss.LastReadHadLoss)
+                    {
+                        Progress.Failed($"DNS real-time collection lost queries; {loss.DroppedQueries} drops since startup. Available queries were still processed.");
+                        if (!warned) _logger.LogWarning("DNS collection lost queries; available batch was processed, cumulative drops={Drops}", loss.DroppedQueries);
+                        warned = true;
+                    }
+                    else if (parseError != null)
+                    {
+                        Progress.Failed(parseError);
+                        if (!warned) _logger.LogWarning("DNS collection skipped an unsupported query event: {Error}", parseError);
+                        warned = true;
+                    }
+                    else
+                    {
+                        if (warned) _logger.LogInformation("DNS event reads recovered; processed {Count} queries this cycle", processed);
+                        warned = false;
                     }
                 }
-                catch (OperationCanceledException) { break; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "[{Monitor}] Poll error", Name);
+                    Progress.Failed($"DNS event collection unavailable: {ex.GetType().Name}: {ex.Message}. No cache fallback exists.");
+                    if (!warned) _logger.LogWarning(ex, "DNS event collection failed; DNS query detection has a coverage gap (no cache fallback)");
+                    warned = true;
+                    // Retry reads without reinitializing the cursor: replayed queries must not
+                    // become fake rapid-query evidence after a transient read failure.
                 }
+                try { await Task.Delay(_pollInterval, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             }
         }
 
         private void ProcessDnsQuery(string domain, int pid)
         {
-            if (string.IsNullOrWhiteSpace(domain)) return;
+            if (string.IsNullOrWhiteSpace(domain) || domain == ".") return;
             if (LocalHostNames.Contains(domain)) return;
 
             var baseDomain = GetBaseDomain(domain);

@@ -43,6 +43,9 @@ namespace Sentinel.Core
 
         /// <summary>True if the ETW session started successfully and is actively processing.</summary>
         public bool IsActive { get; private set; }
+        public bool IsProviderActive(Guid provider) => IsActive && _processingThread?.IsAlive == true &&
+            _providerStatus.TryGetValue(provider, out var status) && status == 0;
+
         public long EventsProcessed => Interlocked.Read(ref _eventsProcessed);
         public long EventsDropped => Interlocked.Read(ref _eventsDropped);
 

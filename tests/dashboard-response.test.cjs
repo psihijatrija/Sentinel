@@ -81,7 +81,7 @@ test('unverified firewall policy never gets an active dashboard badge', () => {
   assert.equal(elements['ov-status'].textContent, 'Needs attention');
 });
 
-test('verified offline firewall policy can display active protection', () => {
+test('verified offline firewall policy cannot hide missing collection health', () => {
   const elements = {};
   const context = vm.createContext({
     document: { getElementById(id) { return elements[id] ||= {}; } },
@@ -93,8 +93,8 @@ test('verified offline firewall policy can display active protection', () => {
   });
   vm.runInContext(sourceOf('loadStatus'), context);
   context.loadStatus();
-  assert.equal(elements['status-text'].textContent, 'Offline Protection Active');
-  assert.equal(elements['ov-status'].className, 'card-value success');
+  assert.equal(elements['status-text'].textContent, 'Service running; sensor health unavailable');
+  assert.equal(elements['ov-status'].className, 'card-value warning');
 });
 
 function dnsContext(eligible = true) {
@@ -249,4 +249,59 @@ test('incomplete scan cannot display a completed status or a clean-system verdic
   assert.equal(elements['sc-status'].className, 'card-value warning');
   assert.doesNotMatch(elements['scan-findings'].innerHTML, /System appears clean/);
   assert.equal(elements['audit-download'].disabled, true);
+});
+
+function renderSensorHealth(health) {
+  const elements = {};
+  const context = vm.createContext({
+    document: { getElementById(id) { return elements[id] ||= { style: {} }; } },
+    apiCall(endpoint, options, callback) {
+      callback(endpoint === '/api/status'
+        ? { ok: true, version: '3.3.6', serviceRunning: true, firewallPolicyCompliant: true }
+        : { ok: true, monitorsRegistered: 136, monitorsRunning: 134, startupTasksCompleted: 2,
+          monitorsDisabled: 0, collectionHealthy: 4, collectionUnverified: 130, ...health });
+    }
+  });
+  vm.runInContext(sourceOf('loadStatus'), context);
+  context.loadStatus();
+  return elements;
+}
+
+test('a running worker with a failed collector keeps the main warning visible', () => {
+  const elements = renderSensorHealth({
+    monitorsUnhealthy: 1,
+    monitorDetails: [{ name: 'DnsQueryMonitor', state: 'Running', reason: null,
+      collection: { State: 'Failed', Error: '<script>Channel denied</script>' } }]
+  });
+  assert.equal(elements['ov-status'].textContent, 'Needs attention');
+  assert.equal(elements['status-text'].textContent, 'Sensor coverage needs attention');
+  assert.match(elements['ov-monitors'].textContent, /134\/136 tasks running/);
+  assert.match(elements['ov-monitors'].textContent, /2 startup tasks completed/);
+  assert.match(elements['ov-monitor-details'].textContent, /Channel denied/);
+  assert.equal(elements['ov-monitor-details'].innerHTML, undefined);
+});
+
+test('unverified collection cannot display fully active protection', () => {
+  const elements = renderSensorHealth({ monitorsUnhealthy: 0, monitorDetails: [] });
+  assert.equal(elements['ov-status'].textContent, 'Collection unverified');
+  assert.match(elements['status-text'].textContent, /partly unverified/);
+});
+
+test('late status replies cannot erase a newer collector failure', () => {
+  const pending = [];
+  const elements = {};
+  const context = vm.createContext({
+    document: { getElementById(id) { return elements[id] ||= { style: {} }; } },
+    apiCall(endpoint, options, callback) { pending.push({ endpoint, callback }); }
+  });
+  vm.runInContext(sourceOf('loadStatus'), context);
+  context.loadStatus();
+  context.loadStatus();
+  assert.deepEqual(pending.map(x => x.endpoint), ['/api/status', '/api/status']);
+  const active = { ok: true, version: 'fixture', serviceRunning: true, firewallPolicyCompliant: true };
+  pending[1].callback(active);
+  pending[2].callback({ ok: true, monitorsRegistered: 136, monitorsRunning: 134,
+    monitorsUnhealthy: 1, monitorDetails: [] });
+  pending[0].callback(active);
+  assert.equal(elements['ov-status'].textContent, 'Needs attention');
 });

@@ -162,9 +162,22 @@ namespace Sentinel.Service
             try
             {
                 foreach (var name in _ownedSingletonNames)
-                    _monitorRegistry.Heartbeat(name);
+                {
+                    if (name == nameof(WmiProcessMonitor))
+                        _monitorRegistry.SetStandby(name, _wmiProcessMonitor?.IsDisabled == true,
+                            "WMI/process snapshots are on standby while kernel process ETW is active.");
+                    _monitorRegistry.SupervisorHeartbeat(name);
+                }
                 foreach (var monitor in _monitors)
-                    _monitorRegistry.Heartbeat(monitor.Name);
+                {
+                    if (monitor is IMonitorHealthCheck check) check.CheckHealth();
+                    if (monitor is not IMonitorWorker worker || worker.IsWorkerRunning)
+                        _monitorRegistry.SupervisorHeartbeat(monitor.Name, monitor is IMonitorWorker { IsWorkerRunning: true });
+                    else if (monitor is ISensorProgressSource failedSource)
+                        failedSource.Progress.Failed("Monitor worker is not running.");
+                    if (monitor is ISensorProgressSource source)
+                        _monitorRegistry.ReportProgress(monitor.Name, source.Progress.Snapshot());
+                }
             }
             catch { /* heartbeat is best-effort */ }
         }
@@ -257,13 +270,8 @@ namespace Sentinel.Service
                 {
                     await monitor.StartAsync(CancellationToken.None);
 
-                    // An intentionally-disabled monitor (optional feature off, or a genuinely
-                    // absent OS capability) is a no-op that never heartbeats. Record it in the
-                    // honest terminal Disabled state so the watchdog never flags it and the
-                    // dashboard reports it as "disabled", not as running or failed. This is the
-                    // correct fix for the miscounted EtwThreatIntelMonitor: it was never broken,
-                    // it is off by default (EnableIntelThreatIntel=false), but was being counted
-                    // and then watchdog-killed as if it should be running.
+                    // Only explicit configuration disables are expected; collection failures
+                    // remain visible independently of startup/task state.
                     if (monitor is Sentinel.Core.Monitors.IDisabledMonitor disabled)
                     {
                         _monitorRegistry.MarkDisabled(monitor.Name, disabled.DisabledReason);
@@ -309,8 +317,7 @@ namespace Sentinel.Service
                 {
                     await Task.Delay(5000, stoppingToken);
 
-                    // Heartbeat the monitors this service owns so the registry watchdog
-                    // keeps them marked Running (they don't self-heartbeat).
+                    // Observe worker liveness separately from successful sensor collection.
                     HeartbeatOwnedMonitors();
                 }
             }

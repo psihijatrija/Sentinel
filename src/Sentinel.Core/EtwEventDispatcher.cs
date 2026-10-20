@@ -22,7 +22,7 @@ namespace Sentinel.Core
     ///   - Never throw from a handler (exceptions are swallowed by the session)
     ///   - Copy any data from UserData pointer before returning
     /// </summary>
-    public sealed class EtwEventDispatcher
+    public sealed class EtwEventDispatcher : IRealtimeDnsTelemetry
     {
         private readonly TelemetryFusionEngine _fusionEngine;
         private readonly DetectionEngine _detectionEngine;
@@ -53,8 +53,12 @@ namespace Sentinel.Core
         private const ushort RegDeleteValue = 6;
 
         // Event IDs for Microsoft-Windows-DNS-Client
-        private const ushort DnsQueryStart = 1001;  // QueryStart
-        private const ushort DnsQueryComplete = 1002;
+        // Provider manifest: 1001/1002 are server configuration events, not queries.
+        internal const ushort DnsQueryStart = 3006;
+        internal const ushort DnsQueryComplete = 3008;
+        public event Action<string>? DnsQueryObserved;
+        private UnifiedEtwSession? _session;
+        public bool IsDnsProviderActive => _session?.IsProviderActive(UnifiedEtwSession.Providers.DnsClient) == true;
 
         // Event IDs for Microsoft-Windows-PowerShell
         private const ushort ScriptBlockLogging = 4104;
@@ -100,6 +104,7 @@ namespace Sentinel.Core
         /// </summary>
         public void RegisterHandlers(UnifiedEtwSession session)
         {
+            _session = session;
             session.RegisterHandler(UnifiedEtwSession.Providers.KernelProcess, OnKernelProcessEvent);
             session.RegisterHandler(UnifiedEtwSession.Providers.KernelFile, OnKernelFileEvent);
             session.RegisterHandler(UnifiedEtwSession.Providers.KernelRegistry, OnKernelRegistryEvent);
@@ -329,16 +334,20 @@ namespace Sentinel.Core
         // DNS Events (Microsoft-Windows-DNS-Client)
         // 
 
+        internal static string? DecodeDnsQuery(EtwRawEvent evt)
+        {
+            if (evt.EventId != DnsQueryStart && evt.EventId != DnsQueryComplete) return null;
+            if (evt.UserData == IntPtr.Zero || evt.UserDataLength < 8) return null;
+            // 3006/3008 manifest templates start with a NUL-terminated Unicode QueryName.
+            return WindowsDnsEventSource.NormalizeQueryName(
+                TryExtractUnicodeString(evt.UserData, 0, evt.UserDataLength));
+        }
+
         private void OnDnsClientEvent(EtwRawEvent evt)
         {
-            // DNS query events give us domain name + PID
-            if (evt.EventId != DnsQueryStart && evt.EventId != DnsQueryComplete) return;
-            if (evt.UserData == IntPtr.Zero || evt.UserDataLength < 8) return;
-
-            // DNS-Client provider payload for QueryStart:
-            // QueryName (UnicodeString) at variable offset
-            string queryName = TryExtractUnicodeString(evt.UserData, 0, evt.UserDataLength);
-            if (string.IsNullOrEmpty(queryName)) return;
+            string? queryName = DecodeDnsQuery(evt);
+            if (queryName == null) return;
+            if (evt.EventId == DnsQueryStart) DnsQueryObserved?.Invoke(queryName);
 
             int pid = evt.ProcessId;
             string processName = "";
