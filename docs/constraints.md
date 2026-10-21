@@ -2,7 +2,7 @@
 
 **Version: 3.2.5**
 
-Pending 3.3.9 scope: the user-requested ExploitShield companion is an installed,
+3.3.9 scope: the user-requested ExploitShield companion is an installed,
 visible scheduled online maintenance component. It reads fixed public metadata
 sources and installs applicable CVE-matched vendor security updates through WUA;
 it never executes PoCs, generates kill rules or overrides Core's Tier2 LogOnly

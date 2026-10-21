@@ -20,7 +20,7 @@ Sentinel Core/Service/Agent operate offline: their online reputation, live intel
 **3.3.8 online exception:** the separately packaged [NanoAV module](docs/NANOAV.md) retains the supplied program's own online feeds, persistence and response engine. Its only source changes protect Sentinel; it does not follow Sentinel's response rules. Read its retained runtime limitations before relying on it.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.3.8 (single source of truth: `version.txt`)
+**Version:** 3.3.9 (single source of truth: `version.txt`)
 
 For collection status, known telemetry limits, and the Windows verification probe, see [monitor health](docs/monitor-health.md).
 
@@ -28,15 +28,15 @@ Public PoC metadata and actively exploited vulnerability triage:
 [offline exploit intelligence](tools/exploit-intelligence/README.md). This separate
 research tool does not grant response authority or establish blocking coverage.
 
-Pending runtime improvements and validation limits:
+Runtime improvements and validation limits:
 [exploit payload protection](docs/EXPLOIT_PAYLOAD_PROTECTION.md).
 
-Pending automatic online protection:
+Automatic online protection:
 [ExploitShield companion](tools/Sentinel.ExploitShield/README.md) collects public
 exploit metadata every four hours and installs applicable CVE-matched vendor
 security fixes through Windows Update. It is separate from the offline monitoring
-executables; unsupported/no-fix cases remain unresolved. Windows installer and
-live patch validation are still pending.
+executables; unsupported/no-fix cases remain unresolved. CI checks native task
+enrollment and WUA access; actual patch outcomes require target-machine verification.
 
 On-demand investigation reports and hardening status:
 [read-only security audit](docs/SECURITY_AUDIT.md).

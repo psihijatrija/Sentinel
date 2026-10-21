@@ -1,9 +1,10 @@
 # Changelog
 
-## [3.3.9] - Unreleased
+## [3.3.9] - 2026-10-21
 
 ### Changed
 - Add the online ExploitShield companion and default installer task: collect CISA KEV, Exploit-DB and PoC-in-GitHub metadata every four hours; match explicit CVEs to applicable Windows Update/WSUS security fixes; automatically download/install qualifying fixes with audit, metadata revalidation and installed-state read-back. Respect EULA/interactive requirements and report feed failures, unresolved fixes and pending reboots. Do not execute PoCs or generate response rules. See [scope](../tools/Sentinel.ExploitShield/README.md).
+- Add a native Windows CI/release gate for protected installation-path enforcement, scheduled-task apply action, four-hour/SYSTEM enrollment, real SYSTEM execution of the read-only WUA health check, protected audit access and idempotent removal. The fixture never downloads or installs Windows updates.
 - Extend the existing kill-authorized reverse-shell payload rule to PowerShell 7, explicitly recognized short encoded switches, and inline `-Command`/`-c` code. Require socket construction, stream read/write and command invocation in code; ignore literals and comments. Malformed encoded input stays Tier2 LogOnly.
 - Add offline Exploit-DB/CISA KEV metadata triage as a separate research tool; metadata grants no response authority.
 

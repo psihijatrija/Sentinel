@@ -1,12 +1,12 @@
 # Sentinel documentation
 
-Current source version: **3.3.8** (`version.txt`). This package adds the supplied NanoAV as an independent online component with coexistence-only source changes. Its policy and retained limitations are documented in [NanoAV](NANOAV.md); Sentinel desktop-monitor behavior is unchanged. See the [changelog](CHANGELOG.md), [privacy review](PRIVACY_REVIEW_2026-10-21.md) and [engineering gates](ENGINEERING_GATES.md). Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
+Current source version: **3.3.9** (`version.txt`). This package adds [automatic exploit maintenance](../tools/Sentinel.ExploitShield/README.md) alongside the independent NanoAV. Their online scope is separate from Core/Service/Agent. See the [changelog](CHANGELOG.md), [privacy review](PRIVACY_REVIEW_2026-10-21.md) and [engineering gates](ENGINEERING_GATES.md). Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
 
 ## Current guidance
 
-[Pending automatic exploit protection](../tools/Sentinel.ExploitShield/README.md):
+[Automatic exploit protection](../tools/Sentinel.ExploitShield/README.md):
 online CVE/PoC collection, Windows Update applicability and automatic vendor fixes;
-source changes awaiting native Windows validation and release.
+native task/WUA CI checks and explicit target-machine validation limits.
 
 [Independent NanoAV module](NANOAV.md): exact supplied-source changes, online exception, installation and retained upstream limitations.
 
