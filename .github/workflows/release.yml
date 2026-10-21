@@ -32,9 +32,12 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Read version
+        # Source-preservation verification also runs for manual release retries.
         id: ver
         shell: pwsh
         run: |
+          python tools/validation/VerifyNanoAVSource.py
+          if ($LASTEXITCODE -ne 0) { throw "NanoAV source-scope verification failed" }
           $v = (Get-Content version.txt -Raw).Trim()
           if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "version.txt is not MAJOR.MINOR.PATCH: '$v'" }
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append

@@ -1,5 +1,9 @@
 # Sentinel - Threat Model
 
+## Independent NanoAV exception (3.3.8)
+
+The packaged NanoAV runs its supplied online/response code independently of Sentinel's offline and tier-policy boundaries. Its original persistence, provider queries and destructive decisions are retained; coexistence guards do not establish detection correctness or runtime residency. Installed-path and identical-payload exclusions intentionally protect the supplied companion and do not claim resistance to administrator replacement or injection. See [exact source scope and limitations](NANOAV.md). Existing Sentinel desktop monitoring is unchanged; [privacy observations](PRIVACY_REVIEW_2026-10-21.md) distinguish active registrations from dormant code and source review from installed-system evidence.
+
 ## Firewall defaults, policy stores, and monitoring (3.2.3)
 
 The service manages PersistentStore and, when the OS exposes it, the local computer Group Policy store (`localhost`). It mirrors Sentinel's own process blocks into local Group Policy and inspects ActiveStore, including rule filters, enforcement status, profile settings, and BFE/MpsSvc health. It never writes a domain GPO. Effective domain exceptions, disabled/overridden profiles, missing rules, or non-enforced filters produce visible conflicts and a dashboard attention state instead of a protected claim. A trimmed image without a local GPO store uses PersistentStore; missing NetSecurity/PowerShell means policy management is unavailable and is reported, while COM self-block reconciliation and offline detection continue.

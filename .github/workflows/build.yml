@@ -19,6 +19,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Verify original NanoAV source scope
+      run: python tools/validation/VerifyNanoAVSource.py
+
     # The .NET 10 SDK builds everything: the net48 projects (core/service/agent/tests)
     # consume 8.0-pinned NuGet packages but do NOT need the 8.0 SDK, and the MlTrainer
     # tool targets net10.0. Verified locally with only 10.0.400 installed.

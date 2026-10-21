@@ -2,6 +2,8 @@
 
 **Version: 3.2.5**
 
+3.3.8 scope exception: the independently packaged, supplied NanoAV retains its own configuration, online queries and response rules; it is not governed by the Sentinel-core response constraints below. Only its Sentinel-coexistence paths are patched. This does not re-enable Sentinel's removed transports or grant name-only trust to other executables. See [source preservation and limits](NANOAV.md).
+
 ---
 
 ## Hard Rules " Never Violate

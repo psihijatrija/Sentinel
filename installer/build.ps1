@@ -105,6 +105,14 @@ $AutoRotateOut = Join-Path $PublishDir "autorotate"
 & $Dotnet publish $AutoRotateProj -c Release -f net48-windows -o $AutoRotateOut
 if ($LASTEXITCODE -ne 0) { throw "AutoRotate publish failed" }
 
+# Independent NanoAV, using the supplied source and its own assembly metadata/policy.
+$NanoProj = Join-Path $PSScriptRoot "..\modules\NanoAV\NanoAV.csproj"
+$NanoOut = Join-Path $PublishDir "nanoav"
+& $Dotnet publish $NanoProj -c Release -f net48-windows -o $NanoOut
+if ($LASTEXITCODE -ne 0) { throw "NanoAV EXE publication failed" }
+& $Dotnet publish $NanoProj -c Release -f net48-windows -p:OutputType=Library -o $NanoOut
+if ($LASTEXITCODE -ne 0) { throw "NanoAV COM DLL publication failed" }
+
 # 3a. Icon + version.txt
 Write-Host "Deploying Sentinel.ico and version.txt..." -ForegroundColor Yellow
 $IconSource = Join-Path $PSScriptRoot "assets\Sentinel.ico"

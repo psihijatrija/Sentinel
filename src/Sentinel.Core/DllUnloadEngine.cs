@@ -122,6 +122,7 @@ namespace Sentinel.Core
             try
             {
                 var imagePath = SecurityValidation.GetProcessImagePath(processId);
+                if (SelfPathGuard.IsInstalledNanoAvBinary(imagePath)) return Task.CompletedTask;
                 if (!NativeProcessMemory.CanInspect(processId, imagePath))
                     return Task.CompletedTask;
                 if (string.Equals(modulePath, imagePath, StringComparison.OrdinalIgnoreCase))
@@ -417,6 +418,7 @@ namespace Sentinel.Core
                 long originalCreationTime = WindowsProcessTreeOperations.GetCreationTime(processId);
                 var imagePath = SecurityValidation.GetProcessImagePath(processId);
                 if (string.IsNullOrEmpty(imagePath)) return result;
+                if (SelfPathGuard.IsInstalledNanoAvBinary(imagePath)) return result;
 
                 if (!AlwaysOnPolicies.MayUnloadDllsFrom(processId, imagePath))
                     return result;

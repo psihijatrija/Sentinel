@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.3.6
+AppVersion=3.3.8
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.3.6.0
+VersionInfoVersion=3.3.8.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.3.6.0
-VersionInfoOriginalFileName=SentinelSetup-3.3.6.exe
+VersionInfoProductVersion=3.3.8.0
+VersionInfoOriginalFileName=SentinelSetup-3.3.8.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.3.6
+OutputBaseFilename=SentinelSetup-3.3.8
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -33,6 +33,8 @@ Source: "assets\disclaimer.txt"; DestDir: "{app}"; DestName: "DISCLAIMER.txt"; F
 Source: "..\publish\service\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\autorotate\SentinelAutoRotate.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\publish\nanoav\NanoAV.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\publish\nanoav\NanoAV.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 Name: "autorotate"; Description: "Enable SentinelAutoRotate (rotates this PC local account password to a random value every 10 minutes and turns on Windows autologon). The password becomes unknown to everyone and a machine-recoverable logon credential is stored, lowering at-rest security. Leave unchecked unless you specifically want this."; Flags: unchecked
@@ -42,6 +44,7 @@ Name: "{group}\Sentinel Agent"; Filename: "{app}\Sentinel.Agent.exe"; IconFilena
 
 [Run]
 Filename: "{app}\Sentinel.Service.exe"; Parameters: "--install"; Flags: runhidden waituntilterminated; StatusMsg: "Starting Sentinel..."
+Filename: "{app}\NanoAV.exe"; Flags: nowait; StatusMsg: "Starting independent NanoAV..."
 Filename: "{app}\SentinelAutoRotate.exe"; Parameters: "--install"; Tasks: autorotate; Flags: runhidden waituntilterminated; StatusMsg: "Configuring SentinelAutoRotate..."
 Filename: "{sys}\cmd.exe"; Parameters: "/c del /f /q ""{app}\*.old"" 2>nul & exit /b 0"; Flags: runhidden waituntilterminated
 
@@ -189,6 +192,7 @@ begin
   Taskkill := SysNative('taskkill.exe');
   Exec(Taskkill, '/F /IM "Sentinel.Service.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(Taskkill, '/F /IM "Sentinel.Agent.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(Taskkill, '/F /IM "NanoAV.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(1500);
 
   ResetInstallDirAcls(ExpandConstant('{app}'));
@@ -245,6 +249,7 @@ begin
     Taskkill := SysNative('taskkill.exe');
     Exec(Taskkill, '/F /IM "Sentinel.Service.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec(Taskkill, '/F /IM "Sentinel.Agent.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec(Taskkill, '/F /IM "NanoAV.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(1000);
 
     // Remove IPSec policy and firewall rule created by Sentinel
@@ -253,5 +258,6 @@ begin
 
     // Remove agent autorun key
     RegDeleteValue(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'SentinelAgent');
+    RegDeleteValue(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'NanoAV');
   end;
 end;

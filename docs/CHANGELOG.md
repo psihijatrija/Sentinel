@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.3.8] - 2026-10-21
+
+### Added
+- Package the supplied NanoAV as an independent EXE/COM component, preserving its own online feeds, configuration, response decisions, original bootstrap and assembly metadata. It does not enter Sentinel's response-policy pipeline. The installer builds/copies both outputs and launches the original bootstrap.
+- Preserve 17 supplied files byte-for-byte. Five original files have only Sentinel coexistence call-site changes (21 insertions / 6 deletions); add a separate identity/path helper and original/integrated hash manifest. Protect resolved Sentinel process/file targets and skip the uncheckable module-name-wide kill fallback. Unresolvable identities receive no destructive action from that helper.
+- Exempt the co-installed NanoAV image from Sentinel response, memory inspection and DLL remediation. Exempt the original ProgramData runtime copy only when identical to the installed payload. Copies with matching names elsewhere receive no general exemption.
+
+### Validation and scope
+- Full solution cross-build and original EXE/COM DLL publication pass. Seventeen portable coexistence tests pass; one Windows installed-path test is unrun on Linux. Existing 25 dashboard and 8 Worker checks pass. The supplied build's warning-level setting is retained for NanoAV.
+- Sentinel desktop-monitor settings are unchanged. Document the [privacy review](PRIVACY_REVIEW_2026-10-21.md) and explicit [NanoAV online-policy exception, source scope and retained defects](NANOAV.md). The original process-start/cache/lifetime and unscheduled polling behavior is not repaired. Native runtime, actual online-provider access, persistence and installer lifecycle remain unverified here; packaging is not proof those behaviors work.
+
 ## [3.3.7] - 2026-10-20
 
 ### Fixed

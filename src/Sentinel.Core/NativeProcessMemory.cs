@@ -60,6 +60,7 @@ namespace Sentinel.Core
             // Prefer missing a scan over killing interactive games.
             if (string.IsNullOrEmpty(imagePath))
                 return false;
+            if (SelfPathGuard.IsInstalledNanoAvBinary(imagePath)) return false;
             return !SecurityValidation.IsGameOrAntiCheatPath(imagePath);
         }
 

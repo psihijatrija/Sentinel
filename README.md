@@ -15,10 +15,12 @@ living-off-the-land binaries, WMI persistence, and local-network man-in-the-midd
 correlation engine is explainable: every composite emits the score breakdown and the
 ATT&CK techniques that fired.
 
-Sentinel operates offline: online reputation, live intelligence feeds, connectivity probes, and automatic outbound reporting have been removed. The service maintains firewall blocks for Sentinel's non-loopback traffic, mirrors them into supported local Group Policy, and monitors unapproved inbound exceptions for re-enables. Outbound connectivity and narrow DHCP/IPv6 control traffic are preserved; domain conflicts are reported. The authenticated local dashboard remains available. The Agent runs without elevation and delegates required administrator operations to the installed service. The service still hosts system sensors and response; it is not a minimal privilege broker. See [offline operation and validation](docs/OFFLINE_VALIDATION.md).
+Sentinel Core/Service/Agent operate offline: their online reputation, live intelligence feeds, connectivity probes, and automatic outbound reporting have been removed. The service maintains firewall blocks for those executables' non-loopback traffic, mirrors them into supported local Group Policy, and monitors unapproved inbound exceptions for re-enables. Outbound connectivity and narrow DHCP/IPv6 control traffic are preserved; domain conflicts are reported. The authenticated local dashboard remains available. The Agent runs without elevation and delegates required administrator operations to the installed service. The service still hosts system sensors and response; it is not a minimal privilege broker. See [offline operation and validation](docs/OFFLINE_VALIDATION.md).
+
+**3.3.8 online exception:** the separately packaged [NanoAV module](docs/NANOAV.md) retains the supplied program's own online feeds, persistence and response engine. Its only source changes protect Sentinel; it does not follow Sentinel's response rules. Read its retained runtime limitations before relying on it.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.3.7 (single source of truth: `version.txt`)
+**Version:** 3.3.8 (single source of truth: `version.txt`)
 
 For collection status, known telemetry limits, and the Windows verification probe, see [monitor health](docs/monitor-health.md).
 

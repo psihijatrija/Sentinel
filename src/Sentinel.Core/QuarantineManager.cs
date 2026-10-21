@@ -165,6 +165,7 @@ namespace Sentinel.Core
         /// </summary>
         public async Task<string?> QuarantineFileAtomicAsync(string filePath, bool forceQuarantineSigned = false, bool hardenedRemoval = false)
         {
+            if (SelfPathGuard.IsInstalledNanoAvBinary(filePath) || SelfPathGuard.IsNanoAvRuntimeCopy(filePath)) return null;
             if (!File.Exists(filePath))
             {
                 throw new FileNotFoundException("File not found for quarantine", filePath);

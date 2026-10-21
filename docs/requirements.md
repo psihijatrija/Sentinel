@@ -1,6 +1,12 @@
 # Sentinel - Requirements
 
-**Version: 3.3.7**
+**Version: 3.3.8**
+
+### Independent NanoAV (3.3.8)
+
+- Retain the supplied NanoAV rules, online behavior and independent response engine. Limit supplied-source changes to preventing actions against Sentinel; add build/installer integration separately.
+- Identify protected Sentinel targets by resolved installation/data paths and process handles, not arbitrary process names. Sentinel must preserve the co-installed NanoAV image; its external bootstrap copy requires matching installed payload bytes.
+- Declare the online-policy exception and retained upstream defects. Do not claim runtime readiness from cross-compilation or alter existing desktop-monitor settings as part of this integration.
 
 ### Sensor collection and supervision (3.3.7)
 

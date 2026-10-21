@@ -51,6 +51,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sentinel.Core\Sentinel.Core.csproj" />
+    <ProjectReference Include="..\..\modules\NanoAV\NanoAV.csproj" />
   </ItemGroup>
 
   <ItemGroup>

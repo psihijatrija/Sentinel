@@ -17,6 +17,8 @@ namespace Sentinel.Core
         {
             "Sentinel.Service.exe",
             "Sentinel.Agent.exe",
+            "NanoAV.exe",
+            "NanoAV.dll",
             "Sentinel.Core.dll",
             "Sentinel.Service.dll",
             "Sentinel.Agent.dll",
@@ -103,6 +105,37 @@ namespace Sentinel.Core
             }
 
             return false;
+        }
+
+        /// <summary>The original NanoAV bootstrap copies its EXE to this DLL path.
+        /// Trust only an identical copy of the co-installed payload, never the filename alone.</summary>
+        public static bool IsNanoAvRuntimeCopy(string? path)
+            => MatchesNanoAvRuntimeCopy(path, Path.Combine(AppContext.BaseDirectory, "NanoAV.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NanoAV", "NanoAV.dll"));
+
+        internal static bool MatchesNanoAvRuntimeCopy(string? path, string source, string expected)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            try
+            {
+                if (!Path.GetFullPath(path).Equals(Path.GetFullPath(expected), StringComparison.OrdinalIgnoreCase)) return false;
+                if (!File.Exists(source) || !File.Exists(path)) return false;
+                using var first = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var second = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (first.Length != second.Length || first.Length > 16 * 1024 * 1024) return false;
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                return System.Linq.Enumerable.SequenceEqual(sha.ComputeHash(first), sha.ComputeHash(second));
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
+            { return false; }
+        }
+
+        public static bool IsInstalledNanoAvBinary(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            string name = Path.GetFileName(path);
+            return (name.Equals("NanoAV.exe", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("NanoAV.dll", StringComparison.OrdinalIgnoreCase)) && IsSentinelSelfBinary(path);
         }
 
         /// <summary>

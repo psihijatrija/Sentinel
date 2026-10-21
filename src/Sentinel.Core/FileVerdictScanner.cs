@@ -245,6 +245,7 @@ namespace Sentinel.Core
         /// </summary>
         private static bool IsSentinelOwnPath(string filePath)
         {
+            if (SelfPathGuard.IsNanoAvRuntimeCopy(filePath)) return true;
             if (string.IsNullOrEmpty(filePath)) return false;
             var lower = filePath.ToLowerInvariant();
             // Use StartsWith with a trailing separator so "SentinelOther" doesn't match.

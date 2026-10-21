@@ -71,6 +71,8 @@ namespace Sentinel.Core
         {
             if (string.IsNullOrWhiteSpace(modulePath))
                 return Deny("empty-path");
+            if (SelfPathGuard.IsNanoAvRuntimeCopy(modulePath))
+                return Allow("nanoav-installed-payload-copy");
 
             var mod = Normalize(modulePath);
             if (mod.Length == 0)

@@ -1,0 +1,2 @@
+# Preserve the uploaded source bytes across Windows/Linux checkouts.
+* -text whitespace=-trailing-space

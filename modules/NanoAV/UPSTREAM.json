@@ -1,0 +1,138 @@
+{
+  "archive": "NanoAV-main.zip",
+  "archive_sha256": "232f33f15dba196eb462b047c843266c9506aba25e59c19cb74191b35b102ed8",
+  "files": [
+    {
+      "path": ".gitignore",
+      "original_sha256": "758e7d2a59a5cc2ba1310a945f3d41481d01e71bf8e9e9b8c9bcec5c423bdcf1",
+      "integrated_sha256": "758e7d2a59a5cc2ba1310a945f3d41481d01e71bf8e9e9b8c9bcec5c423bdcf1",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "README.md",
+      "original_sha256": "d8f44ed59456a71e6a07dd9ff4df23fe08322c6464274b88c58215b5101308c2",
+      "integrated_sha256": "d8f44ed59456a71e6a07dd9ff4df23fe08322c6464274b88c58215b5101308c2",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "build-nanoav.ps1",
+      "original_sha256": "03656731430ee4cc8c83eb6f3bd16e3bc436f387b2210ea22cffc36213f60509",
+      "integrated_sha256": "03656731430ee4cc8c83eb6f3bd16e3bc436f387b2210ea22cffc36213f60509",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoAV.cs",
+      "original_sha256": "5c5c4af57e007d03443e3a47690a1e5c039670b3f84c1c7ba81395a4a65b26cf",
+      "integrated_sha256": "5c5c4af57e007d03443e3a47690a1e5c039670b3f84c1c7ba81395a4a65b26cf",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoAlerts.cs",
+      "original_sha256": "c2390d7537efc9112ffb644c2f700879783bfa54f64ed7f0c2a035247213b5dc",
+      "integrated_sha256": "c2390d7537efc9112ffb644c2f700879783bfa54f64ed7f0c2a035247213b5dc",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoApp.manifest",
+      "original_sha256": "aa889d65bcc37312d52876ed68a990614cf6b9c8c89f766639096f60e336b665",
+      "integrated_sha256": "aa889d65bcc37312d52876ed68a990614cf6b9c8c89f766639096f60e336b665",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoAssemblyInfo.cs",
+      "original_sha256": "1633f11dd4358751dd8bd12aaa1c6f4f2f498532aadd6547dfef3ec01785c252",
+      "integrated_sha256": "1633f11dd4358751dd8bd12aaa1c6f4f2f498532aadd6547dfef3ec01785c252",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoAutoStart.cs",
+      "original_sha256": "09cc36a1480de30985a2af3bcf56b50f76771132408a67c0392690d519ea13d0",
+      "integrated_sha256": "09cc36a1480de30985a2af3bcf56b50f76771132408a67c0392690d519ea13d0",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoBehavior.cs",
+      "original_sha256": "e114a09e166da2765288d65c5efd711629de2f0dd108ab7b6b35aa6601317439",
+      "integrated_sha256": "e114a09e166da2765288d65c5efd711629de2f0dd108ab7b6b35aa6601317439",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoC2Engine.cs",
+      "original_sha256": "68c3b5d0801c657b46794a803d8945790ebd231a958eee79638c1b955510e59a",
+      "integrated_sha256": "a8b3c6c472c61ca359c68337b9df4b65ece7ba4756c98c4657661ec45a1340b5",
+      "changed_for_coexistence": true
+    },
+    {
+      "path": "src/NanoComServer.cs",
+      "original_sha256": "8ab378b87b7a0e1935a547500638bed37aebce6760fca059db80599deaaba421",
+      "integrated_sha256": "8ab378b87b7a0e1935a547500638bed37aebce6760fca059db80599deaaba421",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoConfig.cs",
+      "original_sha256": "f032e359b596585bc9ae5791cac825b3d72bc23dcf6b913630aa07a86030e882",
+      "integrated_sha256": "f032e359b596585bc9ae5791cac825b3d72bc23dcf6b913630aa07a86030e882",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoDatabase.cs",
+      "original_sha256": "080f91f6d207f61cf3b81bc9a6d2aabc6fb408c15886ba16a96643b47badca34",
+      "integrated_sha256": "080f91f6d207f61cf3b81bc9a6d2aabc6fb408c15886ba16a96643b47badca34",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoFileScanner.cs",
+      "original_sha256": "e831bf0590814ed0782f46be2d36c197c2407e1c9868732c58fd5297cb3e4a08",
+      "integrated_sha256": "5b61c9dbff8b7821a14159ea2699d78f343c755fe99db9acad6edb6e380cd995",
+      "changed_for_coexistence": true
+    },
+    {
+      "path": "src/NanoLogger.cs",
+      "original_sha256": "cf5f6ad28e06183161c8b389c2e9792f890d4185406f9f5a74ad42db68a353d1",
+      "integrated_sha256": "cf5f6ad28e06183161c8b389c2e9792f890d4185406f9f5a74ad42db68a353d1",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoMemoryScanner.cs",
+      "original_sha256": "e394ef1a19ccd60a3cc2140243f7817453a3a554fc422c8fbdbf141ed538a353",
+      "integrated_sha256": "b1529ed820b76a89b3f396ad9e9589283536f8935f45291f494f3a856ba7b057",
+      "changed_for_coexistence": true
+    },
+    {
+      "path": "src/NanoNative.cs",
+      "original_sha256": "192daed8fce126c7f27603b32d5a4517a17c1c09b5e2488c161a7043e89966e4",
+      "integrated_sha256": "192daed8fce126c7f27603b32d5a4517a17c1c09b5e2488c161a7043e89966e4",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoPidRegistry.cs",
+      "original_sha256": "eb8544f5797a866aa56a9e07db0e5118b64742ee491a284308ee456ed90694ad",
+      "integrated_sha256": "f5dcde94863b79bdb5196f13dcd6c75e75c333433f037dff92993951d9e6b439",
+      "changed_for_coexistence": true
+    },
+    {
+      "path": "src/NanoProcessHelper.cs",
+      "original_sha256": "1f3991dbd59dbd6102647e6553230243d8c2df0db49fb5ed1a60db2caa5a03c4",
+      "integrated_sha256": "1f3991dbd59dbd6102647e6553230243d8c2df0db49fb5ed1a60db2caa5a03c4",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoThreatAnalysis.cs",
+      "original_sha256": "2ec0d5255e474eb7a5ce1c753482f7a50e833d3db72760eb0b3453c0eadefed7",
+      "integrated_sha256": "11c2aa87cb425898f232c8078bacf0d6be385fbb4f9c781af879a816a4768647",
+      "changed_for_coexistence": true
+    },
+    {
+      "path": "src/NanoThreatIntel.cs",
+      "original_sha256": "23e342e15dee5e9d9fda339c70e1cfcbbb02fc57a6d35a75020ad5240f4a7020",
+      "integrated_sha256": "23e342e15dee5e9d9fda339c70e1cfcbbb02fc57a6d35a75020ad5240f4a7020",
+      "changed_for_coexistence": false
+    },
+    {
+      "path": "src/NanoWmi.cs",
+      "original_sha256": "9a94c58ce648dc208225c4a0d8ba907678a4b9e58d8757cb65fe0ad2a9812773",
+      "integrated_sha256": "9a94c58ce648dc208225c4a0d8ba907678a4b9e58d8757cb65fe0ad2a9812773",
+      "changed_for_coexistence": false
+    }
+  ]
+}
