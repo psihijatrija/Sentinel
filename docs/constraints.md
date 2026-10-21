@@ -2,6 +2,13 @@
 
 **Version: 3.2.5**
 
+3.3.9 scope: the user-requested ExploitShield companion is an installed,
+visible scheduled online maintenance component. It reads fixed public metadata
+sources and installs applicable CVE-matched vendor security updates through WUA;
+it never executes PoCs, generates kill rules or overrides Core's Tier2 LogOnly
+contract. Core/Service/Agent offline policy is unchanged. See
+[automatic protection boundaries](../tools/Sentinel.ExploitShield/README.md).
+
 3.3.8 scope exception: the independently packaged, supplied NanoAV retains its own configuration, online queries and response rules; it is not governed by the Sentinel-core response constraints below. Only its Sentinel-coexistence paths are patched. This does not re-enable Sentinel's removed transports or grant name-only trust to other executables. See [source preservation and limits](NANOAV.md).
 
 ---

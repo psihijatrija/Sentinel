@@ -68,3 +68,7 @@ semantic-review/
 # Test result artifacts
 **/TestResults/
 *.trx
+
+# Python research-tool caches
+__pycache__/
+*.py[cod]

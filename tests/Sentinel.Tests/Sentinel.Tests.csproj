@@ -52,11 +52,15 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sentinel.Core\Sentinel.Core.csproj" />
     <Compile Include="..\..\modules\NanoAV\src\SentinelCoexistencePaths.cs" Link="Shared\SentinelCoexistencePaths.cs" />
+    <Compile Include="..\..\tools\Sentinel.ExploitShield\ShieldCycle.cs" Link="Shared\ExploitShield\ShieldCycle.cs" />
+    <Compile Include="..\..\tools\Sentinel.ExploitShield\PublicExploitSource.cs" Link="Shared\ExploitShield\PublicExploitSource.cs" />
+    <Compile Include="..\..\tools\Sentinel.ExploitShield\WindowsSecurityUpdates.cs" Link="Shared\ExploitShield\WindowsSecurityUpdates.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- net48 ZipArchive lives in the System.IO.Compression facade assembly. -->
     <Reference Include="System.IO.Compression" />
+    <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
 

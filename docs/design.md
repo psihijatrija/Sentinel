@@ -1,5 +1,13 @@
 ## Sensor collection and worker supervision (3.3.7)
 
+Pending ExploitShield maintenance is implemented as a separate net48 console
+companion and visible four-hour SYSTEM task. Fixed HTTPS feeds supply CVE IDs;
+Windows Update/WSUS supplies applicability and security packages. Injection of
+feed, update and audit interfaces keeps planning testable without network/admin
+access. Update metadata is revalidated and outcomes read back before remediation
+is recorded. Core detection tiers, offline transports and response dispatch remain
+separate. See [automatic maintenance details and limits](../tools/Sentinel.ExploitShield/README.md).
+
 DNS collection subscribes to query-start events 3006 from the shared real-time DNS provider. The dispatcher also handles completion events 3008; server-configuration IDs 1001/1002 are not query telemetry. A bounded queue connects the dispatcher to `DnsQueryMonitor`; overflow is counted and reported without discarding the available batch. Structured `QueryName` event-log reads provide fallback when the real-time provider/consumer is unavailable. Source transitions can create a coverage gap and are logged; missing/denied channels do not become an imaginary cache fallback.
 
 Task liveness and successful collection are independent. Worker-owned progress snapshots carry scope, successful cycles, observations and errors. Supervisor ticks cannot clear collection errors. Watchdog scheduling grace is bounded and does not alter historical heartbeat evidence. File watching remains supervised after its initial walk; watcher errors fault the worker for group recovery and reconciliation. Explicit one-time loaders/cleanup operations finish as Completed; unsupported workers remain Unavailable; the process fallback is Standby while kernel-process ETW works. The dashboard retains the registered roster and keeps unverified or failed collection visible.
@@ -467,7 +475,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 |------|----------|-------------|-----------------|
 | `LsassAccessRule` | CredentialDump | LSASS-targeting cmdline tokens, dump file names | 0.85-0.92 |
 | `RansomwareDetectionRule` | Ransomware | Shadow copy deletion, bulk renames, I/O rate, 100+ extensions | 0.68-0.99 |
-| `ReverseShellRule` | ReverseShell | Encoded PowerShell, LOLBins, C2 ports, C2 framework strings | 0.80-0.93 |
+| `ReverseShellRule` | ReverseShell | PowerShell/pwsh encoded or inline TCP socket command loop; ordinary encoding stays LogOnly. See [scope](EXPLOIT_PAYLOAD_PROTECTION.md). | 0.85 terminal / 0.50 observe |
 | `ThreatIntelInjectionRule` | ProcessInjection | Kernel-observed VirtualAllocEx, VirtualProtect RWX, APC, SetThreadContext | 0.72-0.93 |
 | `PrivilegeEscalationRule` | PrivilegeEscalation | UAC bypass, token manipulation, named pipe impersonation, DLL hijacking | 0.80-0.95 |
 | `AttackToolsRule` | SecurityEvasion | C2 frameworks, credential tools, AD tools, LOLBin abuse (60+ patterns) | 0.75-0.97 |

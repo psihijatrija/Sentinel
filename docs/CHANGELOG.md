@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.3.9] - 2026-10-21
+
+### Changed
+- Add the online ExploitShield companion and default installer task: collect CISA KEV, Exploit-DB and PoC-in-GitHub metadata every four hours; match explicit CVEs to applicable Windows Update/WSUS security fixes; automatically download/install qualifying fixes with audit, metadata revalidation and installed-state read-back. Respect EULA/interactive requirements and report feed failures, unresolved fixes and pending reboots. Do not execute PoCs or generate response rules. See [scope](../tools/Sentinel.ExploitShield/README.md).
+- Add a native Windows CI/release gate for protected installation-path enforcement, scheduled-task apply action, four-hour/SYSTEM enrollment, real SYSTEM execution of the read-only WUA health check, protected audit access and idempotent removal. The fixture never downloads or installs Windows updates.
+- Extend the existing kill-authorized reverse-shell payload rule to PowerShell 7, explicitly recognized short encoded switches, and inline `-Command`/`-c` code. Require socket construction, stream read/write and command invocation in code; ignore literals and comments. Malformed encoded input stays Tier2 LogOnly.
+- Add offline Exploit-DB/CISA KEV metadata triage as a separate research tool; metadata grants no response authority.
+
+### Validation and limits
+- Full solution Release cross-build and companion publication: 0 warnings, 0 errors. A temporary .NET 10 host exercised the compiled Core Framework assembly and exact linked companion sources: 107 related regression cases passed, 0 failed (payload variants, response policy, feed validation/degradation, orchestration and mocked WUA revalidation/install/read-back). The normal Windows xUnit runner was not executed. Online NuGet auditing was disabled for the cached build.
+- Production fetch logic retrieved and parsed live CISA KEV and Exploit-DB metadata: 26,390 distinct CVEs, including 1,754 KEV entries. GitHub API access was denied by this workspace's proxy; the run retained the two healthy sources and reported degraded coverage. Native WUA, scheduled-task/ACL and installer lifecycle validation remain outstanding; no patches were installed in this session.
+- See [payload protection scope](EXPLOIT_PAYLOAD_PROTECTION.md) and [automatic vendor-fix scope](../tools/Sentinel.ExploitShield/README.md). No claim of universal PoC blocking, original PHP exploit coverage, or installed protection. Windows runtime and installer validation remain required before release.
+
 ## [3.3.8] - 2026-10-21
 
 ### Added

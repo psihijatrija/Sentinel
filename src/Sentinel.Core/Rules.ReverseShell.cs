@@ -11,26 +11,93 @@ namespace Sentinel.Core
         public string Name => "ReverseShellRule";
 
         // Routine automation flags do not prove evasion or a reverse shell.
-        private static readonly System.Text.RegularExpressions.Regex EncodedArgument = new(
-            @"(?:^|\s)-(?:enc|encodedcommand)\s+[""']?([A-Za-z0-9+/=]+)",
+        private static readonly System.Text.RegularExpressions.Regex ScriptArgument = new(
+            @"(?:^|\s)-(?<switch>encodedcommand|encodedcomman|encodedcomma|encodedcomm|encodedcom|encodedco|encodedc|encoded|encode|encod|enco|enc|ec|e|command|c|file|f)\s+",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
         internal static bool ContainsReverseShell(string command)
         {
+            return TryGetScript(command, out var script, out _) && IsSocketCommandLoop(script);
+        }
+
+        private static bool TryGetScript(string command, out string script, out bool encoded)
+        {
+            script = ""; encoded = false;
             if (command.Length > 65536) return false;
-            var match = EncodedArgument.Match(command);
+            var match = ScriptArgument.Match(command);
             if (!match.Success) return false;
+            var option = match.Groups["switch"].Value;
+            // -File's remaining arguments belong to the script, not the PowerShell host.
+            if (option.Equals("file", StringComparison.OrdinalIgnoreCase) || option.Equals("f", StringComparison.OrdinalIgnoreCase)) return false;
+            encoded = option.StartsWith("e", StringComparison.OrdinalIgnoreCase);
+            var value = command.Substring(match.Index + match.Length).Trim();
+            if (!encoded)
+            {
+                // Windows command-line grouping quotes are not PowerShell string literals.
+                script = value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"'
+                    ? value.Substring(1, value.Length - 2) : value;
+                return true;
+            }
+            var token = System.Text.RegularExpressions.Regex.Match(value, @"^[""']?([A-Za-z0-9+/=]+)(?:[""']?(?:\s|$))");
+            if (!token.Success) return true; // Preserve encoded-command observation without kill proof.
             try
             {
-                var script = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(match.Groups[1].Value));
-                // Require a socket stream, input/output and command execution together.
-                return script.IndexOf("tcpclient", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    script.IndexOf("getstream", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    System.Text.RegularExpressions.Regex.IsMatch(script, @"\.Read\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
-                    System.Text.RegularExpressions.Regex.IsMatch(script, @"\.Write\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
-                    System.Text.RegularExpressions.Regex.IsMatch(script, @"\b(?:iex|invoke-expression)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                script = new System.Text.UnicodeEncoding(false, false, true).GetString(Convert.FromBase64String(token.Groups[1].Value));
+                return true;
             }
-            catch (FormatException) { return false; }
+            catch (FormatException) { return true; } // Invalid external encoding is not executable evidence.
+            catch (System.Text.DecoderFallbackException) { return true; }
+        }
+
+        private static bool IsSocketCommandLoop(string script)
+        {
+            script = MaskNonCode(script);
+            // Require a socket constructor, stream methods and command invocation in code.
+            const System.Text.RegularExpressions.RegexOptions flags = System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant;
+            return System.Text.RegularExpressions.Regex.IsMatch(script,
+                    @"(?:\bNew-Object\s+(?:-TypeName\s+)?(?:System\.)?Net\.Sockets\.TCPClient\b|\[(?:System\.)?Net\.Sockets\.TCPClient\]\s*::\s*new\s*\()", flags) &&
+                System.Text.RegularExpressions.Regex.IsMatch(script, @"\.GetStream\s*\(", flags) &&
+                System.Text.RegularExpressions.Regex.IsMatch(script, @"\.Read\s*\(", flags) &&
+                System.Text.RegularExpressions.Regex.IsMatch(script, @"\.Write\s*\(", flags) &&
+                System.Text.RegularExpressions.Regex.IsMatch(script, @"(?<![\w$.-])(?:iex|invoke-expression)(?=\s|\()", flags);
+        }
+
+        // Conservative lexical masking avoids killing commands that only print, document or
+        // comment on a payload. Interpolated strings and here-strings are not analyzed.
+        private static string MaskNonCode(string script)
+        {
+            var code = script.ToCharArray();
+            char quote = '\0'; bool lineComment = false; int blockDepth = 0;
+            for (int i = 0; i < code.Length; i++)
+            {
+                char current = script[i];
+                char next = i + 1 < script.Length ? script[i + 1] : '\0';
+                if (lineComment)
+                {
+                    if (current == '\n' || current == '\r') lineComment = false;
+                    else code[i] = ' ';
+                }
+                else if (blockDepth > 0)
+                {
+                    code[i] = ' ';
+                    if (current == '#' && next == '>') { code[++i] = ' '; blockDepth--; }
+                    else if (current == '<' && next == '#') { code[++i] = ' '; blockDepth++; }
+                }
+                else if (quote != '\0')
+                {
+                    code[i] = ' ';
+                    if ((quote == '"' && current == '`') || (current == quote && next == quote))
+                    { if (i + 1 < code.Length) code[++i] = ' '; }
+                    else if (current == quote) quote = '\0';
+                }
+                else if (current == '<' && next == '#') { code[i] = ' '; code[++i] = ' '; blockDepth = 1; }
+                else if (current == '#') { code[i] = ' '; lineComment = true; }
+                else if (current == '\'' || current == '"') { code[i] = ' '; quote = current; }
+            }
+            // Unterminated strings/comments and here-strings are ambiguous: no kill proof.
+            if (quote != '\0' || blockDepth > 0 || script.Contains("@\"") || script.Contains("@'")) return "";
+            return new string(code);
         }
 
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
@@ -38,38 +105,37 @@ namespace Sentinel.Core
             if (context.TriggeringEvent is ProcessTelemetry pt)
             {
                 var originalCommand = pt.CommandLine ?? "";
-                var cmd = originalCommand.ToLowerInvariant();
-                if (pt.ProcessName.Contains("powershell") && 
-                    (cmd.Contains("-enc") || 
-                     cmd.Contains("-encodedcommand")))
+                var host = (pt.ProcessName ?? "").ToLowerInvariant();
+                bool powershell = host == "powershell" || host == "powershell.exe" || host == "pwsh" || host == "pwsh.exe";
+                if (powershell && TryGetScript(originalCommand, out var script, out var encoded))
                 {
-                    // Check for escalation indicators that suggest malicious use
-                    bool hasEscalationIndicator = ContainsReverseShell(originalCommand);
+                    bool hasEscalationIndicator = IsSocketCommandLoop(script);
 
                     if (hasEscalationIndicator)
                     {
-                        // Combined with evasion flags or network indicators -> Tier1 + Kill
+                        // Preserve the existing terminal reverse-shell response authority.
                         return new DetectionEvent
                         {
                             RuleName = Name,
-                            ProcessName = pt.ProcessName,
+                            ProcessName = pt.ProcessName ?? "",
                             ProcessId = pt.ProcessId,
+                            Timestamp = pt.Timestamp,
                             SignalType = SignalType.ReverseShell,
                             Family = TerminalFamily.ReverseShell,
                             Confidence = 0.85,
                             Tier = DetectionTier.Tier1Behavioral,
                             AuthorizedResponse = ResponseAction.KillProcessTree,
-                            Evidence = $"Encoded PowerShell with socket command-execution loop: {originalCommand}",
-                            Reasoning = "Decoded PowerShell combines a TCP stream, stream reads and writes, and command execution, consistent with a reverse-shell command loop."
+                            Evidence = $"PowerShell with socket command-execution loop (encoded={encoded}): {originalCommand}",
+                            Reasoning = "PowerShell code combines a TCP stream, stream reads and writes, and command execution, consistent with a reverse-shell command loop."
                         };
                     }
-                    else
+                    else if (encoded)
                     {
                         // Encoded command alone -> Tier2 (log only, no kill)
                         return new DetectionEvent
                         {
                             RuleName = "PowerShell: Encoded Command Observation",
-                            ProcessName = pt.ProcessName,
+                            ProcessName = pt.ProcessName ?? "",
                             ProcessId = pt.ProcessId,
                             SignalType = SignalType.Generic,
                             Metadata = new Dictionary<string, string> { ["EncodedPowerShellObservation"] = "true", ["WeakObserveSeed"] = "true" },
