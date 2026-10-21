@@ -51,7 +51,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sentinel.Core\Sentinel.Core.csproj" />
-    <ProjectReference Include="..\..\modules\NanoAV\NanoAV.csproj" />
+    <Compile Include="..\..\modules\NanoAV\src\SentinelCoexistencePaths.cs" Link="Shared\SentinelCoexistencePaths.cs" />
   </ItemGroup>
 
   <ItemGroup>

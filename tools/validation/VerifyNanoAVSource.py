@@ -34,13 +34,13 @@ def main():
             original_sources.add(path.name)
     if changed != allowed:
         raise ValueError("Changes exceed the five coexistence call-site files")
-    expected_sources = original_sources | {"SentinelCoexistence.cs"}
+    expected_sources = original_sources | {"SentinelCoexistence.cs", "SentinelCoexistencePaths.cs"}
     if {path.name for path in (root / "src").glob("*.cs")} != expected_sources:
         raise ValueError("Unexpected replacement source in NanoAV")
     project = ET.parse(root / "NanoAV.csproj").getroot()
     if list(project.iter("ProjectReference")) or list(project.iter("PackageReference")):
         raise ValueError("NanoAV must remain independent of Sentinel's engine")
-    print("NanoAV source scope verified: 17 unchanged files, 5 coexistence-only files, separate helper.")
+    print("NanoAV source scope verified: 17 unchanged files, 5 coexistence-only files, separate helpers.")
 
 
 if __name__ == "__main__":

@@ -13,21 +13,6 @@ namespace NanoAV
     // This helper does not evaluate NanoAV verdicts or invoke Sentinel response policy.
     internal static class SentinelCoexistence
     {
-        internal static bool IsInside(string candidate, string directory)
-        {
-            if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(directory)
-                || !Path.IsPathRooted(candidate) || !Path.IsPathRooted(directory)) return false;
-            string root = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string full = Path.GetFullPath(candidate);
-            return full.Equals(root, StringComparison.OrdinalIgnoreCase)
-                || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-        }
-
-        internal static bool IsProtectedResolvedPath(string path, string installDirectory, string dataDirectory)
-        {
-            return IsInside(path, installDirectory) || IsInside(path, dataDirectory);
-        }
-
         private static string SentinelDirectory()
         {
             using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\Sentinel"))
@@ -69,7 +54,7 @@ namespace NanoAV
                 if (root == null) return true; // Cannot establish Sentinel identity: no destructive file action.
                 string full = Resolve(path);
                 string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Sentinel");
-                return IsProtectedResolvedPath(full, root, Resolve(data));
+                return SentinelCoexistencePaths.IsProtectedResolvedPath(full, root, Resolve(data));
             }
             catch (Exception ex)
             { Logger.Log("Sentinel coexistence could not resolve file identity: " + ex.Message); return true; }

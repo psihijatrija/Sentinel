@@ -8,6 +8,14 @@ namespace Sentinel.Tests;
 
 public sealed class NanoAvCoexistenceTests
 {
+    [Fact]
+    public void CoexistenceTestsDoNotLoadTheStandaloneScanner()
+    {
+        var assembly = typeof(NanoAvCoexistenceTests).Assembly;
+        Assert.Same(assembly, typeof(SentinelCoexistencePaths).Assembly);
+        Assert.DoesNotContain(assembly.GetReferencedAssemblies(), name => name.Name == "NanoAV");
+    }
+
     [Theory]
     [InlineData("Sentinel.Service.exe")]
     [InlineData("Sentinel.Agent.exe")]
@@ -17,8 +25,8 @@ public sealed class NanoAvCoexistenceTests
     {
         string root = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-install");
         string data = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-data");
-        Assert.True(SentinelCoexistence.IsProtectedResolvedPath(Path.Combine(root, name), root, data));
-        Assert.True(SentinelCoexistence.IsProtectedResolvedPath(Path.Combine(data, "events.jsonl"), root, data));
+        Assert.True(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(root, name), root, data));
+        Assert.True(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(data, "events.jsonl"), root, data));
     }
 
     [Theory]
@@ -30,8 +38,8 @@ public sealed class NanoAvCoexistenceTests
     {
         string root = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-install");
         string data = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-data");
-        Assert.False(SentinelCoexistence.IsProtectedResolvedPath(Path.Combine(root + "-other", name), root, data));
-        Assert.False(SentinelCoexistence.IsProtectedResolvedPath(Path.Combine(root, "..", "outside", name), root, data));
+        Assert.False(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(root + "-other", name), root, data));
+        Assert.False(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(root, "..", "outside", name), root, data));
     }
 
     [Theory]
@@ -40,7 +48,7 @@ public sealed class NanoAvCoexistenceTests
     [InlineData("Sentinel.Service.exe")]
     public void RelativeNamesCannotBecomeAProtectedFile(string path)
     {
-        Assert.False(SentinelCoexistence.IsInside(path, Path.GetTempPath()));
+        Assert.False(SentinelCoexistencePaths.IsInside(path, Path.GetTempPath()));
     }
 
     [WindowsContainmentFact]
