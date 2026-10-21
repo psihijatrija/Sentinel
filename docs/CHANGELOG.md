@@ -8,6 +8,7 @@
 - Exempt the co-installed NanoAV image from Sentinel response, memory inspection and DLL remediation. Exempt the original ProgramData runtime copy only when identical to the installed payload. Copies with matching names elsewhere receive no general exemption.
 
 ### Validation and scope
+- Refresh NanoAV's bootstrap marker during installation/upgrade so its unchanged installer updates the copied DLL and current-user startup entry instead of retaining an older unpatched copy. Preserve NanoAV's data and response rules.
 - Windows CI reported `0x80070241` when xUnit tried to load the NanoAV EXE as a test dependency. Tests now compile the same path helper source used by NanoAV instead of loading its complete executable. Original NanoAV source/manifest and Windows signature enforcement are unchanged; native Windows rerun remains required.
 - Full solution cross-build and original EXE/COM DLL publication pass. Eighteen portable coexistence tests pass; one Windows installed-path test is unrun on Linux. Existing 25 dashboard and 8 Worker checks pass. The supplied build's warning-level setting is retained for NanoAV.
 - Sentinel desktop-monitor settings are unchanged. Document the [privacy review](PRIVACY_REVIEW_2026-10-21.md) and explicit [NanoAV online-policy exception, source scope and retained defects](NANOAV.md). The original process-start/cache/lifetime and unscheduled polling behavior is not repaired. Native runtime, actual online-provider access, persistence and installer lifecycle remain unverified here; packaging is not proof those behaviors work.

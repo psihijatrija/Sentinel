@@ -2,6 +2,8 @@
 
 NanoAV is packaged as its own `NanoAV.exe` and COM `NanoAV.dll`, built from the supplied NanoAV-main.zip. It does not reference Sentinel.Core or call Sentinel's tier, scoring or response-policy pipeline. The installer launches its original bootstrap after installing Sentinel. Its original COM registration, per-user Run key, online requests, caches, heuristics, quarantine, deletion and response decisions remain its own.
 
+On installation/upgrade, remove only NanoAV's `.installed` bootstrap marker so the unchanged bootstrap refreshes its ProgramData DLL copy and current-user startup registration from the co-installed, coexistence-patched EXE. Preserve its configuration, database, logs, backups and quarantine. An already running older copy is not retroactively patched; the upgrade must complete and its startup path must point to the integrated copy.
+
 ## Exact source scope
 
 Archive SHA-256: `232f33f15dba196eb462b047c843266c9506aba25e59c19cb74191b35b102ed8`.
