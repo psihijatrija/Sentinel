@@ -132,3 +132,22 @@ jobs:
         name: dns-test-results
         path: TestResults/*.trx
         if-no-files-found: ignore
+
+  exploitshield-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Publish ExploitShield and build native task fixture
+      shell: pwsh
+      run: |
+        dotnet publish tools/Sentinel.ExploitShield/Sentinel.ExploitShield.csproj -c Release -warnaserror -o "$env:RUNNER_TEMP/exploitshield-payload"
+        if ($LASTEXITCODE -ne 0) { throw 'ExploitShield publication failed' }
+        dotnet build tools/Sentinel.ExploitShieldSmoke/Sentinel.ExploitShieldSmoke.csproj -c Release -warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Native task fixture build failed' }
+    - name: Exercise native WUA access and protected SYSTEM task lifecycle
+      shell: powershell
+      run: ./tools/validation/WindowsExploitShieldSmoke.ps1

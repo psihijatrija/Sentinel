@@ -104,6 +104,17 @@ jobs:
         working-directory: worker
         run: npm test
 
+      - name: Verify native ExploitShield task and WUA boundary
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          dotnet publish tools/Sentinel.ExploitShield/Sentinel.ExploitShield.csproj -c Release -warnaserror -o "$env:RUNNER_TEMP/exploitshield-payload"
+          if ($LASTEXITCODE -ne 0) { throw 'ExploitShield publication failed' }
+          dotnet build tools/Sentinel.ExploitShieldSmoke/Sentinel.ExploitShieldSmoke.csproj -c Release -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native task fixture build failed' }
+          & powershell.exe -NoProfile -File tools/validation/WindowsExploitShieldSmoke.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Native ExploitShield smoke failed; release blocked' }
+
       - name: Verify dashboard response outcome rendering
         if: steps.exists.outputs.skip == 'false'
         run: node --test tests/dashboard-response.test.cjs
