@@ -105,6 +105,12 @@ $AutoRotateOut = Join-Path $PublishDir "autorotate"
 & $Dotnet publish $AutoRotateProj -c Release -f net48-windows -o $AutoRotateOut
 if ($LASTEXITCODE -ne 0) { throw "AutoRotate publish failed" }
 
+# Online CVE/PoC companion; monitoring executables retain their offline policy.
+$ExploitShieldProj = Join-Path $PSScriptRoot "..\tools\Sentinel.ExploitShield\Sentinel.ExploitShield.csproj"
+$ExploitShieldOut = Join-Path $PublishDir "exploitshield"
+& $Dotnet publish $ExploitShieldProj -c Release -f net48-windows -o $ExploitShieldOut
+if ($LASTEXITCODE -ne 0) { throw "ExploitShield publish failed" }
+
 # Independent NanoAV, using the supplied source and its own assembly metadata/policy.
 $NanoProj = Join-Path $PSScriptRoot "..\modules\NanoAV\NanoAV.csproj"
 $NanoOut = Join-Path $PublishDir "nanoav"

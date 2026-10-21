@@ -4,6 +4,10 @@ Current source version: **3.3.8** (`version.txt`). This package adds the supplie
 
 ## Current guidance
 
+[Pending automatic exploit protection](../tools/Sentinel.ExploitShield/README.md):
+online CVE/PoC collection, Windows Update applicability and automatic vendor fixes;
+source changes awaiting native Windows validation and release.
+
 [Independent NanoAV module](NANOAV.md): exact supplied-source changes, online exception, installation and retained upstream limitations.
 
 | Document | Scope |

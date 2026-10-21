@@ -24,6 +24,20 @@ Sentinel Core/Service/Agent operate offline: their online reputation, live intel
 
 For collection status, known telemetry limits, and the Windows verification probe, see [monitor health](docs/monitor-health.md).
 
+Public PoC metadata and actively exploited vulnerability triage:
+[offline exploit intelligence](tools/exploit-intelligence/README.md). This separate
+research tool does not grant response authority or establish blocking coverage.
+
+Pending runtime improvements and validation limits:
+[exploit payload protection](docs/EXPLOIT_PAYLOAD_PROTECTION.md).
+
+Pending automatic online protection:
+[ExploitShield companion](tools/Sentinel.ExploitShield/README.md) collects public
+exploit metadata every four hours and installs applicable CVE-matched vendor
+security fixes through Windows Update. It is separate from the offline monitoring
+executables; unsupported/no-fix cases remain unresolved. Windows installer and
+live patch validation are still pending.
+
 On-demand investigation reports and hardening status:
 [read-only security audit](docs/SECURITY_AUDIT.md).
 

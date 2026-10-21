@@ -33,6 +33,7 @@ Source: "assets\disclaimer.txt"; DestDir: "{app}"; DestName: "DISCLAIMER.txt"; F
 Source: "..\publish\service\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\autorotate\SentinelAutoRotate.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\publish\exploitshield\*"; DestDir: "{app}\ExploitShield"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\nanoav\NanoAV.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\publish\nanoav\NanoAV.dll"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -53,6 +54,20 @@ Type: filesandordirs; Name: "{app}"
 Type: filesandordirs; Name: "{commonpf32}\Sentinel"
 
 [Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    ResultCode := -1;
+    if not Exec(ExpandConstant('{app}\ExploitShield\Sentinel.ExploitShield.exe'), '--install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      RaiseException('Could not start automatic exploit protection configuration.');
+    if ResultCode <> 0 then
+      RaiseException('Automatic exploit protection could not be scheduled. Check the ExploitShield audit log.');
+  end;
+end;
+
 function IsDotNet48OrHigher(): Boolean;
 var
   Release: Cardinal;
@@ -173,6 +188,14 @@ var
   ResultCode: Integer;
   Svc, Taskkill, Sc: String;
 begin
+  if FileExists(ExpandConstant('{app}\ExploitShield\Sentinel.ExploitShield.exe')) then
+  begin
+    ResultCode := -1;
+    if not Exec(ExpandConstant('{app}\ExploitShield\Sentinel.ExploitShield.exe'), '--uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      RaiseException('Could not stop automatic exploit protection before upgrade.');
+    if ResultCode <> 0 then
+      RaiseException('Could not remove the old exploit protection schedule before upgrade.');
+  end;
   Svc := ExpandConstant('{app}\Sentinel.Service.exe');
   if FileExists(Svc) then
   begin
@@ -227,6 +250,14 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    if FileExists(ExpandConstant('{app}\ExploitShield\Sentinel.ExploitShield.exe')) then
+    begin
+      ResultCode := -1;
+      if not Exec(ExpandConstant('{app}\ExploitShield\Sentinel.ExploitShield.exe'), '--uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        RaiseException('Could not stop Sentinel ExploitShield; uninstall cancelled.');
+      if ResultCode <> 0 then
+        RaiseException('Could not remove Sentinel ExploitShield schedule; uninstall cancelled.');
+    end;
     // Tear down SentinelAutoRotate (scheduled tasks + autologon) before files
     // are removed, so the exe is still present to run its --uninstall cleanup.
     if FileExists(ExpandConstant('{app}\SentinelAutoRotate.exe')) then

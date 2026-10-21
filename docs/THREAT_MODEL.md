@@ -1,5 +1,19 @@
 # Sentinel - Threat Model
 
+## Pending automatic exploit maintenance
+
+ExploitShield is a separate online SYSTEM task. Internet metadata is untrusted
+selection input: it supplies CVE IDs only, while Windows Update/WSUS supplies
+applicability and signed vendor security packages. Metadata cannot supply code,
+commands, package URLs or new process-response authority. A compromised feed can
+influence which otherwise-applicable approved security fix is selected; fixed
+source URLs, restrictive task/install ACLs, bounded parsing, durable pre-action
+audit and update revalidation limit that boundary. The task respects configured
+update policy and does not request a reboot. Feed failure, manual requirements,
+reboot-pending and failed/unverified installs remain explicit. No guarantee is
+made for unknown/no-fix exploits or applications outside the update catalog.
+See [operation and native validation gaps](../tools/Sentinel.ExploitShield/README.md).
+
 ## Independent NanoAV exception (3.3.8)
 
 The packaged NanoAV runs its supplied online/response code independently of Sentinel's offline and tier-policy boundaries. Its original persistence, provider queries and destructive decisions are retained; coexistence guards do not establish detection correctness or runtime residency. Installed-path and identical-payload exclusions intentionally protect the supplied companion and do not claim resistance to administrator replacement or injection. See [exact source scope and limitations](NANOAV.md). Existing Sentinel desktop monitoring is unchanged; [privacy observations](PRIVACY_REVIEW_2026-10-21.md) distinguish active registrations from dormant code and source review from installed-system evidence.

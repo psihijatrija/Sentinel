@@ -21,12 +21,18 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Diagnostics", "too
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NanoAV", "modules\NanoAV\NanoAV.csproj", "{6FBC1EB9-E5A0-43A9-9B3A-B38A4A6F59E8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.ExploitShield", "tools\Sentinel.ExploitShield\Sentinel.ExploitShield.csproj", "{996363F8-D64B-4F4B-A514-D5CBE1C2E3D4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{996363F8-D64B-4F4B-A514-D5CBE1C2E3D4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{996363F8-D64B-4F4B-A514-D5CBE1C2E3D4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{996363F8-D64B-4F4B-A514-D5CBE1C2E3D4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{996363F8-D64B-4F4B-A514-D5CBE1C2E3D4}.Release|Any CPU.Build.0 = Release|Any CPU
 		{6FBC1EB9-E5A0-43A9-9B3A-B38A4A6F59E8}.Debug|Any CPU.ActiveCfg = Debug|AnyCPU
 		{6FBC1EB9-E5A0-43A9-9B3A-B38A4A6F59E8}.Debug|Any CPU.Build.0 = Debug|AnyCPU
 		{6FBC1EB9-E5A0-43A9-9B3A-B38A4A6F59E8}.Release|Any CPU.ActiveCfg = Release|AnyCPU
@@ -64,6 +70,7 @@ Global
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
+		{996363F8-D64B-4F4B-A514-D5CBE1C2E3D4} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{E5CB0666-058B-486D-B2F9-D0FD432B3578} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 EndGlobal
