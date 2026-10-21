@@ -8,6 +8,8 @@
 - Exempt the co-installed NanoAV image from Sentinel response, memory inspection and DLL remediation. Exempt the original ProgramData runtime copy only when identical to the installed payload. Copies with matching names elsewhere receive no general exemption.
 
 ### Validation and scope
+- Fix the Command Prompt `installer\build` entry point: the old batch implementation omitted NanoAV publication. `build.bat` now delegates arguments and exit status to the canonical `build.ps1`, including NanoAV outputs and x64 Agent publication. Windows CI exercises this entry point with `-StampOnly`.
+- Preserve NanoAV's EXE outside the dotnet-managed staging directory before publishing the COM DLL; switching OutputType otherwise removes the earlier EXE. Require both final installer payload files before proceeding.
 - Refresh NanoAV's bootstrap marker during installation/upgrade so its unchanged installer updates the copied DLL and current-user startup entry instead of retaining an older unpatched copy. Preserve NanoAV's data and response rules.
 - Windows CI reported `0x80070241` when xUnit tried to load the NanoAV EXE as a test dependency. Tests now compile the same path helper source used by NanoAV instead of loading its complete executable. Original NanoAV source/manifest and Windows signature enforcement are unchanged; native Windows rerun remains required.
 - Full solution cross-build and original EXE/COM DLL publication pass. Eighteen portable coexistence tests pass; one Windows installed-path test is unrun on Linux. Existing 25 dashboard and 8 Worker checks pass. The supplied build's warning-level setting is retained for NanoAV.

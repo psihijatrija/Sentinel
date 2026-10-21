@@ -108,10 +108,19 @@ if ($LASTEXITCODE -ne 0) { throw "AutoRotate publish failed" }
 # Independent NanoAV, using the supplied source and its own assembly metadata/policy.
 $NanoProj = Join-Path $PSScriptRoot "..\modules\NanoAV\NanoAV.csproj"
 $NanoOut = Join-Path $PublishDir "nanoav"
-& $Dotnet publish $NanoProj -c Release -f net48-windows -o $NanoOut
+$NanoStage = Join-Path $PublishDir "nanoav-build"
+New-Item -ItemType Directory -Path $NanoOut -Force | Out-Null
+& $Dotnet publish $NanoProj -c Release -f net48-windows -o $NanoStage
 if ($LASTEXITCODE -ne 0) { throw "NanoAV EXE publication failed" }
-& $Dotnet publish $NanoProj -c Release -f net48-windows -p:OutputType=Library -o $NanoOut
+Copy-Item (Join-Path $NanoStage "NanoAV.exe") (Join-Path $NanoOut "NanoAV.exe") -Force
+# Changing OutputType can remove the prior EXE from the dotnet-managed publish
+# directory. Preserve each finished binary outside that directory before switching.
+& $Dotnet publish $NanoProj -c Release -f net48-windows -p:OutputType=Library -o $NanoStage
 if ($LASTEXITCODE -ne 0) { throw "NanoAV COM DLL publication failed" }
+Copy-Item (Join-Path $NanoStage "NanoAV.dll") (Join-Path $NanoOut "NanoAV.dll") -Force
+foreach ($binary in @("NanoAV.exe", "NanoAV.dll")) {
+    if (-not (Test-Path (Join-Path $NanoOut $binary))) { throw "Missing NanoAV installer payload: $binary" }
+}
 
 # 3a. Icon + version.txt
 Write-Host "Deploying Sentinel.ico and version.txt..." -ForegroundColor Yellow

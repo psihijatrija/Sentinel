@@ -30,6 +30,10 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
+    - name: Exercise Command Prompt build entry point
+      shell: cmd
+      run: installer\build.bat -StampOnly
+
     - name: Firewall policy regression tests
       shell: pwsh
       run: ./tests/Sentinel.Tests/LocalFirewallPolicy.Tests.ps1

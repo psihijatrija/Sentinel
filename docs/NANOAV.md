@@ -18,6 +18,8 @@ This is an explicit exception to the offline product boundary: NanoAV retains CI
 
 ## Validation and retained limitations
 
+Build from Command Prompt with `installer\build.bat` (or `build` inside the installer directory), or from PowerShell with `installer/build.ps1`. The batch entry point delegates to the same PowerShell implementation; both publish NanoAV before invoking Inno Setup. `build -StampOnly` prepares metadata without publishing or compiling an installer.
+
 The full solution cross-build and separate EXE/COM DLL publication are checked without executing the scanner. Eighteen portable coexistence boundary cases pass; the installed-path Windows case is explicitly skipped on Linux and remains in the Windows test suite. Desktop-monitor behavior is unchanged; see [privacy review](PRIVACY_REVIEW_2026-10-21.md).
 
 Preserving the supplied program also preserves its defects. Its process-start callback can request termination without first proving a threat; the unsigned-file cache can later drive a known-bad deletion. Its Main returns after starting monitoring, and the inspected startup does not schedule the C2/reverse-shell polling methods. These paths were not repaired because the requested source changes were limited to coexistence. Packaging does not establish that NanoAV remains resident, that every advertised engine runs, or that its live providers work. Validate startup/autorun, actual lifetime, feed responses, mutual process/file protection, upgrade and uninstall on a disposable Windows machine before relying on it. No detection-quality or mutual-protection guarantee against races or administrator tampering is claimed.
