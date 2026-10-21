@@ -37,6 +37,11 @@ Source: "..\publish\exploitshield\*"; DestDir: "{app}\ExploitShield"; Flags: ign
 Source: "..\publish\nanoav\NanoAV.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\publish\nanoav\NanoAV.dll"; DestDir: "{app}"; Flags: ignoreversion
 
+[InstallDelete]
+; Force the unchanged NanoAV bootstrap to refresh its copied DLL and Run entry.
+; Keep its configuration, database, logs, backups and quarantine intact.
+Type: files; Name: "{commonappdata}\NanoAV\.installed"
+
 [Tasks]
 Name: "autorotate"; Description: "Enable SentinelAutoRotate (rotates this PC local account password to a random value every 10 minutes and turns on Windows autologon). The password becomes unknown to everyone and a machine-recoverable logon credential is stored, lowering at-rest security. Leave unchecked unless you specifically want this."; Flags: unchecked
 

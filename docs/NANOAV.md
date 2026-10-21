@@ -2,6 +2,8 @@
 
 NanoAV is packaged as its own `NanoAV.exe` and COM `NanoAV.dll`, built from the supplied NanoAV-main.zip. It does not reference Sentinel.Core or call Sentinel's tier, scoring or response-policy pipeline. The installer launches its original bootstrap after installing Sentinel. Its original COM registration, per-user Run key, online requests, caches, heuristics, quarantine, deletion and response decisions remain its own.
 
+On installation/upgrade, remove only NanoAV's `.installed` bootstrap marker so the unchanged bootstrap refreshes its ProgramData DLL copy and current-user startup registration from the co-installed, coexistence-patched EXE. Preserve its configuration, database, logs, backups and quarantine. An already running older copy is not retroactively patched; the upgrade must complete and its startup path must point to the integrated copy.
+
 ## Exact source scope
 
 Archive SHA-256: `232f33f15dba196eb462b047c843266c9506aba25e59c19cb74191b35b102ed8`.
@@ -15,6 +17,8 @@ Build/installer wiring, tests and Sentinel-side exclusions are outside the suppl
 This is an explicit exception to the offline product boundary: NanoAV retains CIRCL/Cymru/MalwareBazaar calls, reverse DNS, optional webhook code and its own firewall actions as supplied. These can disclose hashes, public IP/name lookups and, if separately configured, alert details. Sentinel Core/Service/Agent transports remain offline. No credentials are invented or embedded by this integration. The supplied MalwareBazaar key is empty; provider authentication, endpoints and availability are not certified. NanoAV logs/cache/quarantine remain under `%ProgramData%\NanoAV` and are not Sentinel's verified response receipts.
 
 ## Validation and retained limitations
+
+Build from Command Prompt with `installer\build.bat` (or `build` inside the installer directory), or from PowerShell with `installer/build.ps1`. The batch entry point delegates to the same PowerShell implementation; both publish NanoAV before invoking Inno Setup. `build -StampOnly` prepares metadata without publishing or compiling an installer.
 
 The full solution cross-build and separate EXE/COM DLL publication are checked without executing the scanner. Eighteen portable coexistence boundary cases pass; the installed-path Windows case is explicitly skipped on Linux and remains in the Windows test suite. Desktop-monitor behavior is unchanged; see [privacy review](PRIVACY_REVIEW_2026-10-21.md).
 
