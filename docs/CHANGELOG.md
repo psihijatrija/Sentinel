@@ -1,4 +1,432 @@
 # Changelog
+
+## [3.3.8] - 2026-10-21
+
+### Added
+- Package the supplied NanoAV as an independent EXE/COM component, preserving its own online feeds, configuration, response decisions, original bootstrap and assembly metadata. It does not enter Sentinel's response-policy pipeline. The installer builds/copies both outputs and launches the original bootstrap.
+- Preserve 17 supplied files byte-for-byte. Five original files have only Sentinel coexistence call-site changes (21 insertions / 6 deletions); add a separate identity/path helper and original/integrated hash manifest. Protect resolved Sentinel process/file targets and skip the uncheckable module-name-wide kill fallback. Unresolvable identities receive no destructive action from that helper.
+- Exempt the co-installed NanoAV image from Sentinel response, memory inspection and DLL remediation. Exempt the original ProgramData runtime copy only when identical to the installed payload. Copies with matching names elsewhere receive no general exemption.
+
+### Validation and scope
+- Fix the Command Prompt `installer\build` entry point: the old batch implementation omitted NanoAV publication. `build.bat` now delegates arguments and exit status to the canonical `build.ps1`, including NanoAV outputs and x64 Agent publication. Windows CI exercises this entry point with `-StampOnly`.
+- Preserve NanoAV's EXE outside the dotnet-managed staging directory before publishing the COM DLL; switching OutputType otherwise removes the earlier EXE. Require both final installer payload files before proceeding.
+- Refresh NanoAV's bootstrap marker during installation/upgrade so its unchanged installer updates the copied DLL and current-user startup entry instead of retaining an older unpatched copy. Preserve NanoAV's data and response rules.
+- Windows CI reported `0x80070241` when xUnit tried to load the NanoAV EXE as a test dependency. Tests now compile the same path helper source used by NanoAV instead of loading its complete executable. Original NanoAV source/manifest and Windows signature enforcement are unchanged; native Windows rerun remains required.
+- Full solution cross-build and original EXE/COM DLL publication pass. Eighteen portable coexistence tests pass; one Windows installed-path test is unrun on Linux. Existing 25 dashboard and 8 Worker checks pass. The supplied build's warning-level setting is retained for NanoAV.
+- Sentinel desktop-monitor settings are unchanged. Document the [privacy review](PRIVACY_REVIEW_2026-10-21.md) and explicit [NanoAV online-policy exception, source scope and retained defects](NANOAV.md). The original process-start/cache/lifetime and unscheduled polling behavior is not repaired. Native runtime, actual online-provider access, persistence and installer lifecycle remain unverified here; packaging is not proof those behaviors work.
+
+## [3.3.7] - 2026-10-20
+
+### Fixed
+- Restore real-time DNS query collection using the DNS provider's actual query events (3006/3008), replacing the server-configuration IDs 1001/1002. Feed the DNS monitor from the existing ETW session without requiring the Operational log channel; use structured named-field event-log reads as fallback. Bound buffering, report query loss, preserve the record cursor, and keep malformed records from blocking later valid events. DNS detections in this monitor retain their unattributed response boundary.
+- Keep `FileVerdictScanner` supervised after its initial drive walk, observe walk failures, and restart/reconcile through the monitor group when watcher subscriptions fail or overflow.
+- Register and start the local injection scanner through `IMonitor`. Enable its compiled default and remove its incorrect dependency on a placeholder feed URL and registry-key capability probe. Restore delivery of WMI-free process snapshots to detection; report their reduced short-lived-process/command-line coverage explicitly.
+- Bound watchdog scheduling grace without overwriting observed heartbeat timestamps. A live worker can recover a scheduling timeout without clearing a separate collection failure.
+
+### Changed
+- Distinguish running tasks, completed startup operations, standby fallback, unavailable sources, and collection progress. The offline ThreatFox loader and retired-feed firewall cleanup are startup tasks, not continuous online monitors. WMI/snapshots paused while process ETW works are shown on standby.
+- Keep the main dashboard attention state visible for collection errors, including delayed status replies. Label collection without progress instrumentation as unverified, expose per-sensor reasons and cumulative ETW loss counters, and retain the full registered roster.
+- Add [monitor-health documentation](monitor-health.md) and `tools/Test-SentinelSensorHealth.ps1` for read-only diagnostics with an optional benign DNS probe.
+
+### Validation and limits
+- Windows CI for the implementation passed: 3,059 native Framework tests passed, 1 skipped, 0 failed; warnings-as-errors build had 0 warnings and 0 errors. DNS repair/restoration and local/Group Policy firewall smoke checks passed, along with 25 dashboard tests, Worker tests, and firewall-policy regressions. Release publication independently retests the exact merged commit.
+- Target-machine telemetry verification remains necessary. The supplied logs record access denied for the protected Threat-Intelligence provider and native ETW event loss; this release does not claim to remove those limitations or rule out missing Windows components. An empty local injection-scan candidate board does not establish protected-provider coverage.
+- Correction to the 3.3.6 notes: `DnsQueryMonitor` had no implemented DNS-cache fallback. 3.3.7 supplies real-time ETW plus structured event-log collection and reports failures explicitly. No online feeds are restored, and no new response authority or provider-permission bypass is added.
+
+## [3.3.6] - 2026-10-20
+
+### Fixed (monitor liveness and firewall-policy reconciliation)
+- Stop a transient process stall from marking the whole monitor fleet failed. The watchdog runs on a timer, so when the process froze (observed under a memory-pressure GC pause) the timer and the service heartbeat loop were both delayed, and the next watchdog pass saw every monitor as stale at once and restart-churned the fleet - the few monitors that then exhausted their restart cap stayed down permanently. The watchdog now distinguishes a systemic stall from independent monitor deaths with two guards: a tick-gap guard (if the watchdog's own interval was delayed past the critical timeout the process was frozen) and a mass-staleness guard (more than half of running monitors stale in a single tick is a shared freeze, not simultaneous deaths). Either grants one grace tick for live monitors to re-heartbeat instead of failing them.
+- Forgive a monitor's accrued failure count after sustained healthy uptime. The restart give-up cap previously counted failures across the whole process lifetime, so a handful of transient blips spread over hours permanently abandoned an otherwise-healthy monitor. The count now resets after ten minutes of healthy running since the last failure, so the cap reflects rapid repeated failures only.
+- Fix a `NullReferenceException` that aborted every firewall-policy reconciliation pass (the "firewall policy needs attention" state). `ProcessModule.get_FileName()` can throw a bare NRE on an unreadable main-module handle (exited, protected, or cross-bitness process), which the exception filter did not catch, so the exception escaped and left the policy perpetually "not verified" while looping errors. Reading the main-module path is now isolated and the NRE is caught in both child-registration paths; an unresolved path fails closed and grants no exemption.
+
+### Changed
+- Enable the Windows DNS Client Operational analytic channel on `DnsQueryMonitor` start. The channel ships disabled by default, which left the DNS-layer detections (DGA, rapid-query, covert-mesh and webhook-sink correlation) without telemetry. Sentinel runs as SYSTEM and legitimately owns this source, so it enables the channel through the managed EventLog configuration API - never `wevtutil`/shell, which `EtwProviderTamperMonitor` flags and which would build a shell command string. This is a proactive host mutation and gates on the always-on hardening posture (`ProductPosture.AllowsProactiveHostLockdown`); if it cannot be enabled the monitor degrades to cache-based detection rather than failing.
+
+### Validation and limits
+- Full Release cross-build: zero warnings/errors. Full portable test suite passes (3028 passed, 1 pre-existing Windows-native DNS smoke test skipped), including the new default-deny seam test for the DNS-channel host mutation. No detection tier or response contract changed: the watchdog's existing "Anti-Tamper: Monitor Crashed/Killed" detection remains Tier2/Tier1 LogOnly and only its firing condition narrowed. No new kill, quarantine, certificate-removal or driver-file authority is added.
+- The watchdog timer path and the live DNS-channel enablement are Windows-runtime behaviors; they are verified by build, code structure and the portable posture-gate test, and the end-to-end stall-recovery and channel-enable effects remain a Windows validation gate.
+
+## [3.3.5] - 2026-10-20
+
+### Security (red-team audit of kill-authority and IPC boundary)
+- Classify terminal outcomes from the monitor-authored `RuleName` only, never from `Evidence`/`Reasoning`. Those fields embed the observed command line verbatim, so a benign or attacker-chosen command line (for example one containing `bcdedit /set ... recover off` or `beacon`) could previously self-classify a non-terminal detection into a kill-grade family. Detections that need a precise family still declare a typed `Family` or a terminal `SignalType`; those remain authoritative.
+- Strip parenthesized interpolation spans from a rule name before kill-grade matching. A few monitors embed an observed process image name inside `(...)` (for example `Script: Anomalous Parent-Child (parent->child)`), so a binary named to contain a kill-grade token (`Potato.exe`, `AMSI Bypass Detected.exe`) can no longer smuggle that token into classification or the single-signal attack-class kill path. Genuine rule names with the token outside parentheses still fire.
+- Require elevated administrator approval for the `cert_distrust` IPC operation, matching the existing DNS repair gate. Removing a certificate from the machine Root store is privileged host mutation; token possession alone is no longer sufficient. The agent client requests identification-level impersonation for this operation so the service can check the caller token.
+- Harden the administrator-client check to verify token elevation type via `GetTokenInformation`. A split-token administrator who has not elevated is rejected even when `IsInRole(Administrator)` reports true, so the DNS repair and certificate operations genuinely sit behind the UAC boundary. The check fails closed on any error.
+- Require strict self-corroboration on the cross-process ancestry (root) chain buffer. Signals from unrelated sibling processes under a widely shared launcher can no longer combine into a confirmed kill unless the terminal leg's own process contributed at least one additional distinct signal. The per-process chain path is unchanged.
+- Vet the detection at the final destructive-response gate instead of returning only the arming state. A detection must be Tier1 and backed by chain confirmation, a multi-signal composite, a DLL-unload exemption, or a kill-grade terminal family at sufficient confidence. Added an explicit arming-only helper for call sites that have already enforced tier and chain authority.
+- Simplify a stale buffer-sweep predicate whose first clause was dead (`(old && empty) || old` collapses to `old`); behavior is unchanged, intent is now explicit.
+
+### Validation and limits
+- Full Release solution cross-build: zero warnings/errors. The full Windows test suite passes (3027 passed, 1 pre-existing Windows-native DNS smoke test skipped), including fourteen new regression cases covering command-line classification, process-name interpolation stripping, the destructive-response gate and the root-buffer corroboration guard.
+- The `cert_distrust` and administrator-elevation changes alter runtime privilege behavior on the live IPC path. The portable test suite cannot exercise a real elevated versus non-elevated pipe client; those two controls are verified by build and code structure and still require a manual Windows check with an elevated versus non-elevated administrator caller. No new quarantine, certificate-removal, or driver-file authority is added.
+
+## [3.3.4] - 2026-10-19
+
+### Fixed
+- Replace the service host's unguarded default EventLog logger with a bounded diagnostic JSONL sink. Keep the existing guarded critical-only Windows Event Log trail; diagnostic sink and formatting errors cannot escape to detection threads.
+- Back off unavailable-session recreation from 5 to 60 seconds. Coalesce repeated ETW visibility failures into change alerts and five-minute reminders, require 30 seconds of stable samples before recovery, and compare native/dispatch loss counters independently. Include loss counters in degradation evidence.
+- Normalize native driver paths using the actual Windows root and directory boundaries. Label SYSTEM-token observations with unknown images as weak context rather than proven token theft.
+- Label encoded PowerShell without socket command-loop evidence as an observation. Coalesce three weak observation classes only for signed, exact-image, live firewall-helper children launched by Sentinel; behavioral detections remain armed and unknown/reused PIDs receive no exemption.
+- Preserve process-rule command line, image and parent metadata. Make dedup admission atomic and separate weaker versus stronger tiers/actions.
+
+### Windows CI corrections
+- Update the remaining pipeline assertion to the encoded-command observation label. Route verified weak direct-monitor emissions through the same coalescing path as rule-based observations, leaving all other direct/terminal dispatch unchanged.
+- Scope custom cache key material to its own directory instead of touching production installation keys and SYSTEM-only ACLs. Production default paths and key ACLs are unchanged. Custom-path caches created with the old shared key may need regeneration.
+- Add custom-store key-location and cross-instance persistence regressions. The original Windows run reported 3010 passing and three failing tests; the corrected full Windows run remains pending.
+
+### Validation and limits
+- Service and test projects cross-build with zero warnings/errors. All 22 dashboard, 8 Worker and 45 firewall-policy checks pass. Nineteen portable regression cases pass using production logging, path, coverage and child-attribution logic. The portable child tests inject identity and signature boundaries; they do not test Windows signature APIs. Add a Framework integration test for helper coalescing versus external processes, pending Windows execution.
+- Native ETW/provider permissions, Event Log service failure, signature/catalog checks, protected-directory ACLs, complete Framework tests and installer packaging remain Windows validation gates. Protected-provider access denial is reported, not bypassed. No certificate removal or new driver-file quarantine authority is added.
+- See [design](design.md) for retention, registration-race and recovery limitations.
+
+## [3.3.3] - 2026-10-19
+
+### Fixed
+- Keep actionable incidents open/active when no response receipt arrives. Ten minutes of inactivity no longer closes them as stale, including incidents reopened by fresh actionable evidence after a prior verified response. Refused, attempted, failed and partial responses remain unresolved; observation-only incidents still expire normally.
+- Remove a closing incident's PID mapping only when it still points to that incident. Cleanup of an older incident cannot detach a newer incident or silently lose subsequent PID-routed receipts.
+- Update lifecycle timestamps on reopening and closure. Incident tests now inject synthetic process identities rather than depending on live Windows PIDs.
+
+### Validation and limits
+- Full Release solution cross-build: zero warnings/errors. All 22 dashboard and 8 standalone Worker checks pass. A temporary modern-.NET host runs 23 incident tests using production incident/logger source, including 9 new cases; restoring the old expiry/mapping behavior makes 4 of those tests fail. This validates the targeted logic, not Windows ACLs or service behavior.
+- Added measurable [engineering gates](ENGINEERING_GATES.md). No numeric rating increase is claimed. Full Windows Framework/native testing and installer publication remain CI gates; incident state is still in memory and is not restored after a service restart.
+
+## [3.3.2] - 2026-10-19
+
+- Add early credential-theft correlation for memory-inspected unbacked PE headers plus a Kernel-File credential-store read on the same PID and verified process lifetime within 15 seconds. This path does not require recognized C2 or an upload-volume minimum. Generic JIT/RWX signals, MZ bytes alone, watcher writes, stale evidence and unknown/reused process identities cannot authorize it.
+- Separate PE-inspection alert cooldown from stack/thread observations so weaker observations cannot suppress the corroborating scan.
+- Fix outbound spike detection to compare against the previous baseline and avoid learning anomalies into that baseline. Host-wide volume remains Tier2 LogOnly and never authorizes containment.
+- Add positive/negative correlation, process-lifetime, PE-header and upload-threshold regressions. Native Windows tests and packaging are gated by the release workflow.
+## [3.3.1] - 2026-10-18
+
+### Added
+- Add a read-only Security audit panel to full scans, with local JSON download. Show six-hour logon/service/task history and camera/microphone usage timestamps from loaded interactive-user hives, with explicit Available/Partial/Unknown coverage.
+- Read back selected LSASS, WDigest, PowerShell and SMB configuration. Separately label Defender and VBS runtime-provider snapshots; missing values/providers never imply active protection or a clean system. No new policy mutation or autonomous response is introduced.
+- Bound history collection and display, parse named event fields, reject XML entities, and omit raw event XML and service/task command payloads from audit reports.
+
+### Fixed
+- Repair the Windows process-tree fixture PID-file sharing race: publish closed files by rename and retry transient sharing/lock errors within the existing deadline. Add an exclusive-writer regression while retaining all process-tree termination and unrelated-process survival assertions.
+- Show incomplete scans as incomplete and remove the dashboard's unsupported "System appears clean" claim.
+
+### Validation
+- Add aggregation, strict type, missing-source, cancellation, event parsing, timestamp and dashboard regressions. Native Windows collection and containment remain subject to Windows CI; Linux cross-builds/portable tests are not native validation.
+- See [security audit](SECURITY_AUDIT.md) for coverage, privacy and runtime-state limitations.
+
+## [3.3.0] - 2026-10-18
+
+### Credential and script telemetry
+- Route supported Kernel-File Read v0/v1 events into credential/session-store detection using a bounded FileKey/name map, x86/x64 payload widths, key invalidation, expiry and per-process deduplication. Include Discord stable/canary/PTB LevelDB session stores, browser databases and selected developer secrets. Read observations remain Tier2 LogOnly; ordinary connections do not authorize containment. The infostealer composite requires a high-confidence Tier1 C2 leg and excludes weak observe seeds.
+- Decode PowerShell 4104 v1 script text after its two binary counters, validate fragment counters/lengths and preserve individual fragment text beyond the previous 8,192-character cutoff. Multipart fragments are evaluated independently, without claiming complete reconstruction.
+- Keep the sensitive-file watcher alive until cancellation, extend its session-store scope and remove filename-only and arbitrary-signed-binary ownership exemptions.
+- Clarify that credential access plus C2 is observed evidence, without asserting store ownership or confirmed exfiltration.
+
+### Scope and validation
+- Add raw-payload regressions for supported file-read layouts, key reuse/deletion, stale/malformed data, session scope, script fragments and safe correlation boundaries.
+- See [2026 attack coverage](ATTACK_COVERAGE_2026.md) for measured validation and remaining Windows work. This release does not claim universal Windows protection or guaranteed prevention before theft.
+
+## [3.2.9] - 2026-10-18
+
+### Fixed
+- Apply the central tier policy to direct monitor emissions and response dispatch; Tier2 remains LogOnly. Reject process-kill authority for PID 0/system targets.
+- Routine encoded PowerShell automation no longer authorizes a reverse-shell kill or supplies a remote-channel composite leg. Preserve original command evidence, decode bounded Base64, and require a socket command loop for the terminal rule.
+- Keep standalone PPID mismatches and GPU driver staging observational. Temporary installer extraction is not proof of trojanization; never attempt process containment against a driver filename or PID 0.
+- Validate process-cache generations by creation time, replace reused PIDs, serialize cache updates, and require live identity for chain targeting. Retain dead entries for evidence only.
+- Correct EVENT_TRACE_LOGFILEW callback offsets and allocation sizes for x64/x86. Retain native buffers for the consumer lifetime; report provider IDs and Win32 errors when coverage is degraded.
+- Distinguish unsupported sensor progress from unknown progress, publish monitor states/errors, separate response outcomes from response-record counts, and leave unmeasured detection latency null.
+- Report the stamped binary version instead of trusting a potentially stale version.txt sidecar.
+- Route the newer Agent watchdog image-path check through the shared NativeResolver; this fixes the pre-existing Windows inspection-API completeness failure without changing its minimal access rights.
+
+### Validation and release scope
+- Added regressions for direct dispatch, routine firewall PowerShell, encoded socket command loops, PID reuse, dead-process targeting, ETW ABI layout, missing latency and response outcomes.
+- Local .NET 10 solution build passes with 0 warnings and 0 errors. All 15 portable audit regressions pass against the built Core assembly; Worker and dashboard JavaScript checks pass. Full .NET Framework runtime and native Windows checks run in CI.
+- Version 3.2.9 is explicitly requested by the owner to reconcile the earlier tag/source mismatch. Existing tags and releases are preserved.
+
+## [3.2.8] - Tag present; version metadata inconsistent
+
+- Verified on 2026-10-18: remote tag `v3.2.8` points to `4a5c973e64b5114b4dc07c008f269b06e0b94169` ("Start pipe identity reads before awaiting client writes"). That commit's `version.txt` declares 3.2.5. The focused [regression review](REGRESSION_REVIEW_2026-10-18.md) covers changes through this commit.
+- Current `main` declares 3.2.7 in `version.txt`, shipping project versions and installer metadata, and includes later WebView2/watchdog/startup changes described below. The 3.2.8 tag does not include those changes.
+- A tag alone does not verify publication or the version embedded in downloadable binaries. GitHub release metadata could not be checked from this environment (HTTP 403). No installer, publication date or new validation result is claimed here. Source versions and tags need reconciliation through the normal release workflow; documentation does not change either.
+
+## [3.2.7] - 2026-10-18
+### Fixed
+- **Service crashing immediately on startup** — `UnhandledException` handler was registered after `HardeningModule.ApplyOrFail()` and `CreateHostBuilder().Build()`, so any exception in those calls left no crash trace. Handler now registered first; trace points added at each startup step to `startup_trace.log`.
+- **Agent not starting / tray icon missing** — two root causes:
+  1. `AgentWatchdog.VerifyAgentBinaryIntegrity` refused to launch unsigned binaries in Release builds (`#if DEBUG`-only allowance). Unsigned co-installed pairs (same directory, write-time delta ≤ 5 min) are now permitted; post-install Agent-only replacement is still blocked.
+  2. `AgentWatchdog.IsAgentRunning` used `Process.MainModule?.FileName` which requires `PROCESS_VM_READ` — denied from SYSTEM for cross-session user processes. Replaced with `QueryFullProcessImageName` (`PROCESS_QUERY_LIMITED_INFORMATION`), always accessible from SYSTEM.
+- **WebView2 JIT crash taking down the tray icon** — all `Microsoft.Web.WebView2.*` references moved into a new `WebView2Host` isolation class. A missing WebView2 assembly now degrades cleanly to the IE11 `WebBrowser` fallback without crashing the STA thread.
+- Agent self-restart (`TryImmediateRestart`, `ScheduleDelayedRelaunch`) switched to `UseShellExecute = true` so the relaunched process inherits the correct desktop/window-station.
+### Validation
+- Build 0W/0E. Tray appears on first install and on watchdog relaunch for both signed and unsigned builds.
+
+## [3.2.6] - 2026-10-17
+### Fixed
+- Probed Edge WebView2 Runtime availability upfront via non-throwing `CoreWebView2Environment.GetAvailableBrowserVersionString()` prior to control construction or initialization.
+- Gracefully degrades directly to the legacy IE11 `WebBrowser` control when the WebView2 Runtime is not installed, eliminating unobserved task exception spam (`Couldn't find a compatible Webview2 Runtime installation`) in `agent_crash.log`.
+- Explicitly reports WebView2 unavailability to `%ProgramData%\Sentinel\agent_runtime.log` and marks the dashboard window title with `(legacy browser — WebView2 unavailable)`.
+### Validation
+- Clean build (0 warnings, 0 errors) and full test suite passing (2,902 tests passed, 1 skipped).
+
+## [3.2.5] - 2026-10-17
+### Added
+- Administrator-approved local DNS resolver profiles, protected snapshots, verified restoration and explicit failure/partial receipts. Configuration verification does not certify a router or DNS answers as safe.
+- Explicit administrator-approved recovery of interrupted DNS transactions, backed by durable starting/target states. Stale previews, unrelated DNS changes, changed protocol support, missing legacy plans and newer transactions are refused. Unresolved transactions block stacking new repairs.
+- Dashboard recovery selection and original-state preview through the existing UAC and actual IPC administrator-token checks. Failed recovery preserves the original target and attempts rollback to the newly approved state.
+- Separate disposable Windows DNS mutation job covering actual resolver writes, original/automatic restoration, cancellation rollback and disk-backed recovery with a new service instance. The wrapper retains an independent Windows-cmdlet restore and kills the test process tree on timeout. Regular test runs skip this guarded mutation fixture.
+### Fixed
+- Removed legacy proxy startup-baseline restoration and unattributed Tier1 hijack claims. Proxy configuration changes are Tier2 LogOnly, with no registry deletion/restoration authority. Manual per-user/WinHTTP recovery remains future work.
+- Recheck the DNS preview after snapshot/audit persistence, before the first mutation. Allow guest hardware-facing Ethernet adapters while continuing to exclude known host virtual switches and tunnels.
+- Bound stalled Windows tests with hang diagnostics, retain sequence files, and annotate failed/incomplete tests rather than letting a hung host silently delay release.
+### Validation
+- Zero-warning/error solution cross-build, 88 portable production response/transaction regressions and 16 dashboard checks pass locally. PowerShell syntax, fail-closed runner guards and failure/hang summaries are checked locally; full Windows and live DNS results remain required in CI. Interactive UAC, SYSTEM-only journal ACL integration, reboot/power-loss, IPv6-only hardware and changing DHCP leases remain separate validation scopes.
+
+### Follow-up fixes reviewed 2026-10-18
+- Match DNS adapters by parsed GUID identity across inspection, native mutation, restoration and interrupted-transaction guards. Equivalent braced/unbraced and case-varied IDs no longer fail lookup; fresh configuration fingerprints remain required.
+- Select a connected DNS-capable hardware interface for disposable Windows DNS validation. Missing IPv6 `NameServer` values are treated as automatic configuration; unsupported registry value types still refuse mutation. Failed adapter selection includes an inventory, and wrapper failures emit CI annotations.
+- Start the server identity read before awaiting the client write in Windows pipe-authorization tests. Token inspection runs on a dedicated background thread, with a 15-second test deadline and stage diagnostics for stalled calls.
+
+### Follow-up review validation
+- On 2026-10-18, the full Release solution cross-build passed with zero warnings/errors; 16 dashboard and 8 standalone Worker tests passed. A temporary .NET 10 host outside the checkout ran 45 existing DNS transaction/proxy observation tests against the production Core assembly: all passed, none skipped.
+- No regression was identified in this focused review. The temporary host initially required matching production logging dependencies; its corrected run passed. It does not replace the Windows Framework suite, actual pipe-token checks or native DNS mutation. See [review scope and results](REGRESSION_REVIEW_2026-10-18.md).
+
+## [3.2.4] - 2026-10-17
+### Added
+- Dashboard DNS inspection and administrator-approved fixed resolver profiles for eligible unmanaged Ethernet/Wi-Fi adapters, using authenticated IPC and actual caller-token authorization. Agent remains unprivileged.
+- Protected durable snapshots, fresh-preview checks, IPv4/IPv6 and effective resolver read-back, cache flushing, bounded rollback, saved-state restoration and explicit outcome receipts.
+- Passive IPv4/IPv6/DHCP resolver drift observations and last-approved-profile comparison; removed blind startup-baseline DNS restoration. DNS changes remain Tier2 LogOnly.
+- DNS usage/limits guide and a remediation capability matrix with concrete remaining work. No router-clean or commercial parity claim.
+### Validation
+- Zero-warning/error solution cross-build, 69 portable production response/DNS transaction tests and 14 dashboard checks pass locally. Windows CI includes real pipe-authorization and read-only native API checks. Live adapter DNS mutation/reset-to-automatic and interactive UAC validation remain required on a disposable Windows system; ordinary CI does not change runner DNS.
+
+## [3.2.3] - 2026-10-17
+### Security
+- Removed online hash/DNS reputation queries, live ThreatFox/IP-blocklist/CISA downloads, public-IP and cloud-connectivity checks, active DNS validation, and automatic threat/evidence uploads. Legacy settings cannot re-enable transport; the compiled proxy credential is removed. Offline reputation is Unknown; old online composite caches are no longer reused.
+- Added persistent, reconciled inbound/outbound firewall self-blocks for Service, Agent, and AutoRotate on all profiles, excluding loopback to preserve the local dashboard. Upgrade rules repair their executable paths; uninstall removes owned identifiers. Disabled firewall profiles and enforcement failures remain visible rather than being reported as protected.
+- Enforced standard-user Agent execution through an asInvoker manifest, startup guard, and watchdog token checks. The Agent applies only self mitigations and requests service inspection instead of directly quarantining arbitrary dashboard paths. The privileged service retains system sensors/response; a minimal broker split is not claimed.
+- Bounded unauthenticated privileged IPC input to 16 Ki characters, timed out stalled request readers after five seconds, and denied network-logon pipe access. Existing authentication, replay checks, operation allowlist, and response policy remain enforced.
+- Restricted Authenticode URL retrieval to cached data. Preserved local behavioral/static/ML detection, local indicator/catalog support, and evidence packs. Removed active LAN port probes that conflict with isolation; passive LAN telemetry remains.
+- Added continuous reconciliation of local and supported local-GPO inbound allow rules, retaining disabled rules, preserving outbound policy and narrow DHCP/essential IPv6 control exceptions, and recording original states for rollback. Exact-filter administrator approvals persist; Windows re-enables/new exceptions are disabled again. Domain GPOs are reported, never edited. ActiveStore/service verification and stale/conflict dashboard status prevent local-write success being mistaken for effective protection.
+- Added passive exploit-context correlation across Defender/security software, browsers, games, and other processes; removed identity skips in post-connection behavior tracking, required real parentage for child-spawn observations, and made port-only observations universally Tier2 LogOnly. Game/anti-cheat memory safety remains intact. Offline self-blocks no longer trigger the WFP monitor's EDRSilencer self-response path.
+- Replaced fixed 500 ms waits in the LSASS, shadow-copy deletion and evasive PowerShell pipeline tests with bounded waits for their actual detection output; confidence and category assertions remain required.
+### Validation
+- Full Windows Release solution build with zero warnings/errors and 2,852 passing .NET Framework tests; 45 firewall policy regressions, 38 portable offline/IPC checks and 11 dashboard checks pass. Disposable Windows firewall smoke also passes effective self-block, actual external TCP blocking with a connected control, loopback, local/GPO inbound state, re-enable reconciliation, approval persistence and rollback. Interactive/domain/reboot validation remains in the Windows validation checklist.
+
+## [3.2.2] - 2026-10-17
+### Fixed
+- Release publication now follows a successful trusted Build & Test push on main/master and pins checkout and release tagging to that tested commit. Successful fixes no longer miss publication because version.txt was unchanged; existing versions remain protected from republishing.
+- Multi-signal integration assertions now wait for both detection outputs before inspecting the scored categories, rather than assuming the queued pipeline completes within 500ms. Both expected categories remain required.
+- Build CI cancels superseded runs for the same branch or pull request and produces test results plus coverage from one test execution.
+- The one-shot legacy-sidecar purge regression now scans only its temporary fixture, rather than every fixed drive on the runner. It verifies marker skipping, forced removal, repeat-call idempotence and preservation of original/out-of-scope files.
+- Process-tree termination now waits for the pinned process handle even when TerminateProcess reports access denied during an already-pending exit. Only a signaled handle verifies exit; persistent denial and timeouts remain incomplete.
+- Monitor-group startup tests wait for explicit start notifications with a bounded deadline instead of assuming startup completes in 200ms. Cleanup runs after failed assertions too.
+- Prevented Sentinel's pipe-owner inspection from generating C2 alerts against its own decoys, using kernel-reported PIDs rather than process names.
+- Certificate trust-marker heuristics are now Tier2 review-only findings. Only explicit thumbprint distrust policy may remove certificates, block them or quarantine associated files; the remediator enforces this at its entry point.
+- Separated agent logs and audit chains from the service log. Event files accept one writer and no longer rename a live writer's file on contention; lost writes remain counted. Dashboard history/live events and tray notifications read both sources.
+- Observed both WebView2 environment and initialization task failures before falling back to the legacy browser.
+- Removed vendor-only and reverse-substring CVE product matching; generic product labels require vendor context. CVE match records explicitly leave affected-version applicability unverified.
+- Process-tree inspection opens handles through the shared NativeResolver import boundary; release CI checks that boundary before the full Windows suite.
+- Windows process-tree integration fixtures now start without console helper processes and pin all process handles before containment. Failure diagnostics include observed containment outcomes.
+- Module attribution tests inject servicing-window state and cover both active and inactive servicing, avoiding dependence on Windows Update activity on the runner.
+- Build CI publishes all failed test names, messages and stack traces in its job summary.
+
+- Response executors now return structured receipts with refused, attempted, failed,
+  partial and verified effects. Normal task completion no longer establishes success.
+- The coordinator records incident outcomes, caches only verified exact-action receipts,
+  and does not mark incomplete responses as responded. New actionable evidence reopens
+  a previously responded incident; unresolved responses are not silently aged into closure.
+- Process-tree results, quarantine read-back, firewall configuration read-back, certificate
+  store read-back and registry value/key read-back contribute explicit outcomes. Legacy
+  VPN/ISO/container/VM executors without final-state receipts remain attempted/unverified.
+- Dashboard response rows display actual outcomes. Checkmarks require a completed,
+  verified requested-action receipt; historical action labels alone do not establish success.
+- Tray success notifications require a verified receipt for the matching PID. Reinfection
+  tracking registers only verified target exits. Evidence packs include the final receipt
+  under the integrity manifest and distinguish requested actions from recorded outcomes.
+- Process-tree containment now enumerates and rescans descendants, pins native process
+  handles, checks creation identity and target protections, and verifies exits within a
+  bounded budget. Incomplete discovery, refused targets and termination failures remain visible.
+- DLL containment reports separate process-tree outcomes from quarantined, already absent,
+  deferred and failed files. Failed/refused termination cannot report a contained host;
+  detected DLLs are no longer counted as quarantined. Removed the unchecked fallback kill.
+### Removed
+- Removed the obsolete chain-wait configuration option and unreachable response branches
+  throughout runtime code, configuration, fixtures, documentation and repository guidance.
+  Authorized Tier1 responses still act immediately; Tier2 remains log-only.
+### Validation
+- Added portable receipt/file verification tests, coordinator/incident flow regressions,
+  and dashboard renderer tests. Build and release CI run the dashboard tests as well.
+- Added deterministic containment/outcome regressions and a Windows integration test using
+  disposable parent/child/grandchild fixtures plus an unrelated process control.
+- Windows execution of the native integration test and full Framework suite is required
+  before release; Linux cross-compilation alone does not establish native containment.
+
+## [3.2.1] - 2026-10-16
+### Fixed
+- **`FileVerdictScanner` self-scanning loop (primary RAM cause).**
+  `FileVerdictScanner` watched every fixed drive recursively with no exclusion for
+  Sentinel's own directories. Files written by the service — `events.jsonl`,
+  `audit-*.jsonl`, `scan_index.dat`, ADS verdict tags, and the install-dir binaries —
+  were picked up by the drive-root `FileSystemWatcher` and queued for scanning, creating
+  a feedback loop. Added `IsSentinelOwnPath()` which excludes `%ProgramData%\Sentinel\`
+  and the install directory (resolved from `AppContext.BaseDirectory` at startup, not a
+  hardcoded string). The exclusion is applied in `OnFileCreated`, `OnFileRenamed`,
+  `ScanNewFileAsync`, and `TraverseDirectoryAsync`.
+
+- **Unbounded `Task.Run` task proliferation in `FileVerdictScanner`.**
+  Each scannable file creation spawned an untracked `Task.Run` with no concurrency cap.
+  During busy installs or archive extractions, hundreds or thousands of tasks piled up —
+  each holding async state and sitting in 500 ms–2 s retry-delay loops. Added
+  `_scanTaskThrottle` (`SemaphoreSlim(32, 32)`): a slot must be acquired before the task
+  is created; if all 32 slots are busy the event is dropped (the background walk catches
+  it on its next pass). The semaphore is disposed alongside `_apiThrottle`.
+
+- **`FileScanIndex._entries` dictionary growing without bound.**
+  The `ConcurrentDictionary` used by `FileScanIndex` had no eviction policy and grew
+  monotonically as the background drive walk catalogued every executable on every fixed
+  volume. On a well-stocked system this accumulated hundreds of thousands of entries
+  (full path strings + metadata), contributing hundreds of MB to the service's working
+  set. Added `MaxEntries = 150 000` cap with `EvictBatch()`: when the cap is hit,
+  ~10 % of entries (15 000) are shed. Evicted paths are simply re-scanned on the next
+  walk — fail-open, no security regression.
+
+## [3.2.0] - 2026-10-16
+### Added
+- **`IncidentJournal` — durable write-ahead journal for incident state transitions.**
+  `BehavioralCorrelationEngine` and `WeightedCorrelationEngine` previously held all
+  in-progress chain state in memory; a service crash mid-confirmation silently lost
+  the chain with no record that a kill was pending. `IncidentJournal` writes each
+  state transition atomically to `%ProgramData%\Sentinel\Incidents\incident-<id>.json`
+  (temp-write + `File.Replace`, flushed to disk). States: `Seeding → Confirming →
+  Sealed(Executed|Abandoned|Interrupted)`. On service restart, `RecoverOpenJournals()`
+  finds any unsealed journal and emits a `Tier2/LogOnly` `"Incident: Interrupted Chain
+  Recovered"` detection per interrupted incident — the operator sees that the service
+  died mid-chain. Sealed journals are included in evidence packs. `JournalState` is a
+  distinct type from `IncidentManager.IncidentState` (Open/Active/Responded/Closed).
+  No new kill authority; recovery is observe-only.
+
+- **Per-sensor throughput and latency accounting (`SensorBudgetSnapshot`).**
+  `MonitorRegistry.RecordTelemetry(name, count, latencyMs)` accumulates a sliding 500-
+  sample window of event counts and cycle latencies per sensor. `MonitorStatus` gains a
+  `Budget` field (`EventsTotal`, `CyclesTotal`, `LatencyP50Ms`, `LatencyP95Ms`,
+  `LatencyP99Ms`). `OpsMetricsPublisher` includes all sensor budgets in `ops_metrics.json`
+  under `SensorBudgets`. This makes the QUALITY_REVIEW "performance and resource budgets"
+  dimension measurable: the dashboard now shows which sensor is contributing the most
+  telemetry volume and at what latency. No thresholds yet — measure first, gate later.
+
+- **Mono-category boost in `WeightedCorrelationEngine`.**
+  When a single weight category fires ≥3 times within the correlation window with no other
+  category contributing, the effective composite threshold is raised by 20% (ceiling) for
+  that PID. This reduces false-positive composites from a single noisy sensor flood. The
+  boost is additive only (never lowers the threshold), never affects kill authority directly
+  (only the composite formation gate), and is exposed as `CorrelationScoreCard.MonoCategoryBoostApplied`
+  so the Diagnostics CLI `replay` command shows whether it applied. Multi-category signals
+  are unaffected.
+
+### Tests
+- `WeightedCorrelationMonoCategoryBoostTests` (3 new tests): boost flag is set when a single
+  category fires ≥3 times; single-category flood does not emit a composite; two-category
+  signals still emit composites and boost is not applied.
+- All 2757 existing tests remain green. Build 0W/0E.
+
+## [3.1.8] - 2026-10-16
+### Added
+- **`SentinelAutoRotate` standalone tool** (`tools/Sentinel.AutoRotate/`). Keeps a local
+  Windows account password unknown to any human while maintaining passwordless autologon.
+  Fully decoupled from the EDR — no `ProjectReference` in either direction, no DI wiring.
+  - `--install` (admin): registers two SYSTEM scheduled tasks (`SentinelAutoRotateStartup`
+    on boot, `SentinelAutoRotate` every 10 minutes), enables autologon for the active
+    console session account, sets `ConsentPromptBehaviorAdmin=5`.
+  - `--rotate` (SYSTEM): determines the active account via `WTSQuerySessionInformation`,
+    generates a ≥20-char cryptographically random password (`RandomNumberGenerator`, never
+    `System.Random`), sets it via `NetUserSetInfo` level 1003 (never `net user`), stores it
+    as the LSA private secret `DefaultPassword` via `LsaStorePrivateData` (never the
+    cleartext registry value). Password is never logged.
+  - `--uninstall`: removes both scheduled tasks, disables autologon, clears the LSA secret.
+    Leaves the account on its last random password; user must reset via standard Windows tools.
+  - Honest security tradeoff documented in source: defends against social engineering,
+    phishing, and credential reuse; does NOT defend against a local admin who already has
+    access (the LSA secret is readable by any SYSTEM/admin process including an LSASS dump).
+
+### Fixed
+- **`installer/build.bat` missing AutoRotate publish step.** `setup.iss` line 35 requires
+  `publish\autorotate\SentinelAutoRotate.exe` but `build.bat` only published `service` and
+  `agent`, causing Inno Setup to fail with "Source file does not exist" on every `build.bat`
+  invocation. Added step 4d to publish `tools\Sentinel.AutoRotate\Sentinel.AutoRotate.csproj`
+  to `publish\autorotate\` before Inno Setup runs. `build.ps1` already had this step; the
+  `.bat` is now consistent.
+
+### Changed
+- `setup.iss` `[Tasks]` exposes opt-in "Enable SentinelAutoRotate" (unchecked by default,
+  with explicit warning about autologon implications). `[Run]` invokes `--install` only when
+  the task is selected. `CurUninstallStepChanged` calls `--uninstall` before file removal.
+
+## [3.1.9] - 2026-10-16
+### Changed
+- **Aggressive unsigned-module sweep expanded to all loadable-module extensions.**
+  `AggressiveUnsignedDllSweepMonitor` previously only swept `.dll`/`.winmd`. Now covers
+  all extensions in `ModuleIdentity.ModuleExtensions` (`.dll`, `.winmd`, `.ocx`, `.cpl`,
+  `.ax`, `.node`, `.drv`, `.acm`, `.tsp`, `.mui`, `.efi`) with hardened removal — hostile
+  modules locked by a live process are killed and ownership seized before deletion.
+- **`EnableAggressiveUnsignedDllSweep` defaults `true`.** Compiled-only; disk JSON and
+  `config.enc` cannot disarm it.
+- **`DllUnloadEngine` mapped-DLL remediation also uses hardened removal**, closing the
+  "re-quarantined the same mapped DLL forever" loop.
+
+### Added
+- New Tier2/LogOnly IDS command-line pattern rules for previously uncovered patterns.
+  All signals are `Tier2Indicator + LogOnly` unconditionally; `AdvancedResponseEngine`
+  enforces this regardless of `ActiveResponse` state.
+
+### Tests
+- `AggressiveUnsignedDllSweepMonitorTests`: extended extension set, hardened-removal path,
+  and locked-module invariant.
+- `ReliabilityImprovementsTests` (new): `SensorProgress` state machine, `VisibilityGapTracker`,
+  `TelemetryQueue` eviction, `RestoreTransaction` journal states.
+- `AuditLedgerIntegrationTests` (new): `EvidenceLedger` append/verify, trusted checkpoint
+  anchoring, truncation detection, 20 MB cap.
+- `worker/tests/evidence.test.mjs` (new): 8 regression tests for `POST /report/evidence` —
+  valid anchor storage, missing fields, oversized body (413), missing KV store (503), invalid
+  ledger checkpoint format.
+
+## [3.1.7] - 2026-10-15
+### Added
+- Windows/.NET Framework 4.8 diagnostic CLI for historical weighted-correlation replay,
+  replay comparisons, evidence-ledger/manifest verification, restore inspection and
+  privacy-preserving offline export preview/ZIP creation.
+- Sensor collection-progress reporting, native ETW provider/loss/session queries,
+  exact bounded-queue eviction accounting, queue-age/wait metrics, and visibility-gap
+  coordination with module/network/certificate inventories.
+- Read-only network-context and root-certificate observation histories across restarts.
+  Previously observed contexts never grant trust; certificate actor/installer attribution
+  remains explicitly unknown without supporting evidence.
+- Daily hash-chained companion audit records, trusted-prefix checkpoints and optional
+  checkpoint anchoring in evidence summaries. Integrity degradation is exposed.
+- Authenticated Cloudflare Worker `/report/evidence` handler with minimal, content-addressed
+  KV anchors, bounded request bodies, explicit storage failures, and eight regression tests.
+- Provisional subsystem ratings and a documented path toward stronger validation.
+
+### Fixed
+- Supervisor ticks no longer masquerade as successful sensor collection. Faulted background
+  monitors restart without prior disposal; optional monitors that complete cleanly remain
+  stopped instead of repeatedly restarting on custom/debloated Windows.
+- Weighted correlation explanations reflect actual score/category/terminal gates. A high
+  score alone or a plugin finding without independent terminal evidence cannot confer
+  destructive authority; weighted composites require at least two categories.
+- Unexplained module observations remain eligible for review instead of silently becoming
+  accepted baseline entries. Baseline replacement preserves the last valid file on failure.
+- Explicit quarantine restores refuse overwrites, journal Prepared/Applied/Verified states,
+  verify restored content and retain the encrypted vault for recovery review.
+
+### Release workflow
+- Handle an expected missing release without leaving a failing native exit status;
+  genuine lookup/authentication errors still block publication.
+- Keep the product, tests and diagnostics on `net48-windows`; no Linux CI/product target.
+- Require the Windows Framework test suite and Worker tests before installer publication.
+- Attach a directly copyable Worker JavaScript file, Windows Framework diagnostics ZIP
+  and SHA-256 checksums with the installer.
+- Support `release.ps1 -PrepareOnly` / `build.ps1 -StampOnly` for repository-controlled
+  version preparation when GitHub Actions performs the Windows installer build.
+
 ## [3.1.6] - 2026-10-15
 ### Changed
 - Removed `Rules.DefenseTamper.cs` stub (tombstone comment file left over from v3.1.5 decision to drop the anti-tamper rule). No functional change.
@@ -161,7 +589,7 @@
 - **Aggressive unsigned-module sweep now covers every loadable-module extension**, not just `.dll`/`.winmd`. `AggressiveUnsignedDllSweepMonitor` enumerates each drive once and quarantines any unsigned module in `ModuleIdentity.ModuleExtensions` (`.dll`, `.winmd`, `.ocx`, `.cpl`, `.ax`, `.node`, `.drv`, `.acm`, `.tsp`, `.mui`, `.efi`), using hardened removal so locked modules are removed on sight. `DllUnloadEngine` mapped-DLL remediation also uses hardened removal (closes the "re-quarantined the same mapped DLL forever" path).
 - **`EnableAggressiveUnsignedDllSweep` now defaults TRUE.** The sweep is armed by default on this hardened product line. It remains compiled-only — disk JSON and `config.enc` can neither arm nor disarm it.
 - **Work-first USB restraint dropped: `AutoDisableFailedUsbEnumeration` now defaults TRUE.** A USB node that fails descriptor enumeration (VID_0000 / "Device Descriptor Request Failed") is disabled + ejected on sight as a BadUSB/rogue-HID tell. The unknown-HID disable path was already always-on (gated on the `RestrictivePortHardening` invariant); stale "work-first / log-only / Hardened-Mode-only" comments were corrected to match. Legitimate controllers/receivers must be allowlisted via `TrustedUsbDevices` (VID:PID) to survive.
-- Sabotage audit: all hardwired config invariants (`ActiveResponse`, `ObserveUntilChain`, `ThreatIntelProactiveFirewall`, `BlockFcmPushChannel`, `RestrictivePortHardening`, `MitmDefense`/`VpnShield` `Enabled`) verified intact in HEAD and the working tree — none had been downgraded to a flippable default. `EnableHardwarePmuMonitor`/`EnableAiBehaviorScoring` left false (no wired consumer); `EnableIntelThreatIntel`/`EnableDynamicSandboxing` left false (placeholder feed / requires the Windows Sandbox feature).
+- Sabotage audit: all hardwired config invariants (`ActiveResponse`, `legacy chain-wait mode`, `ThreatIntelProactiveFirewall`, `BlockFcmPushChannel`, `RestrictivePortHardening`, `MitmDefense`/`VpnShield` `Enabled`) verified intact in HEAD and the working tree — none had been downgraded to a flippable default. `EnableHardwarePmuMonitor`/`EnableAiBehaviorScoring` left false (no wired consumer); `EnableIntelThreatIntel`/`EnableDynamicSandboxing` left false (placeholder feed / requires the Windows Sandbox feature).
 - Version stamp 3.0.2 -> 3.0.3.
 
 ## [3.0.2] - 2026-10-08
@@ -244,7 +672,7 @@
 This machine sustained the 2026-06 MitM chain (planted root -> TLS intercept -> Chrome sync
 token theft -> FCM "Send Tab to Self" -> rogue Cast :8009 C2 relay at 192.168.1.100, MAC OUI
 B0-B3-69 / Shenzhen SDMC). A device at that IP is still live on the LAN and the browser holds
-an active Cast connection to it. The prior observe-until-chain / clean-install defaults left
+an active Cast connection to it. The prior legacy chain-wait mode / clean-install defaults left
 that class of threat detected-but-not-blocked. Defenses are now **hardwired on and cannot be
 disabled** - the relevant config booleans are compiled getters with no-op setters (the same
 pattern already used for `ActiveResponse` and `RestrictivePortHardening`), so no config value,
@@ -255,9 +683,9 @@ DPAPI override, or planted file can turn them off:
   `AutoBlockRogueCast` within the suite are likewise hardwired `true`.
 - **`MitmDefense.KnownRogueCastIps` seeded with `192.168.1.100`** (was empty) - the confirmed
   attacker relay is blocked by default. `RogueCastMacPrefixes` already carried `B0-B3-69`.
-- **`SentinelConfig.ObserveUntilChain` => always `false`** (no-op setter). Response fires on
+- **`SentinelConfig.legacy chain-wait mode` => always `false`** (no-op setter). Response fires on
   single high-confidence Tier1 signals; observe mode can no longer be selected by config,
-  override, or planted file. The `config.ObserveUntilChain = true` lines in the Agent/Service
+  override, or planted file. The `config.legacy chain-wait mode = true` lines in the Agent/Service
   host startup were removed. Tradeoff: higher false-positive-action risk, accepted for a
   repeat-target host, bounded by `MaxKillsPerMinute`. Tier2 remains LogOnly unconditionally
   (unchanged invariant). The observe-mode branches remain in `AdvancedResponseEngine` /
@@ -283,7 +711,7 @@ plaintext or otherwise, that can disable response.
 ### Tests
 
 Updated the product-default posture tests to assert the hardwired armed values
-(`ObserveUntilChain=false`, `MitmDefense.Enabled=true`, `BlockFcmPushChannel=true`,
+(`legacy chain-wait mode=false`, `MitmDefense.Enabled=true`, `BlockFcmPushChannel=true`,
 `ThreatIntelProactiveFirewall=true`, `VpnShield.Enabled=true`, `192.168.1.100` pinned) in
 `ModelAndInfraTests`, `V160SecurityHardeningTests`, `ProductPostureTests`, `HostsFileGuardTests`,
 `V212WorkFirstTests`, `ThreatIntelAndLnkTests`. Reworked
@@ -298,7 +726,7 @@ re-driven through the observe-independent `ResponsePolicy.RegisterAndEvaluateCha
 same path the observe gate called), so benign-never-kills / chain-confirm semantics are intact.
 Tests whose only remaining assertion was the now-impossible "no action while observing" were
 removed (`ResponsePolicyTests.Inline_Host_Mutation_Blocked_While_Observing`, the two
-`IsoDismountResponseTests.*_ObserveUntilChain_NoChain_IsLogOnly`). Affected files:
+`IsoDismountResponseTests.*_legacy chain-wait mode_NoChain_IsLogOnly`). Affected files:
 `AttackClassKillTests`, `FalsePositiveCorpusTests`, `ResponsePolicyTests`, `InfostealerChainTests`,
 `IsoArchiveContentTests`, `HostsFileGuardTests`, `V212WorkFirstTests`, `VpnShieldTests`,
 `SecurityInvariantsTests`, `TerminalFamilyConsistencyTests`, `ProtocolCoverageMonitorsTests`.
@@ -424,7 +852,7 @@ moment a sensitive syscall fires. This release consumes it.
   documented `LOW-4` gap for in-memory living-off-the-land execution where every module on
   disk is signed and benign.
 
-Observe-until-chain is preserved: the new signal is `LogOnly` evidence for the correlation
+legacy chain-wait mode is preserved: the new signal is `LogOnly` evidence for the correlation
 engine and never authorizes a kill on its own. Fail-closed: any inspection failure yields
 no signal. Userland only; no kernel driver added. See `docs/etw-callstack-detection.md`.
 
@@ -588,7 +1016,7 @@ detected but never contained. `AdvancedResponseEngine` now dispatches to it:
   stops/removes the container or terminates the VM host, alongside the process kill.
 
 **Constraint compliance.** Every containment path is gated exactly like all other destructive
-responses: observe-until-chain must have authorized the action (`ar` + Tier1 kill-grade). Tier2 can
+responses: legacy chain-wait mode must have authorized the action (`ar` + Tier1 kill-grade). Tier2 can
 never reach these branches; a bare container-config observation or a content signal never triggers
 containment. If an ISO origin cannot be confirmed, the response degrades to a plain process kill and
 never dismounts or deletes an unrelated volume. All destructive containment writes a PRE_ACTION audit
@@ -596,7 +1024,7 @@ entry first, like every other action.
 
 Tests: new `IsoArchiveContentTests` (+16) cover the inspector (bomb / polyglot / nested / embedded
 executable / benign / bomb-safety timing) and the response gating (Tier2 stays LogOnly with
-ActiveResponse on; observe-until-chain default-deny with no chain; Tier1 chain-authorized ISO
+ActiveResponse on; legacy chain-wait mode default-deny with no chain; Tier1 chain-authorized ISO
 dismount, Docker containment, and VM containment; ISO-origin-unresolved degrades to kill-only).
 
 ### Fixed - Dead code / honesty cleanup found during a full-codebase sabotage sweep
@@ -703,7 +1131,7 @@ a valid Authenticode signature as that anchor.
   that encoded the old name/path-only bypass were rewritten to assert the hardened, fail-closed
   contract.
 
-**Constraint compliance:** `UnsignedBinaryRule` stays Tier2 / LogOnly (observe-until-chain
+**Constraint compliance:** `UnsignedBinaryRule` stays Tier2 / LogOnly (legacy chain-wait mode
 unchanged). `DllSideloadingDetectionRule`'s Tier1 authority is unchanged in scope - the fix only
 removes an attacker-controllable *exemption*, so it produces strictly fewer bypasses and no new
 kills on previously-safe cases. The anchor (Authenticode signature) is behavioral/provenance, not a
@@ -743,7 +1171,7 @@ self-authorize and that trust must combine with a non-attacker-controllable anch
 
 **Constraint compliance:** the rule remains Tier2 / LogOnly - this fix changes only *what is
 observed*, never authorizing a kill on its own. Auto-kill still requires chain confirmation
-(observe-until-chain). Behavioral, not name-based: the kill authority is unchanged; the fix
+(legacy chain-wait mode). Behavioral, not name-based: the kill authority is unchanged; the fix
 removes an attacker-controllable trust shortcut and makes the detection fail closed.
 
 
@@ -764,7 +1192,7 @@ test suite (2469 tests) passes identically before and after, and the build is 0W
   all tests bind unchanged.
 - **`AdvancedResponseEngine.cs`** is now a `partial class`. The self-contained network/certificate
   P/Invoke executor helpers moved to `AdvancedResponseEngine.NetworkActions.cs`. `HandleAsync`, the
-  Tier1-only branch guards, the observe-until-chain gate, and the mandatory pre-action audit
+  Tier1-only branch guards, the legacy chain-wait mode gate, and the mandatory pre-action audit
   ordering are untouched in the main file - the kill contract stays in one place.
 - **`BehavioralCorrelationEngine.cs`** is now a `partial class`. The host-wide (PID 0)
   network-tamper / VPN-shield correlation subsystem moved to
@@ -773,7 +1201,7 @@ test suite (2469 tests) passes identically before and after, and the build is 0W
 
 **Constraint compliance:** this is a pure structural split. Because the response and correlation
 engines were split with C# `partial class`, the compiled types are identical - the Tier2-can-never-act
-and observe-until-chain invariants are byte-for-byte the same code paths, just in more readable files.
+and legacy chain-wait mode invariants are byte-for-byte the same code paths, just in more readable files.
 
 
 ## [2.7.8] - 2026-09-21
@@ -811,7 +1239,7 @@ statistical/lexical analysis of the command line itself. This adds exactly that,
   benign < obfuscated heuristic ordering, bounded/never-throws scoring, empty-input handling).
 
 **Constraint compliance:** this is observe-fuel only. A high score never authorises a kill on its
-own - only a chain-confirmed terminal does (observe-until-chain). It detects command-line *behaviour
+own - only a chain-confirmed terminal does (legacy chain-wait mode). It detects command-line *behaviour
 shape*, not process name/path/hash, and adds no privileged collection path.
 
 ## [2.7.7] - 2026-09-20
@@ -1016,7 +1444,7 @@ cancellation flow unchanged. Verified: solution builds 0W/0E, all 2440 tests pas
 
 ### Detection - close the "malicious DLL that harms locally, never phones home" gap
 
-Observe-until-chain historically leaned on a network terminal (C2/beacon/exfil) to complete a
+legacy chain-wait mode historically leaned on a network terminal (C2/beacon/exfil) to complete a
 chain. A hostile module loaded into a trusted host can do all its damage locally - ransomware
 encryption, credential/LSASS theft, defense tampering - without ever connecting out, so a
 network-gated chain would never quarantine it. Two additions close this, staying within the hard
@@ -1178,7 +1606,7 @@ lock in each closed gap.
 Defends against a website hijacking or pairing with a local browser-like desktop app to
 drive it or relay through it - even when the app is not one of the mainstream browsers the
 existing `BrowserC2Guard`/`ChromeRemoteDebuggingRule` recognize. Three additions, all
-behavioral, userland-only, observe-until-chain, and gated on the always-on hardening posture:
+behavioral, userland-only, legacy chain-wait mode, and gated on the always-on hardening posture:
 
 - **`NativeMessagingHostGuard`** (Service, CredentialProtection group, 60s scan) - baselines
   registered browser native-messaging hosts (HKCU/HKLM registry + on-disk manifests, Chrome/
@@ -1279,7 +1707,7 @@ New third detection axis: **state-driven**, complementing the event-driven monit
 "silent / user-directed harm" blind spot - a module that merely runs (audio/hypnotic stream,
 screen flicker, etc.) with no network, credential, or file-destruction behavior, possibly signed
 with a stolen certificate, produces zero terminal telemetry and cannot be caught by
-observe-until-chain, but it must still be *mapped* somewhere.
+legacy chain-wait mode, but it must still be *mapped* somewhere.
 
 `StateReconciliationMonitor` (SystemIntegrity group, 5-min cadence, 30s boot-settle) keeps a
 **reboot-durable** baseline (`ModuleBaselineStore`, `System.Text.Json` under
@@ -1559,7 +1987,7 @@ have flagged the DLL at all.
 
 Userland only, no new egress, no new dependencies - installer size is unchanged within normal
 per-release variation. These are correctness fixes to the DLL-unload/quarantine and agent-watchdog
-paths; detection tiers, response contracts, and the observe-until-chain law are unchanged.
+paths; detection tiers, response contracts, and the legacy chain-wait mode law are unchanged.
 
 ## [2.6.0] - 2026-09-10
 
@@ -1633,7 +2061,7 @@ general case.
   Secret`**. It also detects **`Data Staging: Archive of User Documents`** when a non-owning
   process packages a user document tree into an archive (>=512 KB). The owning browser / signed
   first-party clients / OS-critical readers are skipped, so this attributes stealers, not normal use.
-- **Observe-until-chain honored strictly.** All three raw signals are **Tier2 + LogOnly +
+- **legacy chain-wait mode honored strictly.** All three raw signals are **Tier2 + LogOnly +
   `SignalType.Generic`** and can never solo-kill (`ClassifyTerminalOutcome` returns null / the Exfil
   family is terminal-but-never-solo-kill-grade). They deliberately are *not* tagged
   `WeakObserveSeed`, so they still feed correlation.
@@ -2557,8 +2985,8 @@ Critical fix for game interference (Football Manager / Denuvo titles crashing on
 ### Added
 
 - **`AlwaysOnPolicies.cs`** - new static class formalizing permanent product invariants:
-  - `IsProtectedGameProcess()` / `IsProtectedGamePath()` / `ApplyGameProtection()` - game protection checked BEFORE allowlist and observe-until-chain in the response engine. Cannot be overridden by config.
-  - `IsDllUnloadAlwaysOn()` / `MayUnloadDllsFrom()` - DLL unload formalized as metadata-driven always-on policy. Never demoted by tier law, never gated on ObserveUntilChain.
+  - `IsProtectedGameProcess()` / `IsProtectedGamePath()` / `ApplyGameProtection()` - game protection checked BEFORE allowlist and legacy chain-wait mode in the response engine. Cannot be overridden by config.
+  - `IsDllUnloadAlwaysOn()` / `MayUnloadDllsFrom()` - DLL unload formalized as metadata-driven always-on policy. Never demoted by tier law, never gated on legacy chain-wait mode.
 - **`SecurityValidation.IsKnownGameProcessName()`** - public API for name-only game process checks (used by EphemeralProcessMonitor).
 - **DLL unload emissions** now carry `["AlwaysOnPolicy"] = "DllUnload"` metadata marker for explicit policy recognition.
 
@@ -2607,7 +3035,7 @@ WMI is a first-class persistence and policy-overwrite surface again. Consumer *n
 
 ### Changed
 
-- `ResponsePolicy` kill-grade families include `WmiPersistence`. Name-only new consumers stay observe fuel (0.75). Executable consumers are a terminal leg under observe-until-chain.
+- `ResponsePolicy` kill-grade families include `WmiPersistence`. Name-only new consumers stay observe fuel (0.75). Executable consumers are a terminal leg under legacy chain-wait mode.
 - Kernel-Registry ETW records the last WMI-host writer (`WmiHostRegistryHint`) so policy-tree changes can be attributed without a key path in the payload.
 - `ProductInfo.Version` -> `2.2.8`
 - Installer -> `SentinelSetup-2.2.8`
@@ -2677,7 +3105,7 @@ Generic CVE-class coverage so the next Patch Tuesday does not require a named ca
 
 ### Changed
 
-- **CVE Shield** matches Windows OS-class KEV (WorkstationOs) instead of requiring a process named "Windows". Server roles (SharePoint/Exchange/DNS Server) match only if installed. Process-spawn rules are LogOnly observe-until-chain. Synthetic PoC salt hashes are gone (security theater). KEV catalog is cached under ProgramData.
+- **CVE Shield** matches Windows OS-class KEV (WorkstationOs) instead of requiring a process named "Windows". Server roles (SharePoint/Exchange/DNS Server) match only if installed. Process-spawn rules are LogOnly legacy chain-wait mode. Synthetic PoC salt hashes are gone (security theater). KEV catalog is cached under ProgramData.
 - `V217Hardening.cs` namespace is `Sentinel.Core` like every other monitor file (folder `Monitors/` is layout only - not a second type universe).
 - `ProductInfo.Version` -> `2.2.4`
 - Installer -> `SentinelSetup-2.2.4`
@@ -2760,7 +3188,7 @@ Honest remediations from a full source red-team. Several items previously marked
 - **BrowserC2Guard** scans each interactive user's Chrome/Edge/Brave extension tree.
 - **GSecurity.inf (kiosk / Hardened Mode)** no longer sets password length 0, complexity off, all audit off, FIPS off, or Authenticode off. FIPS is left untouched. Password length 12 + complexity; logon/account/policy audit on.
 - **Worker:** `RATE_LIMITER` is actually called **after** HMAC. Unauth flood has a separate cheaper cap. MalwareBazaar `/report/hash` is an honest lookup + comment on known samples (ingest still needs the file).
-- **EncryptedConfigStore** writes an `SCFG2` HMAC envelope. Leftover `disk JSON config` cannot turn `ObserveUntilChain` off.
+- **EncryptedConfigStore** writes an `SCFG2` HMAC envelope. Leftover `disk JSON config` cannot turn `legacy chain-wait mode` off.
 - **FileVerdictAds** no longer grants Administrators FullControl on `%ProgramData%\Sentinel\Secure`.
 - **President's Law** no longer includes DnsAnomaly / NetworkAnomaly.
 
@@ -2967,7 +3395,7 @@ Expands userland coverage for campaigns that lead to local privilege escalation 
 #### Rules
 - PrivilegeEscalationRule patterns expanded (potato variants, coerce helpers)
 
-Still observe-until-chain / work-first. Kernel bugs require Windows Update.
+Still legacy chain-wait mode / work-first. Kernel bugs require Windows Update.
 
 All notable changes to Sentinel are documented in this file.
 
@@ -3020,7 +3448,7 @@ Thorough source audit with attacker and defender perspectives for gaming PCs and
 - `SecurityValidation.IsGameOrAntiCheatPath(imagePath)` - skips all Steam, Epic, GOG, EA, Ubisoft, Riot, Battle.net, Xbox, anti-cheat (EAC/BattlEye/Vanguard/Denuvo) paths
 - `InstallerHeuristics.IsDirectXOrRuntimeRedist(processName, imagePath)` - skips DXSETUP, vcredist, XNA, OpenAL, PhysX, and all runtime redistributable processes regardless of install location
 
-Behavioral monitors still observe everything - if an actual attack uses a game path, rule-based detections still fire and go through normal ObserveUntilChain gating.
+Behavioral monitors still observe everything - if an actual attack uses a game path, rule-based detections still fire and go through normal legacy chain-wait mode gating.
 
 ## [2.0.5] - 2026-08-09
 
@@ -3164,7 +3592,7 @@ Major test infrastructure expansion. Adds comprehensive unit tests for all previ
 Complete rewrite to match the 2.0.x codebase:
 
 - Corrected `EnforceActiveResponse` default (`false`, not `true` as previously documented)
-- Added full `ObserveUntilChain` / `SilentObserve` / `ChainConfirm` config model to FR-6
+- Added full `legacy chain-wait mode` / `SilentObserve` / `ChainConfirm` config model to FR-6
 - Added T1-19 through T1-23: digital coercion toolkit composites, AI agent / MCP abuse, package supply-chain runtime, indirect syscall / Hell's Gate, MitM attack chain
 - Added T2-05/T2-06: privacy service observe-only, bulk transfer / torrent observe-only
 - Expanded FR-4 to include all 19 current BehavioralCorrelationEngine composites plus WeightedCorrelationEngine as a second engine with score card requirements
@@ -3187,13 +3615,13 @@ Recreates the June 13-14 attack defense as a single opt-in suite under `Sentinel
 3. Ghost process C2s to rogue LAN Cast endpoint (e.g. `192.168.1.100:8009`, OUI `B0-B3-69` SDMC spoofed as Chromecast)
 4. Optional: stolen Chrome tokens + FCM "Send Tab to Self" opens attacker URLs in open tabs
 
-**What MitmDefense.Enabled does (narrow exception to ObserveUntilChain / work-first):**
-- **TlsCertificateMonitor** - high-confidence planted roots still `RemoveCert` / `RemoveCertAndKillAdder` under observe-until-chain
+**What MitmDefense.Enabled does (narrow exception to legacy chain-wait mode / work-first):**
+- **TlsCertificateMonitor** - high-confidence planted roots still `RemoveCert` / `RemoveCertAndKillAdder` under legacy chain-wait mode
 - **GhostProcessMonitor** - unresolvable/empty-name PID -> Cast `:8008/:8009` or known rogue IP -> **KillProcessTree** + `TargetIP` isolate metadata (immediate, no 2-scan wait)
 - **CastDeviceGuard** - auto firewall-block rogue Cast by IOC MAC (`B0-B3-69` default) / known IPs / phantom+Google-OUI spoof; does not wipe blocks when suite is on
 - **PhantomDeviceMonitor** - `B0-B3-69` no longer labeled "Google"; cast-spoof + ghost correlation blocks at >=0.90
 - **NullSessionGuard** - FCM TCP 5228 block when suite on (Send Tab to Self)
-- **AdvancedResponseEngine** - MitmDefense actions are not demoted to LogOnly by ObserveUntilChain
+- **AdvancedResponseEngine** - MitmDefense actions are not demoted to LogOnly by legacy chain-wait mode
 
 **Config** (`disk JSON config` -> `Sentinel:MitmDefense`):
 ```json
@@ -3243,7 +3671,7 @@ Major platform release. Product law unchanged: **observe by default**, work-firs
 - Interfaces: `IDetector`, `ITelemetryProvider`, `ICorrelationRule`, `IResponsePlugin`.
 - **`PluginRegistry`** DI singleton - register correlation rules without editing core god-files.
 - **`RulePackLoader`**: `%ProgramData%\Sentinel\rules\packs\*.pack.json` (HMAC fail-closed) -> `FragmentCorrelationRule` plugins.
-- Docs: [docs/RULE_PACKS.md](docs/RULE_PACKS.md).
+- Docs: [docs/RULE_PACKS.md](RULE_PACKS.md).
 
 #### Ops / diagnostics
 - Expanded **`SentinelMetrics`**: telemetry/sec, detections/sec, drops, composite/weighted counts, correlation latency percentiles.
@@ -3467,7 +3895,7 @@ Protects users from **machine-side tools** used in online harassment, sexual coe
 - `ResponsePolicy.ApplyTierLaw`: **Tier1** only for high-confidence (>= `MinTier1Confidence`, default **0.85**) **token theft / credential dump / reverse shell / C2 beaconing**, or multi-signal **composites** that prove those.
 - All other monitor signals demote to **Tier2 + LogOnly** observe fuel for correlation.
 - Critical score alone no longer promotes noise to kill.
-- Live pipeline: `DetectionEngine` always applies tier law; `AdvancedResponseEngine` re-applies when `ObserveUntilChain` is on.
+- Live pipeline: `DetectionEngine` always applies tier law; `AdvancedResponseEngine` re-applies when `legacy chain-wait mode` is on.
 
 ### Policy - DirectX / redistributables stay observe-only
 - Steam DirectX, VC++, GPU redistributable System32 writes: **Tier2 observe only** (maybe 1-2 signals).
@@ -3479,21 +3907,21 @@ Protects users from **machine-side tools** used in online harassment, sexual coe
 - First agent liveness check runs **immediately** so the tray appears without a multi-second wait when the agent is missing.
 
 ### Fixed - Cuckoo / app integrity observe gate
-- `ApplicationIntegrityMonitor` emits cuckoo eggs as **Tier2 LogOnly**; inline kill/quarantine/restore only when `MayPerformInlineHostMutation` allows (observe-until-chain default: no).
+- `ApplicationIntegrityMonitor` emits cuckoo eggs as **Tier2 LogOnly**; inline kill/quarantine/restore only when `MayPerformInlineHostMutation` allows (legacy chain-wait mode default: no).
 
 ### Constraints
 - Documented Tier1 kill-grade families and DirectX observe rule in `constraints.md`.
 
 ## [1.8.6] - 2026-08-01
 
-### Policy - Observe-until-chain (rebuild)
+### Policy - legacy chain-wait mode (rebuild)
 - **Default:** all monitors **LogOnly** until a multi-signal chain points at a terminal attack.
 - **Terminal outcomes (nuke):** C2 beaconing, exfil, token theft, reverse shell, credential dump, BYOVD.
 - **Nuke = everything:** quarantine + kill + network isolate + chain tracer.
 - **Still active immediately:** DLL unloaders only (`DllUnloadEngine` FreeLibrary / proven sideload load).
 - **Not terminal:** Steam DirectX / GPU redistributable System32 writes (`vulkan*`, `nvcuda`, D3D/DXGI, VC++ runtimes), PID-0 attribution races -> Tier2 LogOnly, never a chain seed.
 - **Silent observe:** no toasts / auto evidence packs until chain-confirmed.
-- **Config:** `ObserveUntilChain` (default true), `ChainConfirmMinSignals` (2), `ChainConfirmWindowSeconds` (300), `SilentObserve` (true), `EnforceActiveResponse` default **false**.
+- **Config:** `legacy chain-wait mode` (default true), `ChainConfirmMinSignals` (2), `ChainConfirmWindowSeconds` (300), `SilentObserve` (true), `EnforceActiveResponse` default **false**.
 - **Central gate:** `ResponsePolicy` + `AdvancedResponseEngine`; inline host mutations gated the same way.
 - **FileActivityMonitor:** System32 unauthorized-write demoted to Tier2 LogOnly (DirectX-safe).
 

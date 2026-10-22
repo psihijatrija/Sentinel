@@ -1,5 +1,7 @@
 # VirusTotal / AV false-positive notes
 
+These are dated historical investigation/build notes. They do not establish current AV detection counts or override current response/import policy. Sentinel 3.2.3 makes no VirusTotal requests or automatic sample uploads; any external submission is a separate, explicit operator action. Current runtime behavior is documented in [design](design.md), [constraints](constraints.md) and [offline reputation](HASH_REPUTATION.md).
+
 ## Goal
 
 Installer uploads should ideally show **zero detections**. Reality for a full
@@ -121,7 +123,7 @@ and extracted it at runtime - the classic dropper pattern.
    `DuplicateHandle`, `EnumModules`.
 2. **Standard EDR containment** - `SafeKillProcessTree` + disk quarantine vault.
 3. **LGPO.exe / GSecurity.inf** as plain files.
-4. **Observe-until-chain** responses.
+4. **Authorized high-confidence Tier1** responses; Tier2 is log-only.
 5. **Game / anti-cheat memory policy** - no `PROCESS_VM_READ` on those trees.
 6. **Installer** uses `taskkill` + minimal `icacls` on upgrade.
 

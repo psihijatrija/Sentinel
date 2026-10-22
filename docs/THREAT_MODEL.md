@@ -1,41 +1,63 @@
 # Sentinel - Threat Model
 
+## Independent NanoAV exception (3.3.8)
+
+The packaged NanoAV runs its supplied online/response code independently of Sentinel's offline and tier-policy boundaries. Its original persistence, provider queries and destructive decisions are retained; coexistence guards do not establish detection correctness or runtime residency. Installed-path and identical-payload exclusions intentionally protect the supplied companion and do not claim resistance to administrator replacement or injection. See [exact source scope and limitations](NANOAV.md). Existing Sentinel desktop monitoring is unchanged; [privacy observations](PRIVACY_REVIEW_2026-10-21.md) distinguish active registrations from dormant code and source review from installed-system evidence.
+
+## Firewall defaults, policy stores, and monitoring (3.2.3)
+
+The service manages PersistentStore and, when the OS exposes it, the local computer Group Policy store (`localhost`). It mirrors Sentinel's own process blocks into local Group Policy and inspects ActiveStore, including rule filters, enforcement status, profile settings, and BFE/MpsSvc health. It never writes a domain GPO. Effective domain exceptions, disabled/overridden profiles, missing rules, or non-enforced filters produce visible conflicts and a dashboard attention state instead of a protected claim. A trimmed image without a local GPO store uses PersistentStore; missing NetSecurity/PowerShell means policy management is unavailable and is reported, while COM self-block reconciliation and offline detection continue.
+
+Inbound allow rules in both local stores are disabled and retained. Outbound allow rules and default outbound actions are preserved; Sentinel's own outbound self-blocks remain intentional. Firewall profiles are enabled and default inbound policy is Block in the two writable local stores. Exact DHCP-service UDP 68/67 and 546/547 rules are exempt. System-only ICMPv6 error/control types 1-4 and neighbour/router discovery 133-136 are exempt to preserve outbound IPv6; echo and arbitrary application ICMPv6 rules are not. The policy does not automatically enable an existing disabled essential rule.
+
+Registry tree notifications trigger coalesced rechecks, with a 15-second polling fallback. These are detection/reconciliation intervals, not an atomic prevention guarantee: an unapproved exception may exist briefly before reconciliation. New exceptions and re-enabled unapproved exceptions are disabled again on refresh/restart. Windows changes cannot be reliably distinguished from manual changes from the Enabled flag, so opt-in is explicit. Approval is bound to the store, exact rule name, and complete filter identity; changed definitions lose approval. Privileged approval/revocation is not exposed over the user-session web/pipe API.
+
+Administrators can approve an existing rule from an elevated terminal in the install directory:
+
+```powershell
+.\Sentinel.Service.exe --allow-inbound PersistentStore 'Exact-Rule-Name'
+.\Sentinel.Service.exe --allow-inbound localhost 'Exact-GPO-Rule-Name'
+.\Sentinel.Service.exe --deny-inbound PersistentStore 'Exact-Rule-Name'
+```
+
+The names are the rule `Name` identifiers, not translated display names or wildcard patterns. No new arbitrary rule or command is created by these operations. Windows Firewall UI can still disable an approved exception; enabling an unapproved exception there is temporary until the next reconciliation.
+
+An ACL-protected, atomic rollback journal records original enabled/profile states before changing them, supports interrupted operations, and is serialized across service/administrator processes. Uninstall restores matching recorded original states and removes owned self-blocks; changed rule definitions are skipped and reported. `Sentinel.Service.exe --restore-firewall` is an elevated rollback command that first stops the service/watchdog. Starting Sentinel again resumes the baseline. Preserve the journal for recovery; a malformed/unsafe journal fails visibly rather than silently replacing the original state.
+
+The fixed, embedded NetSecurity management script runs through an absolute Windows PowerShell path with no profile. Script text is embedded code; request/rule data travels as JSON, not command interpolation. Output, execution time, and pre-authentication pipe input are bounded. This management-only bridge is the reason PowerShell is used here: the firewall COM API does not offer the required policy-store selection. No online lookup is involved.
+
+## Runtime exploit observation (3.2.3)
+
+Existing ETW process/module, credential-access, injection, script, file, DNS, and network sensors remain active. A new bounded, passive cross-process rule correlates recent non-loopback networking with an evasive script child for all process identities, including Defender/security software, browsers, games, and OS hosts. It handles expiry/PID-reuse reset and emits Tier2 LogOnly context, never exploit proof or kill authority. Classic-port observations now cover browsers/games too and remain Tier2; a port alone is not a kill reason. Persistent-connection follow-up no longer omits recognized application identities, and child-spawn analysis requires actual parentage rather than coincident process start times.
+
+Game/anti-cheat memory-handle safety restrictions remain. Protected/PPL processes, missing/stripped ETW providers, inaccessible memory, event loss, and unobservable exploits limit userland coverage. A signed image or trusted install path does not establish runtime safety. This release does not claim detection of every exploit or a patch for application/OS vulnerabilities.
+
+## Offline operation and privilege boundary (3.2.3)
+
+Sentinel no longer performs online reputation queries, DNS reputation lookups, live threat/KEV feed downloads, public-IP lookups, cloud connectivity probes, or automatic outbound threat/evidence reporting. Local behavioral telemetry, static/ML analysis, cached/local KEV catalogs, bundled ThreatFox indicators, and local evidence packs remain available. Missing external reputation is Unknown with a neutral score; old online reputation caches are not used. Bundled/cached intelligence becomes stale until supplied through a trusted local update. Legacy encrypted settings cannot re-enable online transports, and the embedded proxy credential has been removed.
+
+The SYSTEM service installs and reconciles six fixed, executable-scoped Windows Firewall block rules: inbound and outbound for Sentinel.Service.exe, Sentinel.Agent.exe, and SentinelAutoRotate.exe, on Domain/Private/Public profiles, for non-loopback IPv4/IPv6 traffic including LAN/link-local destinations. Loopback is excluded from the blocks because an allow rule cannot override a matching block. Rule identifiers remain stable across upgrades, and uninstall removes only these identifiers. Firewall failures or disabled profiles are logged as errors and retried every minute; local detection continues without falsely claiming network enforcement. The service must run with installation/admin privileges to manage these rules. Authenticode verification uses cached URL data only.
+
+The Agent uses an explicit asInvoker manifest and refuses SYSTEM/elevated-administrator execution. The service watchdog checks the session token and selects its limited linked token where necessary; if no suitable token exists it refuses an elevated launch. The Agent applies only its own process mitigations, writes logs/restart state to user-owned storage by default, and delegates privileged operations to the service. Module UI requests schedule service inspection rather than directly quarantining a browser-supplied file path. Certificate requests retain the service's explicit distrust-list authorization. If the service is unavailable these operations fail without an elevated fallback. No generic command execution, arbitrary privileged file-write/delete, or response-disable operation is exposed.
+
+The privileged service still contains system sensors and the response engine: this is not yet a minimal standalone privilege broker. Splitting ETW/native sensors and response execution from the rest of analysis is future work and requires its own protocol and authorization review. Agent-only operation has reduced visibility and response capability. The existing service IPC now denies network-logon access, bounds input to 16 Ki characters before JSON/auth parsing, and disconnects stalled request readers after five seconds; HMAC, freshness, replay checks, and the operation allowlist remain in place.
+
+These controls reduce exposure; they do not confine an already-compromised SYSTEM process. Such a process can potentially alter firewall rules or use other processes/OS services. Malicious local files, telemetry, dependencies, and IPC remain attack surfaces. The localhost dashboard is still active and authenticated. There is no longer an off-host evidence mirror; administrators can destroy local evidence. No kernel/PPL boundary is claimed.
+
+
 **Version: 3.0.4**
 
 This document assumes the attacker has read the source code.
 
-### v3.0.4 - autonomous removal of planted / unvouched-for root CAs
+## Historical implementation notes
 
-Answers the attack the user actually experienced: a root certificate planted in the trusted store to
-enable TLS interception (MITM) and to vouch for malicious signed code. The pre-existing
-`TlsCertificateMonitor` catches a root **added after Sentinel's baseline**, but a root already present
-at first run (planted before install, or left by a prior compromise) slipped through its baseline, and
-there was no autonomous removal of the *existing* store population. `RootStoreGuard` (SYSTEM,
-SystemIntegrity; startup sweep + 90s poll) closes that: it continuously audits the whole trusted-store
-population and acts on anything the OS trusted-root program does not vouch for.
+Versioned subsections below record earlier behavior, not additional current response authority. In 3.2.2, certificate trust-marker absence became Tier2 review-only; only explicit thumbprint distrust authorizes certificate mutation. In 3.2.3, online transports and automatic off-host mirroring were removed. The current controls above and [requirements](requirements.md) take precedence.
 
-**The signal is the attacker's problem, not a name.** A legitimate root carries one of two
-non-attacker-controllable stamps the OS CTL mechanism writes: AuthRoot-CTL membership (`crypt32` prop
-98, every public CA) or the Microsoft root-program policy marker (prop 105, OID
-`1.3.6.1.4.1.311.60.3.2`, the OS roots that sign Windows). A planted/orphaned/de-vouched root carries
-**neither** - it is physically trusted but nothing authoritative anchors it. An attacker cannot forge
-either stamp from userland (they are assigned by the signed CTL update path, not by anything in the
-cert the attacker controls), so renaming the planted root "Microsoft ..." or copying a real root's
-Subject does not help. On a hit the root is removed from every trusted store, pinned to Disallowed, and
-files whose Authenticode chain roots at it are quarantined. This signal and threshold were
-reverse-engineered from how Zemana AntiLogger flags "Suspicious Root CA" and verified against a live
-Windows root store (it flags only orphaned/legacy roots; it leaves MS Root CA 2010/2011 and all public
-CAs intact).
+### Certificate-store observations and mutation authority (current)
 
-**Honest ceiling / self-harm guard.** Auto-removing trust anchors is the one cert action that can brick
-a host (cf. the April 2026 Microsoft Defender incident that removed two legitimate DigiCert roots and
-broke TLS/code-signing fleet-wide). The hard safety floor is re-verified against the **live
-store-connected** context (the stamps exist only there; a detached DER copy loses them) immediately
-before removal, so a vouched-for anchor is refused unconditionally - the guard can only ever remove a
-root the OS does not vouch for. A local admin can of course re-plant a root (B1); as everywhere else,
-Sentinel makes the plant visible, durably recorded, auto-reverted, and chain-corroborating - it does
-not claim to prevent an admin-level action, only to not let a planted root silently persist. The whole
-mutation path is `ActiveResponse`-gated and Tier1; with ActiveResponse off it observes and records only.
+A trusted-store certificate can affect TLS and signed-code trust, but its presence, Subject/Issuer strings or absent OS trust markers do not establish hostile installation or malicious use. `RootStoreGuard` inventories existing certificates as well as later changes. Missing AuthRoot/OS trust markers yield Tier2 LogOnly review findings.
+
+Autonomous removal, Disallowed insertion and associated file quarantine require an exact thumbprint in the explicit `CertDistrustList`, with the existing mutation policy and file protections. The remediator refuses heuristic-only requests. Historical list entries for three legitimate Microsoft roots were removed; old logs are not authorization to distrust them again. Local administrative rights and incomplete telemetry remain limits, and recorded action labels alone do not prove final store state.
 
 ### v2.8.2 - a new network adapter appearing ("attacker adds his network to mine")
 
@@ -72,13 +94,11 @@ multi-homing, so these observe and corroborate - they do not prevent or revert.
 
 Addresses a threat class that every prior Sentinel defense structurally misses. Every terminal
 family (credential theft, C2, ransomware, injection-then-exfil) is defined around harm to the
-**system or its secrets**, and every kill decision is gated on behavior over time
-(`ObserveUntilChain`). Consider instead a module whose only purpose is to harm the **user**: it
+**system or its secrets**, and kill authority requires qualifying terminal behavior. Consider instead a module whose only purpose is to harm the **user**: it
 emits an audio / hypnotic stream, flickers the screen, or otherwise degrades sleep and wellbeing.
 It makes no network connection, touches no credentials, destroys no files, and may be signed with
 a **stolen but validly-chaining** certificate. It produces *zero* terminal telemetry and it never
-escalates - the steady state *is* the attack. `ObserveUntilChain` can never confirm it (there is no
-chain), and signature-based trust is defeated by the stolen cert. Neither of Sentinel's existing
+escalates - the steady state *is* the attack. behavioral terminal classification cannot establish malicious intent from that alone, and signature-based trust is defeated by the stolen cert. Neither of Sentinel's existing
 axes - behavior, or provenance - is sufficient alone against an attacker who deliberately closes
 both doors.
 
@@ -159,7 +179,7 @@ Work-first defaults: HID auto-disable is kiosk-only; Steam/Xbox/Store/DirectX/OB
 
 ### v2.2.4 - generic CVE-class (userland)
 
-Named campaigns lag. New sensors hunt exploit-host / MOTW / MSI / winget / VS Code / isolation-FS *shape* so the next AFD sibling does not require a new Dream Job pack. CISA KEV Windows OS entries match this workstation. Missed Patch Tuesday is LogOnly + toast. Kernel races still need the OS CU.
+Named campaigns lag. New sensors hunt exploit-host / MOTW / MSI / winget / VS Code / isolation-FS *shape* so the next AFD sibling does not require a new Dream Job pack. Local/cached CISA KEV entries produce asset-match candidates, without verified affected-version applicability. Missing or stale catalogs are not proof of patch compliance. Kernel races still need the OS CU.
 
 ### v2.8.6 - CLFS + token-integrity-jump LPE, kill-on-success
 
@@ -238,8 +258,8 @@ Composites: `LPE Campaign Scaffold`, `Initial Access Execution Chain`, `Persiste
 
 ### Audience (v2.0.8+)
 
-- **Gamers / creators:** Work-first defaults; game and anti-cheat paths are not reputation-kill fuel; memory handles skipped on known game trees. Real terminal chains (C2/exfil/token/cred-dump/BYOVD) still authorize response.
-- **High-profile targets:** Dual audit trail + sealed incident packs. Userland limits still apply: local admin / novel kernel implants can win. Pair with Defender, Secure Boot, HVCI, unique proxy secret, and off-host evidence backup.
+- **Gamers / creators:** Always-on hardening; game and anti-cheat paths are not reputation-kill fuel; memory handles skipped on known game trees. Real terminal chains (C2/exfil/token/cred-dump/BYOVD) still authorize response.
+- **High-profile targets:** Dual audit trail + sealed incident packs. Userland limits still apply: local admin / novel kernel implants can win. Pair with Defender, Secure Boot, HVCI and operator-controlled independent/offline evidence copies; no endpoint proxy connection remains.
 - **Honest battle stance:** Sentinel is meant to fight real operators on real desktops - not to market "unhackable."
 
 ---
@@ -281,8 +301,8 @@ Composites: `LPE Campaign Scaffold`, `Initial Access Execution Chain`, `Persiste
 | JSONL `events.jsonl` | Primary trail | Primary trail (required) |
 | Windows Event Log Application/Sentinel | Secondary trail (critical IDs) | **Auto-disabled** if create/write fails |
 | Unified ETW | ~50 ms sensors | Falls back to WMI/poll |
-| Toasts | Best effort | Skip if no session / AppId |
-| TI proxy / feeds | Optional | Fail closed without secret |
+| User alerts | Local dashboard/tray state; no Win32 toast calls | Local JSONL/dashboard where available |
+| Online TI proxy / feeds | Removed in 3.2.3 | Removed; local/cached data only, potentially stale |
 
 Attacker wiping only Event Log does not erase JSONL packs. Attacker wiping JSONL may still leave Event Log IDs 1100/1200 if the service was up. Neither is a substitute for offline backups of packs.
 
@@ -349,7 +369,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 - **RemoteSessionGuard** (v1.7.5) - Force-logoff unauthorized RDP/remote sessions
 - **HostsFileGuard forum.hr block** (v2.6.9) - forum.hr + subdomains blackholed at hosts-file level plus a wildcard NRPT rule (`.forum.hr` -> 0.0.0.0) covering all subdomains (reinfection vector); `ForumHrWatchMonitor` removed
 - **Observe-first posture (v1.8.3)** - Weak path/port/shell heuristics LogOnly; IPSec attack-only by default; `RestrictivePortHardening` for full lockdown
-- **MitmDefense suite (v2.0.1)** - Opt-in post-incident: planted root cert remove, FCM Send-Tab-to-Self block, ghost process -> fake Chromecast kill, rogue Cast FW (narrow exception to ObserveUntilChain)
+- **MitmDefense suite (v2.0.1)** - Opt-in post-incident: planted root cert remove, FCM Send-Tab-to-Self block, ghost process -> fake Chromecast kill, rogue Cast FW (subject to MITM-specific response authorization)
 - **GpuProcessMonitor** (v2.1.5) - GPU sandbox escape + crypto-mining detection
 - **WebDashboardService** (v2.1.3) - Local web-based settings UI replacing WinForms
 - **ScanEngine** (v2.1.3) - On-demand comprehensive system security scan
@@ -382,8 +402,8 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 | Monitor | Purpose |
 |---------|---------|
 | ArpSpoofMonitor | Detects ARP cache poisoning |
-| DnsResponseValidationMonitor | Detects DNS poisoning via TTL anomalies |
-| PublicIpMonitor | Detects VPN/proxy changes |
+| DnsResponseValidationMonitor | Retired in 3.2.3; no active DNS validation |
+| PublicIpMonitor | Retired in 3.2.3; no public-IP queries |
 | WifiSecurityMonitor | Detects open/WEP networks |
 | RemoteAccessMonitor | Detects RAT indicators (RDP, VNC, etc.) |
 | PhantomDeviceMonitor | Detects unauthorized network devices |
@@ -395,7 +415,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 | SecureBootIntegrityMonitor | Checks Secure Boot state |
 | ScheduledTaskMonitor | Detects new/modified scheduled tasks |
 | TlsCertificateMonitor | Detects unauthorized root CA installations |
-| RootStoreGuard | Autonomously removes + blocks roots the OS trusted-root program does not vouch for (no AuthRoot-CTL / MS-program stamp), then quarantines files signed by a chain to them |
+| RootStoreGuard | Reviews missing trust markers as Tier2 LogOnly; only explicit thumbprint distrust policy authorizes certificate mutations and associated file actions |
 | UacBypassSurfaceMonitor | Detects autoelevate binary abuse |
 
 ### Group 5: Credential Protection
@@ -465,22 +485,12 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
   cooperative path) is recorded as `SERVICE_STOP_SUSPECTED` in the append-only audit trail plus a
   Tier1 `AntiTamper` **LogOnly** detection when the engine is still reachable. The coverage gap
   becomes evidence instead of silence.
-- **Off-host evidence mirror (opt-in).** When `AutoIncidentReporting.MirrorEvidenceOffHost` is
-  enabled (default **false**), each chain-confirmed evidence pack also uploads a signed **summary**
-  (`/report/evidence`) through the existing HMAC-signed ThreatReporting proxy, so a local admin who
-  suppresses Sentinel cannot also erase the proof. The upload is fail-closed (FR-11: skipped
-  silently without a >=16-char shared secret), never transmits file contents or secrets, and carries
-  the machine-bound manifest HMAC only as an origin proof (verifies on the source host).
+- **Offline evidence only (3.2.3).** Automatic off-host mirroring has been removed. Local evidence packs and the audit chain remain, but no off-host survival is claimed.
 
-**Residual risk:** HIGH. Local admin can always win against userland - this is a fundamental
-Windows limitation without PPL or a kernel driver. The additions above do **not** prevent
-suppression; a local admin can still delete the local audit/pack files and disable the off-host
-mirror. They make the attack (and the stop itself) more likely to be **recorded and to survive**.
+**Residual risk:** HIGH. A local administrator can suppress the service and delete local evidence. Firewall self-blocks do not prevent an already-compromised SYSTEM process from changing host policy.
 
 **Honest assessment:** If the attacker has admin and knows Sentinel is running, they can kill it.
-The watchdog adds seconds of delay, not real protection. What changed in v2.5.8 is durability of
-*evidence*, not invincibility: an unexpected stop is now logged as suspected tampering, and (when
-opted in) confirmed-attack evidence is mirrored off-box before suppression.
+The watchdog adds seconds of delay, not a security boundary. Unexpected stops can leave local tamper evidence, but 3.2.3 does not mirror it off-box. An administrator can erase every local copy.
 
 ---
 
@@ -701,29 +711,11 @@ signature anchor and fail closed.
 
 ---
 
-### B13: Threat proxy forgery (FIXED in v1.6.0)
+### B13: Legacy standalone proxy forgery
 
-**Attack:** Unauthenticated or client-key HMAC on the Cloudflare Worker allowed anyone to forge threat reports / burn VT quota.
+The historical Worker used shared-secret HMAC, timestamp/nonce checks and rate limiting. Current endpoint transports, client credentials and automatic evidence mirroring were removed in 3.2.3, so the endpoint does not expose this connection.
 
-**`/report/evidence` route (v2.5.8 - off-host evidence mirror, deployed out-of-band):**
-- Accepts the signed `EvidenceSummary` JSON (report id, version, host, detection metadata,
-  indicators, machine-bound manifest `sha256` + `hmac`). Verifies the client HMAC exactly like the
-  other `/report/*` routes (same `X-Sentinel-Timestamp` / `-Nonce` / `-Signature` scheme, nonce
-  consumed after verification, per-IP rate limit) and stores the summary.
-- The summary carries the machine-bound manifest HMAC as an **origin proof** only (it re-verifies on
-  the source host). For portable verification, the Worker MAY return a **server-signed receipt**
-  (server key, no host secret ever leaves the box). The Worker is deployed separately and is not in
-  this repo; the client never depends on the receipt for correctness.
-
-**Mitigation (v1.6.0+):**
-- Worker requires `SENTINEL_SHARED_SECRET` (fail closed with 503 if missing)
-- HMAC uses server-side secret only - `X-Sentinel-Key` removed
-- Agent signs with `ThreatReporting:ProxySharedSecret`; reporting skipped if secret unset
-- Per-IP rate limit (60/min) on the Worker
-
-**Residual risk:** LOW if secret is strong and not committed. Shared secret in open-source configs must be set per-deployment.
-
----
+The retained `worker/` server is deployed independently. Its evidence route stores minimal manifest/checkpoint anchors, not raw incident summaries or host/process details; it returns a storage receipt, not an independently trusted origin signature. Local Worker tests do not establish a live deployment. A separately deployed server and its account administrator remain outside the endpoint's trust boundary. See [Worker documentation](../worker/README.md).
 
 ### B14: Kill-storm / response weaponization (FIXED in v1.6.0)
 
@@ -854,3 +846,55 @@ See CHANGELOG.md for full history. Key fixes:
 - **v1.4.4:** 15 red-team findings fixed (command injection, handle leaks, HMAC weakness, socket exhaustion, installer race conditions)
 - **v1.1.0:** Cache poisoning, process name spoofing, self-exclusion bypass
 - **v1.0.1:** RAM disk staging, WSL evasion, raw disk bypass, print spooler exfil, sandbox escape
+
+
+## Reliability and investigation changes (pending release)
+
+Sensor progress is separate from supervisor task liveness. A running task is not proof
+that a provider is available or a collection cycle succeeded. Uninstrumented monitors
+remain Unknown. Native ETW query results, provider enable status, loss counters, exact
+queue evictions, queue age and processing waits are observable. Zero ETW events alone
+is not proof of tampering. Missing providers on custom/debloated Windows degrade
+coverage; they do not authorize response or certify a clean endpoint.
+
+Read-only root-certificate/network inventories retain the previous snapshot when a
+collection fails. Context identifiers group observations; they never authorize trust,
+exclusions, automatic baseline acceptance or changed hardening. Root observations record
+presence/fingerprint and observation time, not a proven installer or actor. CurrentUser
+stores refer to the account running the service, not all interactive users. Hashing
+network configuration reduces plaintext exposure but is not a promise of anonymity.
+
+A companion daily audit hash chain can expose changed/reordered records. Trusted
+checkpoints retained independently are necessary to expose truncated suffixes or rewritten
+history. A machine administrator controlling every copy can still replace evidence.
+Incident-summary anchoring is optional and requires configured off-host KV storage;
+local tests do not establish remote durability. A shared-key receipt proves neither
+incident truth nor integrity against the remote account owner. Audit integrity degrades
+explicitly if the chain cannot be written/verified or reaches its daily size cap.
+
+Replay is offline weighted-correlation evaluation. It cannot issue host actions, run
+plugins or reproduce telemetry that was never captured. Restores use a write-ahead
+journal, non-overwriting staging and read-back verification, and retain the encrypted
+vault. Recovery inspection is read-only; it never trusts a journal to authorize replay,
+delete evidence or run restored files. Process termination remains irreversible.
+
+Redacted bundles are derived evidence. Their manifest checks content consistency,
+not original origin/custody. Timestamps and behavioral categories remain sensitive;
+preview exports before sharing them.
+
+
+## Limits demonstrated by operational logs
+
+Certificate metadata and absent OS trust markers do not establish hostile installation or authorize removal. A named pipe scanner can itself connect to a honeypot; client/server PID attribution must distinguish that observer effect. Shared-vendor or substring software matches do not establish CVE applicability. Exclusive event writer ownership and separate agent/service chains prevent accidental interleaving, but neither authenticates a user-writable agent log nor proves collection completeness. Unavailable ETW providers and uninstrumented monitor progress remain visibility limits; these corrections do not claim to repair that coverage.
+
+## DNS coverage limits
+
+In the published 3.2.2 build, the cross-validator probes cloudflare.com against 1.1.1.1 over ordinary UDP and compares IPv4 /16 subnets. This is heuristic evidence, not an authenticated independent view; interception of both paths, same-subnet manipulation, IPv6-only behavior and domains outside the probe can evade it. Critical-domain resolution shifts can also reflect legitimate infrastructure changes.
+
+In the 3.2.3 offline implementation, DnsCrossValidator and DnsResponseValidationMonitor are no-op compatibility types and are not active DNS-answer validation. In 3.2.4, local IPv4/IPv6/effective resolver monitoring remains passive and startup-baseline restoration is removed. Explicit administrator repair uses fresh fingerprints, protected snapshots, audit acceptance and bounded verification/rollback; see [DNS repair](DNS_REPAIR.md). A startup observation is not proof that the resolver was trustworthy. Live adapter mutation/reset validation remains separate from read-only CI. Browser DNS policy enforcement does not independently authenticate the OS resolver. Sentinel does not repair router firmware, authenticate DHCP or verify Wi-Fi password strength.
+
+## Interrupted DNS transaction boundary (3.2.5)
+
+Explicit recovery uses protected write-ahead starting/target states, a fresh current-state fingerprint and an elevated administrator caller. It refuses values outside the saved static family states, changed protocol support, legacy missing plans and newer transactions. This narrows accidental overwrites; it cannot distinguish an administrator who later sets exactly the same addresses, and it does not authenticate DHCP or original resolver trust. A second fingerprint check after durable preparation narrows the approval/I/O race; Windows offers no atomic compare-and-swap across both address families. Recovery never silently runs at startup. See [DNS repair](DNS_REPAIR.md) for remaining validation scopes.
+
+In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.

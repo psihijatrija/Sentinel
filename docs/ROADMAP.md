@@ -7,12 +7,16 @@ This roadmap is deliberately grounded in Sentinel's own documented reality - the
 in `THREAT_MODEL.md`, the known limitations marked in code, and the "intentionally out of scope"
 list in `requirements.md`. It is not a wishlist of features that would break the project's
 constraints. Anything here must still obey `docs/constraints.md` (userland only, no kernel
-driver, Tier2 never acts, observe-until-chain, behavioral kill authority).
+driver, Tier2 never acts, immediate authorized Tier1 response, behavioral kill authority).
 
 Because there is no fixed release schedule, this is organized by **theme and honesty**, not by
 version numbers. Pick from the top of a theme when you want to move the needle.
 
 ---
+
+## Current baseline (3.2.3)
+
+The endpoint is offline, the Agent is unprivileged, the SYSTEM service retains sensors/response, and local/GPO inbound exceptions are reconciled with explicit approvals. A smaller privileged broker is future work. Domain-policy, reboot and interactive-token validation remain distinct from passing hosted Windows tests. See [validation](OFFLINE_VALIDATION.md).
 
 ## Guiding principles (do not drift from these)
 
@@ -22,8 +26,8 @@ version numbers. Pick from the top of a theme when you want to move the needle.
   *entire chain* that leads to kernel compromise, not competing in ring 0.
 - **Detect behavior, not identity.** Kill authority comes from what a process does, never from
   a name/path/hash.
-- **Observe-first.** Weak single signals are LogOnly; only chain-confirmed terminals authorize
-  destructive response.
+- **Observe-first.** Weak signals are LogOnly; high-confidence Tier1 terminal signals and authorized
+  composites can trigger destructive response immediately.
 - **Every gap is documented, not hidden.** If a defense is limited, say so in the threat model.
 
 ---
@@ -35,8 +39,8 @@ higher. Each is about *narrowing the race*, not claiming to eliminate it.
 
 | Priority | Gap (source) | Direction | Honest ceiling |
 |----------|--------------|-----------|----------------|
-| High | **Local admin can stop the service** (B1, residual HIGH) | Faster watchdog re-arm, richer SCM-tamper telemetry, off-host alert-before-suppression so the *evidence* survives even if the service dies | Cannot beat admin in userland; goal is durable evidence + fast detection, not invincibility |
-| High | **BYOVD race** (B2, residual MEDIUM) | Tighten prerequisite detection (priv-esc -> cert plant -> .sys drop -> service create), expand LOLDrivers/WDBL blocklist refresh, shrink the 15s poll where cheap | Kernel driver already loaded still wins; win the race earlier, alert before suppression |
+| High | **Local admin can stop the service** (B1, residual HIGH) | Faster watchdog re-arm, richer SCM-tamper telemetry and operator-controlled offline evidence preservation; no automatic endpoint uploads | Cannot beat admin in userland; goal is durable evidence + fast detection, not invincibility |
+| High | **BYOVD race** (B2, residual MEDIUM) | Tighten prerequisite detection (priv-esc -> cert plant -> .sys drop -> service create), maintain trusted local LOLDrivers/WDBL snapshots, shrink the 15s poll where cheap | Kernel driver already loaded still wins; win the race earlier, alert before suppression |
 | Medium | **ETW blinding is post-hoc** (B3, residual MEDIUM) | Keep prologue-diff detection; add corroborating "telemetry went quiet" heuristics (events/sec floor already exists in EtwSessionGuard - extend to per-provider) | Cannot prevent in-process patch; detect-after-the-fact + correlate the silence |
 | Medium | **Command-line-free tradecraft** (B6, residual MEDIUM) | Lean harder on ETW ThreatIntel + MemoryBehaviorAnalyzer so detection does not depend on cmdline exposure | Sophisticated in-memory-only tradecraft remains hard |
 | Medium | **In-memory inject into a live game** (v2.2.5 note) | Explore safe, fail-closed ways to inspect game processes without tripping Denuvo (handle-safety-preserving telemetry) | Anti-cheat self-terminates on VM_READ; stays a residual gap unless a safe signal is found |
@@ -52,7 +56,7 @@ doesn't need a new campaign pack. Keep extending shapes, not one-offs.
 - New delivery vectors as they emerge (the MOTW script-dropper + WPAD/PAC work in v2.3.5 is the
   model: find the *class* of the vector, emit LogOnly observe fuel, let it feed existing
   composites).
-- Keep CISA KEV matching current for this workstation's actual asset list.
+- Maintain trusted local CISA KEV snapshots for this workstation's actual asset list; report snapshot age and unverified version applicability. No live feed downloads.
 - Add composite chains only where a real multi-signal terminal exists - avoid detector sprawl.
 
 ---
@@ -72,7 +76,7 @@ The v2.0 WeightedCorrelationEngine + score cards + MITRE mapping is the foundati
 
 "Bulletproof" for a high-profile target is as much about *surviving evidence* as prevention.
 
-- Off-host / append-only evidence-pack backup so B1/B2 suppression can't erase the trail.
+- Operator-controlled export to independent/offline storage. Automatic endpoint reporting/mirroring was removed in 3.2.3; it is not an implied roadmap commitment.
 - Strengthen the dual audit trail (JSONL primary + Event Log critical) already in v1.9.5.
 - Keep evidence packs honest and reportable-grade; never overclaim.
 
@@ -108,3 +112,13 @@ When you want to move forward but don't have a specific task in mind, pick the h
 item from Theme 1 (that's where "bulletproof" actually improves), and ask to spin it into a
 feature spec. The steering rules keep the work inside Sentinel's constraints, and the
 post-task test hook verifies it before it's called done.
+
+## Remediation expansion (3.2.4)
+
+Administrator-approved DNS profile repair is implemented with explicit verification limits. The [capability matrix](CAPABILITY_MATRIX.md) prioritizes disposable-adapter validation, interrupted transaction recovery, hosts/proxy recovery, browser/persistence recovery and an independent adversarial review. These are separate deliverables, not a claim of commercial parity.
+
+## DNS recovery and validation (3.2.5)
+
+New DNS transactions save intended/start states before mutation. Explicit administrator recovery handles interrupted family changes and refuses unrelated/newer settings. A dedicated disposable Windows job exercises actual native changes and independent emergency restoration; its successful execution is required before native validation is claimed. The regular suite has bounded hang diagnostics so an incomplete Windows test remains a visible failure. Hosts/proxy recovery follows this validation work.
+
+In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.

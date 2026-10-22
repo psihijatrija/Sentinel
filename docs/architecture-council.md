@@ -1,8 +1,10 @@
 # Sentinel - Council of Elders Architecture
 
-**Status:** Historical architecture rationale. **Runtime inventory and versions are authoritative in `design.md` (v2.2.9).** This document explains the President/Council mental model; do not treat monitor tables here as the live registration list.
+**Status:** Historical architecture rationale. **Runtime inventory and versions are authoritative in `design.md` and `requirements.md` (current 3.2.3).** This document explains the President/Council mental model; do not treat monitor tables here as the live registration list.
 
-**Last updated note:** v2.5.6 - hardening is always-on; module identity unload (`ModuleIdentity` + `DllUnloadEngine`) is the live PE-map backbone; generic CVE-class monitors live in `design.md`. `ALLOCVM_REMOTE` added to `IsAttackClassTerminal` solo-confirm path. EDR-killer process names are **not** President's Law (LogOnly observe fuel). All monitor classes are `namespace Sentinel.Core`.
+**Current boundary:** Online API verdicts and uploads were removed in 3.2.3. Tier2/weak observations never authorize actions or seed terminal chains; current action-specific policy and verified response receipts govern response. The older tables and diagram below are historical rationale, not a current API inventory or standalone kill authorization.
+
+**Historical update note:** v2.5.6 - hardening is always-on; module identity unload (`ModuleIdentity` + `DllUnloadEngine`) is the live PE-map backbone; generic CVE-class monitors live in `design.md`. `ALLOCVM_REMOTE` added to `IsAttackClassTerminal` solo-confirm path. EDR-killer process names are **not** President's Law (LogOnly observe fuel). All monitor classes are `namespace Sentinel.Core`.
 
 ---
 

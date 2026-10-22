@@ -1,4 +1,6 @@
-# Sentinel Rule Packs (v2.2.0)
+# Sentinel Rule Packs
+
+Reviewed for 3.2.3. Packs are local/offline inputs; no pack-download service is implied.
 
 RSA-SHA256 signed packs. HMAC packs are rejected. External `rulepack_pubkey.xml` is ignored (embedded public key only).
 
@@ -62,10 +64,10 @@ $payload = [IO.File]::ReadAllText("pack.unsigned.json")
 - Each rule becomes an `ICorrelationRule` (`FragmentCorrelationRule`).
 - All `requiredFragments` must appear (case-insensitive substring) in **distinct** rule names already buffered for the same PID.
 - Match emits a chain-confirmed composite: `Rule Pack: {name}`.
-- Still subject to `ObserveUntilChain` / `ResponsePolicy` / product posture.
+- Still subject to `ResponsePolicy` classification, Tier2 log-only enforcement and product posture.
 
 ## Security notes
 
-- SYSTEM on the endpoint **cannot** forge packs without the offline private key.
+- The private key is required to produce a valid pack signature. A compromised SYSTEM process can patch or bypass local verification; this is not containment against SYSTEM compromise.
 - Packs never disable ActiveResponse or product posture.
 - Fail-closed: missing/invalid signature -> pack rejected and logged.

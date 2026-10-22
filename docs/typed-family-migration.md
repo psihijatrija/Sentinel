@@ -69,8 +69,7 @@ Rules:
 - Pick the family the detection actually proves (match the legacy substring classification
   it currently gets). If unsure, check what `ClassifyTerminalOutcome` returns today.
 - Never set a kill-grade family on a detection that should stay observe-only. The tier law
-  and chain confirmation still apply; the typed family only fixes *classification*, not the
-  observe-until-chain gating.
+  still applies; the typed family only fixes *classification*, not action authorization.
 - Behavior must be unchanged: after migration, `ClassifyTerminalFamily` returns the same
   family it did before (now via the typed path instead of the substring path).
 
@@ -113,7 +112,7 @@ with an obvious name rather than silently changing kill authority:
 | CredentialDump  | `LsassDumpCanaryMonitor`, `Rules` (extras), `NetworkShareMonitor` (SMB lateral, `SignalType.CredentialTheft`) | 5 | done |
 | C2Beacon        | `ThreatIntelFeedBlocker`, `NamedPipeMonitor` (Tier1 only), `RpcLateralMonitor` (Tier1 only), `NetworkMonitor` (Classic Malware Port), `ProtocolCoverageMonitors` (mesh + webhook), `GpuProcessMonitor`, `V217Hardening` (decoy-pipe connect), `Rules` (`AttackToolsRule` when category==C2, malicious C2 domain) | 10 | done |
 | ReverseShell    | `Rules` (ClickFix Encoded, 0.96/Tier1/kill)              | 1          | done   |
-| Injection       | `EtwThreatIntelMonitor` (remote memory injection, 0.95/Tier1/kill; ETW-TI unbacked return frame, 0.88/Tier1/LogOnly observe-until-chain) | 2 | done |
+| Injection       | `EtwThreatIntelMonitor` (remote memory injection, 0.95/Tier1/kill; ETW-TI unbacked return frame, 0.88/Tier1/LogOnly evidence) | 2 | done |
 | Evasion         | `ScriptExecutionMonitor` (AMSI bypass, conditional on non-`systemHost`), `EtwThreatIntelMonitor` (unmapped thread), `CriticalMonitors` (Hell's Gate / indirect syscall), `EtwProviderTamperMonitor` (ETW/Event Log Manipulation) | 4 | done |
 | TokenTheft      | `CoverageExpansionMonitors` (LPE Scaffold: Privilege Escalation Tool), `CveCoverageMonitors` (Kernel Exploit Loader, via `EmitAsync(family:)`), `FileActivityMonitor` (LegacyHive reparse, conditional on `hive`) | 3 | done |
 | WmiPersistence  | `SystemIntegrityMonitors` (WMI Policy Rewrite; Hostile Event Subscription conditional on `hostile`), `EtwEventDispatcher` (WMI-Activity permanent, conditional on `permanent`) | 3 | done |

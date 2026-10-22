@@ -1,8 +1,97 @@
+## Sensor collection and worker supervision (3.3.7)
+
+DNS collection subscribes to query-start events 3006 from the shared real-time DNS provider. The dispatcher also handles completion events 3008; server-configuration IDs 1001/1002 are not query telemetry. A bounded queue connects the dispatcher to `DnsQueryMonitor`; overflow is counted and reported without discarding the available batch. Structured `QueryName` event-log reads provide fallback when the real-time provider/consumer is unavailable. Source transitions can create a coverage gap and are logged; missing/denied channels do not become an imaginary cache fallback.
+
+Task liveness and successful collection are independent. Worker-owned progress snapshots carry scope, successful cycles, observations and errors. Supervisor ticks cannot clear collection errors. Watchdog scheduling grace is bounded and does not alter historical heartbeat evidence. File watching remains supervised after its initial walk; watcher errors fault the worker for group recovery and reconciliation. Explicit one-time loaders/cleanup operations finish as Completed; unsupported workers remain Unavailable; the process fallback is Standby while kernel-process ETW works. The dashboard retains the registered roster and keeps unverified or failed collection visible.
+
+The local injection scanner is registered in the monitor collection and does not consume the legacy feed URL. Successful scan cycles do not prove that the protected Threat-Intelligence provider supplied events. Provider access denial, native ETW loss and target-image limitations remain separately visible. See [monitor health](monitor-health.md) for evidence and Windows verification.
+
+## Kill-authority and IPC boundary hardening (3.3.5)
+
+A red-team audit of the response-authorization path and the Service/Agent IPC boundary produced six corrections. Terminal-outcome classification now matches kill-grade family fragments against the monitor-authored `RuleName` only, never the `Evidence`/`Reasoning` text that embeds the observed command line verbatim; an attacker-chosen or benign command line can no longer promote a non-terminal detection into a kill-grade family. Rule names also have parenthesized interpolation spans stripped before matching, so an attacker-chosen process image name interpolated into a rule name (for example `Script: Anomalous Parent-Child (parent->child)`) cannot smuggle a kill-grade token into classification or the single-signal attack-class path. Monitors that need a precise family continue to declare a typed `Family` or a terminal `SignalType`, which remain authoritative and attacker-free.
+
+The `cert_distrust` IPC operation now requires an elevated administrator caller, matching the DNS repair gate; root-store certificate removal is privileged host mutation and token possession alone is insufficient. The administrator-client check additionally verifies token elevation type, so a split-token administrator that has not passed UAC is refused even when administrators-group membership is present. These checks fail closed.
+
+The cross-process ancestry chain buffer now requires the terminal leg's own process to contribute an additional distinct signal before a root-buffer confirmation, so unrelated sibling processes under a shared launcher cannot combine into a kill. The final destructive-response gate vets the detection (Tier1 plus chain confirmation, composite, DLL-unload exemption, or a kill-grade terminal at confidence) rather than returning only the arming state. These controls reduce false-positive kill surface and tighten the privileged IPC boundary; they do not add new quarantine, certificate-removal, or driver-file authority, and the live-Windows elevation behavior of the certificate and DNS operations still requires manual UAC validation.
+
+## Windows CI corrections for 3.3.4
+
+Verified weak firewall-helper observations emitted directly by monitors use the same coalescing/scoring path as rule-derived observations; other direct signals retain immediate dispatch. Custom `SecureCacheStore` paths now contain their own entropy and DPAPI machine-secret files and do not modify production key ACLs. The default production store retains its existing paths and SYSTEM-only key ACLs. Existing custom-path caches derived from the old global installation material can become invalid and regenerate; this is a cache boundary change, not a production-store migration. Native DPAPI persistence and complete Framework regression results require Windows validation.
+
+## Log reliability and evidence (3.3.4)
+
+The service removes the default host EventLog ILogger provider, whose write exceptions could terminate the ETW thread. A bounded diagnostic JSONL provider writes under `%ProgramData%\Sentinel\Logs` (5 MiB plus one rotated file); sink/formatting failures fall back to Trace without recursion. The existing guarded, critical-only `SentinelEventLogWriter` remains the Windows Event Log trail. Agent logging and the primary events/audit writers are unchanged.
+
+ETW coverage remains degraded while provider access, native query, consumer or loss checks fail. Unavailable session/consumer recreation backs off from 5 to 60 seconds until stable recovery; provider-only access denial does not trigger session recreation. Unchanged degradation produces at most a five-minute reminder; a changed cause alerts immediately. Recovery requires 30 seconds of healthy guard samples, emits a recovery observation and does not restore lost telemetry. Native and dispatch loss counters are compared separately, and failed native queries do not reset their baseline. The native counters are reported as observed; this change does not prove that their magnitude is accurate on every Windows build. Threat-Intelligence provider access denial can reflect Windows protected-provider restrictions; this release does not bypass those restrictions or claim to grant access.
+
+Only fixed firewall-bridge children with a verified executable signature, exact launched image and matching live creation time receive five-minute coalescing for encoded-command, weak reputation and high-entropy pipe observations. The first event and subsequent summaries retain actual process attribution and repeat counts; the last incomplete interval is not durably summarized at shutdown. No process-name or script-text allowlist is added. Missing identity fails closed to ordinary alerting. Behavioral/terminal detections and response remain armed, and PID reuse removes the registration. Weak helper observations cannot fill composite legs. Initial telemetry racing registration may still emit normally.
+
+Driver paths expand native SystemRoot/NT prefixes against the actual Windows directory, normalize traversal and use directory-boundary checks. Standard location is classification only, not signature trust. Unknown-image SYSTEM token ownership is a weak, non-correlating observation rather than a token-theft claim. Process-rule evidence retains original command line, image and parent fields from telemetry; these are evidence, not authorization. Existing policy continues to reject PID 0 process containment and path/name-only remediation authority.
+
+## Incident housekeeping safety (3.3.3)
+
+`IncidentManager` retains Open/Active incidents with actionable evidence until a verified response is recorded; a missing receipt does not become resolution after an inactivity timeout. Incomplete responses remain unresolved. Observation-only incidents retain the existing ten-minute expiry, and verified Responded incidents may close after five minutes of inactivity. Reopening/closing updates the lifecycle timestamp. PID mapping cleanup atomically matches both PID and closing incident ID, preserving a newer owner and receipt routing. This does not add process-generation identity to incident grouping, durable incident-manager storage, automatic response retries or restart recovery.
+
+## Independent NanoAV boundary (3.3.8)
+
+The supplied NanoAV is compiled separately and has no reference to Sentinel.Core or its response policy. Its original source is retained except for coexistence checks at file/process action paths. Sentinel treats the co-installed NanoAV image as an owned component; the original ProgramData DLL bootstrap copy requires an identical payload hash. These exclusions do not apply to arbitrary same-name executables outside the installation. NanoAV is an explicit online exception; core Sentinel executable self-blocks remain. Native mutual protection, upstream process lifetime and feed access require Windows validation. See [NanoAV scope](NANOAV.md) and [desktop privacy review](PRIVACY_REVIEW_2026-10-21.md).
+
+## Interrupted DNS recovery (3.2.5)
+
+`DnsRepairRecord` saves PendingFrom/PendingTarget alongside the original snapshot before mutation. The explicit dns_recover operation shares the real administrator-token/UAC boundary. Recovery accepts only saved static family combinations, unchanged protocol support, a fresh fingerprint and no newer transaction; it never runs automatically at startup. Failed recovery rolls back to the newly approved current state while retaining the original target. A disposable Windows job tests the production native backend/audit/transaction code with a temporary fixture journal and an independent emergency restore; it does not claim production SYSTEM-journal ACL or reboot/power-loss validation.
+
+## DNS repair and observation (3.2.4)
+
+`DnsRepairService` coordinates injected configuration, protected journal and audit backends. The dashboard previews fixed resolver profiles, then a short-lived UAC helper sends an authenticated operation to the service; the service validates the actual caller token and the preview fingerprint. Snapshots and audit acceptance precede native Windows DNS settings changes. Static/effective read-back, cache flushing, rollback and explicit receipts prevent attempted changes from appearing verified. IPv4/IPv6/DHCP drift stays Tier2 LogOnly; startup observations never authorize DNS restoration. See [DNS repair](DNS_REPAIR.md) and its live-Windows validation limits. These controls supersede historical DNS-lock descriptions below.
+
 # Sentinel - Design Document
 
-**Version: 3.0.4**
+## Firewall defaults, policy stores, and monitoring (3.2.3)
+
+The service manages PersistentStore and, when the OS exposes it, the local computer Group Policy store (`localhost`). It mirrors Sentinel's own process blocks into local Group Policy and inspects ActiveStore, including rule filters, enforcement status, profile settings, and BFE/MpsSvc health. It never writes a domain GPO. Effective domain exceptions, disabled/overridden profiles, missing rules, or non-enforced filters produce visible conflicts and a dashboard attention state instead of a protected claim. A trimmed image without a local GPO store uses PersistentStore; missing NetSecurity/PowerShell means policy management is unavailable and is reported, while COM self-block reconciliation and offline detection continue.
+
+Inbound allow rules in both local stores are disabled and retained. Outbound allow rules and default outbound actions are preserved; Sentinel's own outbound self-blocks remain intentional. Firewall profiles are enabled and default inbound policy is Block in the two writable local stores. Exact DHCP-service UDP 68/67 and 546/547 rules are exempt. System-only ICMPv6 error/control types 1-4 and neighbour/router discovery 133-136 are exempt to preserve outbound IPv6; echo and arbitrary application ICMPv6 rules are not. The policy does not automatically enable an existing disabled essential rule.
+
+Registry tree notifications trigger coalesced rechecks, with a 15-second polling fallback. These are detection/reconciliation intervals, not an atomic prevention guarantee: an unapproved exception may exist briefly before reconciliation. New exceptions and re-enabled unapproved exceptions are disabled again on refresh/restart. Windows changes cannot be reliably distinguished from manual changes from the Enabled flag, so opt-in is explicit. Approval is bound to the store, exact rule name, and complete filter identity; changed definitions lose approval. Privileged approval/revocation is not exposed over the user-session web/pipe API.
+
+Administrators can approve an existing rule from an elevated terminal in the install directory:
+
+```powershell
+.\Sentinel.Service.exe --allow-inbound PersistentStore 'Exact-Rule-Name'
+.\Sentinel.Service.exe --allow-inbound localhost 'Exact-GPO-Rule-Name'
+.\Sentinel.Service.exe --deny-inbound PersistentStore 'Exact-Rule-Name'
+```
+
+The names are the rule `Name` identifiers, not translated display names or wildcard patterns. No new arbitrary rule or command is created by these operations. Windows Firewall UI can still disable an approved exception; enabling an unapproved exception there is temporary until the next reconciliation.
+
+An ACL-protected, atomic rollback journal records original enabled/profile states before changing them, supports interrupted operations, and is serialized across service/administrator processes. Uninstall restores matching recorded original states and removes owned self-blocks; changed rule definitions are skipped and reported. `Sentinel.Service.exe --restore-firewall` is an elevated rollback command that first stops the service/watchdog. Starting Sentinel again resumes the baseline. Preserve the journal for recovery; a malformed/unsafe journal fails visibly rather than silently replacing the original state.
+
+The fixed, embedded NetSecurity management script runs through an absolute Windows PowerShell path with no profile. Script text is embedded code; request/rule data travels as JSON, not command interpolation. Output, execution time, and pre-authentication pipe input are bounded. This management-only bridge is the reason PowerShell is used here: the firewall COM API does not offer the required policy-store selection. No online lookup is involved.
+
+## Runtime exploit observation (3.2.3)
+
+Existing ETW process/module, credential-access, injection, script, file, DNS, and network sensors remain active. A new bounded, passive cross-process rule correlates recent non-loopback networking with an evasive script child for all process identities, including Defender/security software, browsers, games, and OS hosts. It handles expiry/PID-reuse reset and emits Tier2 LogOnly context, never exploit proof or kill authority. Classic-port observations now cover browsers/games too and remain Tier2; a port alone is not a kill reason. Persistent-connection follow-up no longer omits recognized application identities, and child-spawn analysis requires actual parentage rather than coincident process start times.
+
+Game/anti-cheat memory-handle safety restrictions remain. Protected/PPL processes, missing/stripped ETW providers, inaccessible memory, event loss, and unobservable exploits limit userland coverage. A signed image or trusted install path does not establish runtime safety. This release does not claim detection of every exploit or a patch for application/OS vulnerabilities.
+
+## Offline operation and privilege boundary (3.2.3)
+
+Sentinel no longer performs online reputation queries, DNS reputation lookups, live threat/KEV feed downloads, public-IP lookups, cloud connectivity probes, or automatic outbound threat/evidence reporting. Local behavioral telemetry, static/ML analysis, cached/local KEV catalogs, bundled ThreatFox indicators, and local evidence packs remain available. Missing external reputation is Unknown with a neutral score; old online reputation caches are not used. Bundled/cached intelligence becomes stale until supplied through a trusted local update. Legacy encrypted settings cannot re-enable online transports, and the embedded proxy credential has been removed.
+
+The SYSTEM service installs and reconciles six fixed, executable-scoped Windows Firewall block rules: inbound and outbound for Sentinel.Service.exe, Sentinel.Agent.exe, and SentinelAutoRotate.exe, on Domain/Private/Public profiles, for non-loopback IPv4/IPv6 traffic including LAN/link-local destinations. Loopback is excluded from the blocks because an allow rule cannot override a matching block. Rule identifiers remain stable across upgrades, and uninstall removes only these identifiers. Firewall failures or disabled profiles are logged as errors and retried every minute; local detection continues without falsely claiming network enforcement. The service must run with installation/admin privileges to manage these rules. Authenticode verification uses cached URL data only.
+
+The Agent uses an explicit asInvoker manifest and refuses SYSTEM/elevated-administrator execution. The service watchdog checks the session token and selects its limited linked token where necessary; if no suitable token exists it refuses an elevated launch. The Agent applies only its own process mitigations, writes logs/restart state to user-owned storage by default, and delegates privileged operations to the service. Module UI requests schedule service inspection rather than directly quarantining a browser-supplied file path. Certificate requests retain the service's explicit distrust-list authorization. If the service is unavailable these operations fail without an elevated fallback. No generic command execution, arbitrary privileged file-write/delete, or response-disable operation is exposed.
+
+The privileged service still contains system sensors and the response engine: this is not yet a minimal standalone privilege broker. Splitting ETW/native sensors and response execution from the rest of analysis is future work and requires its own protocol and authorization review. Agent-only operation has reduced visibility and response capability. The existing service IPC now denies network-logon access, bounds input to 16 Ki characters before JSON/auth parsing, and disconnects stalled request readers after five seconds; HMAC, freshness, replay checks, and the operation allowlist remain in place.
+
+These controls reduce exposure; they do not confine an already-compromised SYSTEM process. Such a process can potentially alter firewall rules or use other processes/OS services. Malicious local files, telemetry, dependencies, and IPC remain attack surfaces. The localhost dashboard is still active and authenticated. There is no longer an off-host evidence mirror; administrators can destroy local evidence. No kernel/PPL boundary is claimed.
+
+
+**Version: 3.2.5**
 
 ---
+
+Versioned feature-addition sections below retain implementation history. Current 3.2.3 controls above, current requirements and action-specific response policy take precedence over superseded descriptions. See the [documentation index](README.md).
 
 ## Platform
 
@@ -39,7 +128,7 @@ compiled types and behavior are unchanged:
   `Rules.AttackTools.cs`, `Rules.CampaignIoc.cs`, `Rules.SupplyChain.cs`, `Rules.VerdictGate.cs`,
   `Rules.PathProvenance.cs` (there is no single `Rules.cs` type - it was always a container).
 - **`AdvancedResponseEngine`** is a `partial class`: the decision layer (`HandleAsync`, Tier1-only
-  branch guards, observe-until-chain gate, pre-action audit) is in `AdvancedResponseEngine.cs`; the
+  branch guards and pre-action audit) is in `AdvancedResponseEngine.cs`; the
   low-level network/certificate P/Invoke executors are in `AdvancedResponseEngine.NetworkActions.cs`.
 - **`BehavioralCorrelationEngine`** is a `partial class`: the per-PID composite cascade and shared
   buffers/locks are in `BehavioralCorrelationEngine.cs`; the host-wide (PID 0) network-tamper /
@@ -58,7 +147,7 @@ compiled types and behavior are unchanged:
 | `OpsMetricsPublisher` | Writes `%ProgramData%\Sentinel\ops_metrics.json` |
 | `SelfPathGuard` | Hardlink-aware install self-exclusion |
 | `EncryptedConfigStore` | DPAPI `config.enc` for Hardened Mode / victim identity only; cannot disable detection or rewrite compiled HMAC |
-| `ProductInfo.Version` | `2.6.0` |
+| `ProductInfo.Version` | Stamped from `version.txt` (3.2.3) |
 | `VpnShieldEngine` + `VpnShieldConfig` | **v2.6.0.** Protective VPN-shield remediation for confirmed local network tampering (raise userland tunnel -> clean -> verify clean -> drop; fail-safe holds tunnel). New `ResponseAction.VpnShieldUp`; `ProductPosture.AllowsVpnShield` gate (default off) |
 
 All components are wired via Microsoft.Extensions.DependencyInjection. No static mutable state anywhere.
@@ -130,7 +219,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `RansomwareIoMonitor` | High-frequency I/O rate monitoring for bulk rename/encrypt patterns | continuous |
 | `BeaconingDetector` | Statistical CV analysis of connection intervals per (PID, Remote, Port) | 30s |
 | `BehavioralBaselineService` | Learns normal processes, paths, parent-child, network destinations | continuous |
-| `FileVerdictScanner` | Lazy background hash reputation scanning + ADS tagging (CIRCL/MalwareBazaar/VT) | background walk |
+| `FileVerdictScanner` | Background local file analysis + ADS tagging; external hash verdict stays Unknown | background walk |
 | `ConsultantSignalIngestor` | Tails external consultant signal JSONL under ProgramData; owner-checked. Emits via `SubmitConsultantSignalAsync` (sticky **Tier2 + LogOnly** - never kill/isolate) | continuous |
 | `GhostProcessMonitor` | Detects PIDs with network connections but empty/unresolvable process names | 15s |
 | `EphemeralProcessMonitor` | Catches short-lived processes via Prefetch + Event 4688 polling | 5s |
@@ -185,20 +274,20 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | Component | Mechanism | Interval |
 |-----------|-----------|----------|
 | `ArpSpoofMonitor` | GetIpNetTable P/Invoke; detects gateway MAC change, ARP poisoning, virtual OUI | 15s |
-| `DnsResponseValidationMonitor` | Resolves canary domains; validates against expected CIDR ranges | 1min |
+| `DnsResponseValidationMonitor` | Retired compatibility type; no external validation | inactive |
 | `PublicIpMonitor` | Checks public IP via Cloudflare/ipify/icanhazip; detects geo/ASN shift | 5min |
 | `WifiSecurityMonitor` | Polls Wi-Fi state via netsh; detects deauth flood, open network, encryption downgrade | 15s |
-| `NetworkInterfaceGuard` | Removes bridges via SetupAPI, restores disabled adapters, locks DNS. **v2.6.5** DNS-change confidence reputation-aware via `PublicDnsResolvers` allowlist (known public resolver -> 0.45, unknown -> 0.88) | 15s |
+| `NetworkInterfaceGuard` | Removes bridges via SetupAPI, restores disabled adapters, observes IPv4/IPv6/effective DNS drift as Tier2 LogOnly; administrator-approved DNS repair is separate | 15s |
 | `WinsockLspIntegrityMonitor` | **v2.6.5.** Walks Winsock2 protocol/namespace catalogs; flags non-Microsoft/unsigned LSP provider DLLs, missing providers, and chain gaps. Tier1 LogOnly (never rewrites the catalog) | 10min |
 | `AppDnsExfilMonitor` | Detects non-browser processes connecting to known DoH resolvers on port 443 | 500ms |
 | `NetworkShareMonitor` | Monitors SMB shares, admin share access (C$/ADMIN$/IPC$), inbound sessions | 15s |
 | `NetworkReinfectionDetector` | Monitors NIC state changes; flags new suspicious processes after network reconnection | on NIC event |
 | `ReinfectionCorrelator` | Tracks killed/quarantined hashes across reboots; scans for reappearance | 60s |
-| `DnsCrossValidator` | Resolves test domain via system + direct Cloudflare; detects router DNS poisoning | periodic |
+| `DnsCrossValidator` | Retired compatibility type; no external validation | inactive |
 | `TrafficVolumeBaseline` | NIC BytesSent spikes; bulk-transfer clients (torrent/P2P) -> observe-only, not Exfil | 30s |
 | `OutboundConnectionWhitelist` | Monitors/enforces outbound connections against allowed IP subnets | periodic |
 | `RemoteAccessMonitor` | Scans for 35+ remote access tools; TeamViewer/AnyDesk/cloudflared LogOnly; **v2.5.3** ngrok/chisel/frpc/tailcat kill-grade | 60s |
-| `ThreatIntelFeedBlocker` | Spamhaus/Feodo/ET feeds in memory; **observe-only by default** (no proactive FW); reactive `NetworkIsolate` on live hit when `ActiveResponse`; optional `ThreatIntelProactiveFirewall` | 4h refresh / 30s conn |
+| `ThreatIntelFeedBlocker` | Retired offline compatibility component; no remote downloads; removes legacy proactive feed rules at startup | one-shot cleanup |
 | `UdpFlowMonitor` | **v2.4.8.** `GetExtendedUdpTable` OWNER_PID + Kernel-Network UDP ETW. LOLBin/Temp/classic-port UDP. LogOnly | 2s |
 | `IcmpAnomalyMonitor` | **v2.4.8.** `GetIcmpStatisticsEx` IPv4+IPv6 type counters: echo flood, inbound Redirect, unreachable storm. LogOnly | 5s |
 | `WfpNetEventMonitor` | **v2.4.8.** `FwpmNetEventSubscribe0` (no callout driver). GRE/ESP/AH/SCTP/L2TP + drop bursts. Unknown-proto fallback | event / 15s |
@@ -223,12 +312,12 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `PrivacyServiceOutboundMonitor` | **Observe-only:** optional OS services (DiagTrack, whesvc, ...) running + public remotes; never stop/kill/isolate | 15s |
 | `ServiceProcessMap` | Service name <-> PID map (shared `svchost` attribution for privacy observe) | on demand |
 | `TlsCertificateMonitor` | Monitors LocalMachine\Root + TrustedPublisher; baselines at startup. BYOVD follow-up: exact cert **thumbprint** match only -> stop service + delete SCM key (does **not** delete `System32\drivers\*.sys`) | 60s |
-| `RootStoreGuard` | **v3.0.4.** Autonomous suspicious-root detect+remove+quarantine. A root in a trusted store (Root/CA, LM+CU) is suspicious when it carries **neither** OS-authoritative stamp - not an AuthRoot CTL member (`crypt32` prop 98) **and** not a Microsoft root-program root (prop 105 / OID `1.3.6.1.4.1.311.60.3.2`) - plus any thumbprint on `CertDistrustList`. On a hit: `CertRemediator` removes from all trusted stores + pins to Disallowed, then files whose Authenticode chain roots at the removed cert are quarantined (`forceQuarantineSigned`, WRP-safe, capped). **Hard safety floor:** removal re-verifies the verdict on the live store-connected context (CTL stamps exist only there), so OS roots (MS Root CA 2010/2011) and public CAs are never touched. Gated on `ActiveResponse`; Tier1 response | startup + 90s |
+| `RootStoreGuard` | Inventories root stores. Missing trust markers produce Tier2 LogOnly review findings. Only explicit thumbprint distrust policy authorizes removal/blocking and associated file actions; the remediator enforces that boundary. | startup + 90s |
 | `UacBypassSurfaceMonitor` | Detects COM AutoElevation vectors and manifest autoElevate + copy-drop | periodic |
 | `HostsFileGuard` | Monitors hosts file for suspicious modifications (C2 IP redirects, security domain blocking); users may freely edit. Enforces a localhost/loopback baseline only. Only enforces FCM `mtalk.*` lines when `MitmDefense.Enabled` or `BlockFcmPushChannel=true` (appends missing lines, never overwrites). Enforces the **union** of `EnforcedDomainBlocks`/`EnforcedIpBlocks` (operator config) and `RuntimeBlocklistService` (runtime): domains via hosts line + wildcard NRPT (browser-authoritative via DoH-off), IPs via in/out firewall rules - self-healing, posture-gated. **v2.8.7:** un-blocking is deliberate - wildcard NRPT rules and firewall rules are torn down (`RemoveStaleDomainBlocks`/`RemoveStaleIpBlocks`) when an entry drops out of the desired set; the automatic startup `CleanupRetiredForumHrArtifacts` un-block was removed. Hosts-file sinkhole lines are NEVER cleared to ensure threats cannot auto-allow themselves. `forum.hr` is re-added as a default block seeded by `RuntimeBlocklistService` | FSW + 30s |
 | `BrowserDnsPolicyGuard` | Disables DoH system-wide across all browsers; 15s self-healing | 15s |
 | `BootIntegrityGuard` | Monitors BCD, boot drivers, EFI partition for bootkit indicators | 60s |
-| `CveShieldHardener` | Fetches CISA KEV feed; maps against local assets; generates block rules | 4h |
+| `CveShieldHardener` | Reads a local/cached KEV catalog; asset matches are candidates without verified version applicability; no feed download | 4h |
 | `ApplicationIntegrityMonitor` | Cuckoo Egg Detection - baselines protected apps (SHA-256 + Authenticode) | FSW + 30s |
 | `PseudoSandbox` | Lightweight behavioral sandbox via restricted Job Objects | on-demand |
 | `AcousticThreatMonitor` | Detects harmful audio frequencies via WASAPI loopback + Goertzel algorithm | continuous |
@@ -244,7 +333,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | Component | Mechanism | Interval |
 |-----------|-----------|----------|
 | `BluetoothMonitor` | Monitors BT device registry and service state; detects BadBT HID pairing | 15s |
-| `PhantomDeviceMonitor` | ARP table scanning for new LAN devices; probes suspicious ports; firewall blocks | 45s |
+| `PhantomDeviceMonitor` | Passive ARP/device context; active port probes removed; authorized local containment remains | 45s |
 | `DeviceInstallMonitor` | Baselines PnP devices/drivers; detects new device installs and BYOVD | 15s + WMI event |
 | `MtpTransferGuard` | Blocks non-media file transfers to/from MTP devices (phones/tablets) | 5s |
 | `VolumeMountMonitor` | Detects RAM disks, PMEM, VeraCrypt, VHD; extends FileActivityMonitor dynamically | 5s |
@@ -282,7 +371,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | Component | Mechanism | Notes |
 |-----------|-----------|-------|
 | `TrayIconService` | System tray NotifyIcon; **Settings** / double-click opens native `AgentDashboardForm` with embedded browser. **No** `ShowBalloonTip` | WinForms STA |
-| `AgentDashboardForm` | Thin browser shell hosting `http://localhost:19845` (WebDashboardService). **v3.0.6:** prefers Edge/Chromium `WebView2` (profile under `%LocalAppData%\Sentinel\WebView2`; DevTools/context-menu/new-window locked down); falls back to the legacy `WebBrowser` (IE11 Edge emulation) if the WebView2 Runtime is absent. **v2.2.9+:** replaces the old WinForms sidebar panels | WinForms STA |
+| `AgentDashboardForm` | Thin browser shell hosting `http://localhost:19845` (WebDashboardService). **v3.0.6:** prefers Edge/Chromium `WebView2` (profile under `%LocalAppData%\Sentinel\WebView2`; DevTools/context-menu/new-window locked down); falls back to the legacy `WebBrowser` (IE11 Edge emulation) if the WebView2 Runtime is absent. **v3.2.6:** probes the runtime first (`GetAvailableBrowserVersionString`) and skips WebView2 entirely when absent — no faulting `CreateAsync` task, no `UnobservedTaskException` spam — logging one report to `agent_runtime.log` and marking the window title `(legacy browser)`. **v2.2.9+:** replaces the old WinForms sidebar panels | WinForms STA |
 | `WebDashboardService` | Loopback HTTP dashboard + REST API + WebSocket on localhost:19845. Bearer token auth. Serves `DashboardHtml` at GET / | BackgroundService |
 | `DashboardHtml` | Self-contained HTML/CSS/JS served by WebDashboardService - the full dashboard UI | Static class |
 | `ScreenCaptureMonitor` | Detects DXGI desktop duplication + transparent overlay phishing windows | 15-25s |
@@ -306,8 +395,8 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `MlThreatScorer` | Offline FastTree models (`MlModels/pe_model.zip`, `url_model.zip`) for PE static malware prior and lexical URL/host risk. Soft signal only; never sole kill. Trained via `tools/Sentinel.MlTrainer` from C/datasets. |
 | `FileReputationEngine` | Multi-signal file score (hash TI + static PE + optional PE ML + signer + path context). Composite 0-100. |
 | `DetectionEngine` | Runs all `IDetectionRule` instances against incoming telemetry. **Bounded** channel (10k, DropOldest). Tiered deduplication (10s Tier1, 30s Tier2). Consultant signals sticky Tier2/LogOnly. Records metrics via `SentinelMetrics`. |
-| `AdvancedResponseEngine` | Single point of action enforcement. Tier2 always log-only. With `ObserveUntilChain` (default), Tier1 destructive actions only after `ResponsePolicy` chain confirm (C2/exfil/token/shell/cred-dump/BYOVD) or DLL-unload exempt path; then full nuke. Private/LAN IPs never firewall-isolated. |
-| `ResponsePolicy` | Observe-until-chain classifier: terminal outcomes, benign System32 redistributable noise, multi-signal PID buffers, silent-observe gates. |
+| `AdvancedResponseEngine` | Enforces the unconditional Tier2 log-only gate and action-specific Tier1 responses. Authorized Tier1 signals can act immediately. Private/LAN IPs are never firewall-isolated. |
+| `ResponsePolicy` | Tier1 response authorization classifier: terminal outcomes, benign System32 redistributable noise, multi-signal PID buffers, silent-observe gates. |
 | `TelemetryFusionEngine` | Correlates raw telemetry across all sources into per-process event chains. Produces `FusedTelemetryContext` with behavioral metrics. |
 | `EventGraph` | In-memory graph of processes, files, and network endpoints with temporal/causal edges. Supports incident timeline queries. |
 | `MemoryBehaviorAnalyzer` | Scans mapped modules (permanent): startup EnumModules baseline + Kernel-Process ImageLoad. `ModuleIdentity` allow/deny on first sight of a path in that PID. Foreign modules unloaded immediately via DllUnloadEngine; detection stays Tier1. Count growth is not a signal. Missing image path remains Tier2 observe. |
@@ -315,7 +404,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `BehavioralCorrelationEngine` | Time-windowed (60s) multi-signal correlator. Fires composite `DetectionEvent`s via `IDetectionEngine.EmitAsync`. |
 | `BeaconingDetector` | Statistical C2 beacon detection. Tracks inter-connection intervals. Fires when CV < 0.40 with 5+ observations. Multi-factor Authenticode trust verification. |
 | `ScoringEngine` | Weighted multi-factor threat scoring with source weights, category base scores, corroboration bonuses. |
-| `FileReputationEngine` | Composite file trust scoring (0-100) aggregating CIRCL, MalwareBazaar, VirusTotal (via proxy), static PE analysis, signer trust. |
+| `FileReputationEngine` | Local static PE, signer and ML context with neutral Unknown external reputation; separate offline cache namespace. |
 | `DllUnloadEngine` | Unloads mapped modules that fail identity. Hijack-name plants quarantined on drop (file only, including steamapps). Never FreeLibrary lsass/csrss/wininit/DISM/NTLite. No VM_READ on games. |
 | `ChainTracer` | Attack chain walker: kills non-critical processes in chain, quarantines binaries, removes persistence. |
 | `IncidentResponseService` | Automated incident resolution: persistence removal, quarantine orchestration. Integrates with ChainTracer. |
@@ -342,7 +431,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 |-----------|------|
 | `JsonlEventLogger` | JSONL output to events.jsonl. Thread-safe, rate-limited, size-rotated, self-healing. |
 | `SecureCacheStore` | DPAPI machine-scope encryption + HMAC integrity for persisted cache files. |
-| `HashReputationService` | Two-tier caching (memory + DPAPI disk). 3-API lookup: CIRCL, MalwareBazaar, VT proxy. |
+| `HashReputationService` | Offline compatibility facade returning Unknown; no remote calls, synthetic hash verdicts or legacy online-cache trust. |
 | `QuarantineManager` | DPAPI machine-scope quarantine under `%ProgramData%\Sentinel\Quarantine`. Production path: SYSTEM+Admins FullControl (inherit) + Interactive this-folder-only List/Traverse (UAC-safe Explorer). Sample blobs stay unreadable to Users. Max 128 MB/file. Restore path-validated (no OS-critical write). Agent never creates the folder. |
 | `SignerTrustService` | Centralized Authenticode verification (WinVerifyTrust + catalog fallback). Trusted publisher cache. |
 | `AllowlistService` | User/dev/gaming/publisher allowlists. President's Law rules never suppressed. |
@@ -350,8 +439,8 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `SentinelMetrics` | Performance counters with histograms (P50/P90/P95/P99) for detection and response. |
 | `SentinelHealthCheck` | Structured health checks: process, memory, handles, log file, quarantine, thread pool. |
 | `StartupSelfTest` | Verifies ETW, DPAPI, quarantine, log file, and rule loading before activating monitors. |
-| `ThreatReportService` | Reports threats to MalwareBazaar/URLhaus/AbuseIPDB via Cloudflare Worker proxy (HMAC-auth). |
-| `AutoIncidentReporter` | v1.7.7/1.7.8/1.9.3/1.9.4: Reportable-grade evidence packs, integrity seal (SHA-256+HMAC), victim affidavit, zip export, TI share, national portals. Chain-confirmed / composite nukes always write a pack. Coercion-toolkit packs add honest technical scope + optional harm checkboxes. Does not file police reports. |
+| `ThreatReportService` | Retired compatibility facade; performs no outbound reports. |
+| `AutoIncidentReporter` | v1.7.7/1.7.8/1.9.3/1.9.4: Reportable-grade evidence packs, integrity seal (SHA-256+HMAC), victim affidavit, local ZIP export and national portal references; no automatic TI sharing. Chain-confirmed / composite nukes always write a pack. Coercion-toolkit packs add honest technical scope + optional harm checkboxes. Does not file police reports. |
 | `CoercionAbusePolicy` | v1.9.4: Platform-agnostic classification of remote-control / surveillance / session-theft toolkit signals; pack + toast wording. Not chat moderation. |
 | `SentinelEventLogWriter` | v1.9.5: Critical-only Windows Event Log trail (Application/Sentinel). Self-disables on stripped Windows; JSONL remains primary. |
 | `SentinelEventLogHeartbeatService` | v1.9.5: Optional low-frequency Event Log heartbeat for SIEM gap detection. |
@@ -449,22 +538,59 @@ Emitted as Tier1 `DetectionEvent`s directly via `EmitAsync`. Requires signals fr
 | `QuarantineAndKill` | Kill process + quarantine binary + place lock file |
 | `RemoveRegistryEntry` | Removes malicious autorun/service/COM entries |
 | `DismountVolume` | Dismounts ISO/VHD/SUBST drives hosting threats |
-| `RemoveCert` | Removes suspicious root certificates from store |
+| `RemoveCert` | Removes explicitly distrust-listed certificates, subject to authorization and store outcome verification |
 | `RemoveCertAndKillAdder` | Removes planted certificate + kills the process that installed it (BYOVD cert-trace) |
 
-### ActiveResponse model (current - observe-until-chain)
+### ActiveResponse model (current)
+
+`AdvancedResponseEngine.HandleAsync` returns a `ResponseExecutionResult`. Each effect
+records its action, target, status and verification detail. `response_result` log records
+carry the final receipt; existing `response` records include it in `Execution`. A normal
+Task return, an action name or traversal completion is not evidence of successful mutation.
+
+The same receipt is passed to automatic evidence generation and included as
+`response_execution.json` under the pack's integrity manifest. Human-readable reports and
+affidavit templates distinguish authorized/requested actions from recorded outcomes;
+absence of a receipt is explicitly unverified. Tray success notifications require a
+verified receipt matching the pending detection PID. Reinfection tracking requires a
+verified process-exit effect for the target, independently of other cleanup outcomes.
+
+`ResponseCoordinator` marks `Verified` only when a completed receipt verifies every
+required effect for the requested action. It caches that exact action for deduplication;
+other action kinds and unsuccessful attempts remain eligible for execution. The orchestrator
+passes the incident ID explicitly, including for host-wide detections without a process PID.
+
+DLL executors attach their already completed receipt through an internal, non-serialized
+field. These report-only outcomes bypass action deduplication/locking and do not execute
+the remediation again. Serialized telemetry and metadata dictionaries cannot supply that
+receipt or acquire response authority from it.
+
+Incidents expose `ResponseStatus`, `LastResponse` and up to 16 recent `ResponseAttempts`.
+`Responded` means the requested response effects were verified, not that the host is clean.
+Failed, refused, attempted and partial responses remain active; a later log-only observation
+does not erase their state. New actionable evidence reopens a previously responded incident.
+
+Read-back verifies process exits, vault/source presence, firewall rule configuration and
+active profile state, registry absence and certificate absence in each inspected store.
+It does not establish end-to-end network isolation or independently validate encrypted
+vault contents. VPN/ISO/container/VM APIs that provide no final-state receipt are explicitly
+reported as attempted, never inferred successful from Task completion. Windows execution
+of these native paths remains a required validation step.
+
+High-confidence, authorized Tier1 detections may act immediately. Tier2 is always LogOnly.
+Correlation remains available for composite detections and explanations; it is not a
+configurable waiting mode. Action-specific checks, protected-process exclusions and response
+budgets continue to apply.
 
 | Source | Behavior |
 |--------|----------|
-| `Sentinel:ActiveResponse` (default **true**) | Master arming switch - destructive actions still require chain confirm when ObserveUntilChain is on |
-| `Sentinel:ObserveUntilChain` (default **true**) | Demote all kill/quarantine/isolate/host mutation to LogOnly until multi-signal proof of terminal attack (C2 beacon, exfil, token theft, reverse shell, cred dump, BYOVD) |
-| `Sentinel:ChainConfirmMinSignals` (default **2**) | Distinct rules on same PID within window + >=1 terminal outcome -> nuke |
-| `Sentinel:ChainConfirmWindowSeconds` (default **300**) | Rolling correlation window |
-| `Sentinel:SilentObserve` (default **true**) | No toasts / auto evidence packs until chain-confirmed; chain-confirmed nukes always pack + critical toast (v1.9.3) |
-| `Sentinel:EnforceActiveResponse` (default **false**) | When true, `AntiTamperGuard` force-re-enables ActiveResponse if flipped off |
-| DLL unload exemption | `DllUnloadEngine` FreeLibrary on mapped identity failure and quarantine of hijack-name disk plants may act immediately (never kill the host on disk plant) |
-| CLI `--active-response` | Optional force-enable at process start (legacy) |
-| Central gate | `ResponsePolicy` + `AdvancedResponseEngine`; composites tagged `ChainConfirmed=true` |
+| `Sentinel:ActiveResponse` | Always armed; the compatibility setter cannot disable response |
+| `Sentinel:ChainConfirmMinSignals` / `ChainConfirmWindowSeconds` | Correlation settings; not a prerequisite for every Tier1 response |
+| `Sentinel:SilentObserve` | Controls existing notification/evidence behavior; does not disable authorized response |
+| DLL remediation | Identity failure on a mapped module can trigger process containment and quarantine; a disk plant alone never authorizes killing its writer |
+| Process containment | Snapshot and rescan descendants, pin native process handles, reject reused parent identities and protect each target individually. Verify observed exits; report incomplete discovery or failures explicitly |
+| DLL containment report | Separate detected, quarantined, already absent, deferred and failed files. Successful process containment requires verified root/descendant outcomes, independently of disk cleanup |
+| Central checks | `ResponsePolicy` classification, `AdvancedResponseEngine` Tier2 gate and action-specific policies |
 
 ---
 
@@ -489,14 +615,14 @@ Emitted as Tier1 `DetectionEvent`s directly via `EmitAsync`. Requires signals fr
 
 ## Logging
 
-`JsonlEventLogger` writes newline-delimited JSON to `%ProgramData%\Sentinel\events.jsonl`.
+`JsonlEventLogger` writes service events to `%ProgramData%\Sentinel\events.jsonl` and agent events to `%LocalAppData%\Sentinel\Agent\events.jsonl` by default. Each destination has its own audit directory; dashboard and tray readers consume both sources.
 
 - Thread-safe via `SemaphoreSlim`
 - `System.Text.Json` only - no string-built JSON
-- Size-based rotation at 50 MB, up to 5 rotated files
+- Size-based rotation at 20 MB, up to 5 rotated files
 - Rate-limited: max 1000 entries/second, burst of 5000
-- `FileShare.ReadWrite` - concurrent readers never blocked
-- Self-healing: retries on write failure; renames stale locked files
+- Writers use `FileShare.Read | FileShare.Delete`: readers remain permitted and competing writers are rejected.
+- Self-healing: retries opening after failures and counts dropped events; never renames an active writer's file.
 
 ---
 
@@ -597,9 +723,11 @@ Full cert-revocation chain for BYOVD attacks. When a vulnerable/suspicious drive
 
 ---
 
-## v1.7.4 Additions
+## v1.7.4 Additions (historical; current policy takes precedence)
 
-### ThreatIntelFeedBlocker (Service - NetworkIntegrity)
+### ThreatIntelFeedBlocker (historical v1.7.4; retired in 3.2.3)
+
+The table below records the former implementation, not current runtime behavior.
 
 | Item | Value |
 |------|--------|
@@ -709,7 +837,7 @@ Full cert-revocation chain for BYOVD attacks. When a vulnerable/suspicious drive
 |------|--------|
 | Hook | `SentinelOrchestrator.ProcessDetectionAsync` after response (async, non-blocking) |
 | Pack root | `%ProgramData%\Sentinel\IncidentReports\AUTO_*` |
-| TI share | Existing `ThreatReportService` / Worker (hash, URL, IP) when secret configured |
+| TI share | Removed in 3.2.3; packs remain local and legacy settings cannot enable uploads |
 | LE filing | Human: national portal URL embedded in pack + toast |
 | Not supported | Direct INTERPOL / police API auto-file (does not exist for consumers) |
 
@@ -850,7 +978,7 @@ Honest remediations. Several 2.1.8 "fixes" were not in force until this version.
 | BrowserC2Guard | Per-user LocalAppData extension trees, not SYSTEM profile |
 | GSecurity.inf | Password length 12 + complexity; audit on; FIPS not touched |
 | Worker | `RATE_LIMITER.limit` after HMAC; MB `/report/hash` is lookup+comment |
-| EncryptedConfigStore | `SCFG2` HMAC envelope; leftover JSON cannot set `ObserveUntilChain=false` |
+| EncryptedConfigStore | `SCFG2` HMAC envelope; leftover JSON cannot disable compiled response policy |
 | President's Law | No DnsAnomaly / NetworkAnomaly |
 | Tests | `V220SecurityHardeningTests` |
 
@@ -902,6 +1030,76 @@ Honest remediations. Several 2.1.8 "fixes" were not in force until this version.
 - [ ] **Installer per-file ACL race** - Upgrade still broad `takeown`/`icacls` window.
 - [ ] **LSA/TPM third factor for entropy** - Cache/rule HMAC still MachineGuid + `.install_entropy`.
 - [ ] **ThreatIntelFeedBlocker PID attribution** - `IPGlobalProperties` lacks PID; connection hits currently alert without owning process kill.
-- [ ] **Threat intel cert pinning** - CIRCL/MB HTTPS use default system trust (Worker path is HMAC-auth).
+- [x] **Online reputation retired (3.2.3)** - CIRCL/MB/VT transport removed; there is no live client pinning task.
 - [ ] **KeyScrambler / FocusLock** - Intentionally not ported (AV heuristics / high operational cost).
 - [ ] **Further unit tests** - More coverage still welcome for NamedPipe/RpcLateral/CloudSync/EtwProvider/BrowserC2 (partial coverage exists in V16x-V18x suites).
+
+
+## Reliability and offline investigation additions
+
+The product and diagnostic CLI target Windows/.NET Framework 4.8. `SensorProgress`
+tracks successful collection cycles; `MonitorGroup` reports task liveness separately.
+ETW session health uses read-only ControlTrace queries and provider-enable results;
+`TelemetryQueue` counts actual DropOldest evictions and stamps enqueue time with a
+monotonic clock. Metrics expose queue depth, age and wait P95 through both IPC and disk.
+`VisibilityGapTracker` coordinates subsequent module and host-inventory reconciliation
+at their existing bounded cadences (five and two minutes respectively).
+
+`EvidenceLedger` writes a daily chained companion to the original audit. Optional
+incident-summary checkpoints can be anchored by the Worker in KV. `DetectionReplay`
+reuses weighted correlation with an injected historical clock and no response engine.
+`RestoreTransaction` journals explicit restores and retains the vault. The diagnostic
+CLI verifies chains/manifests, inspects interrupted restores and exports allowlisted,
+redacted investigation copies. See `tools/Sentinel.Diagnostics/README.md` for contracts
+and `docs/QUALITY_REVIEW.md` for limits, ratings and remaining validation.
+
+
+## Log-derived reliability corrections
+
+The service owns its events and audit directory. The interactive agent writes its own events and audit chain under LocalAppData/Sentinel/Agent (or an agent subdirectory of the configured log destination). Dashboard and tray readers combine these event sources. Event destinations reject competing writers rather than renaming a live file. Certificate trust-marker absence is an uncertain observation: the guard emits Tier2 LogOnly and the remediator refuses mutations without explicit thumbprint distrust policy. Kernel-reported current-process PID attribution excludes own decoy inspection from pipe alerts. CVE product matches are candidates without version applicability proof.
+
+In 3.2.5, the legacy RegistryMonitor proxy-change path is Tier2 LogOnly and no longer writes/deletes proxy values to restore startup observations. This does not add a manual proxy repair workflow or complete interactive-user/WinHTTP policy coverage.
+
+
+
+## Audit-driven dispatch and collection integrity (3.2.9)
+
+See [audit fixes](AUDIT_FIXES_2026-10-18.md) for the common dispatch policy, generation-validated ancestry, ETW native ABI correction and operational metric semantics.
+
+## Read-only investigation audit (3.3.1)
+
+`SecurityAuditService` is injected into the on-demand `ScanEngine`; its
+`ISecurityAuditSource` implementation uses local registry, Event Log and optional WMI
+providers. `ScanResult.SecurityAudit` travels over the existing authenticated service
+IPC to the dashboard. The report is independent of detection/response and contains
+explicit collection states. The user may download collected JSON locally, with a
+privacy notice. See [coverage and status semantics](SECURITY_AUDIT.md).
+
+
+## Early credential-theft containment (3.3.2)
+
+The existing suspect-PID memory scanner can supply `UnbackedPePayload=true` only
+after reading PE headers from unbacked executable RWX memory (MZ, bounded PE offset,
+PE signature, supported machine/optional-header magic, section count and image size).
+MZ bytes alone and ordinary executable/JIT memory never supply this marker. Its
+PE-inspection cooldown is independent from stack/thread alerts.
+
+The behavioral correlator combines this specific scanner evidence with an attributed
+Kernel-File credential-store read. Both observations must be fresh within 15 seconds,
+refer to the same PID and carry the same positive Windows process creation time.
+Unknown identities, delayed reads predating process creation, weak/consultant signals,
+watcher write/create observations and unrelated processes are refused. The resulting
+credential-theft composite uses the existing Tier1 authorization and response pipeline;
+individual reads remain Tier2 LogOnly. No network or upload-volume leg is required.
+The image-path resolver is injectable for portable correlation regression tests.
+
+This is a narrow corroborated theft-risk rule, not proof of exfiltration or universal
+browser-exploit prevention. Headerless, image-backed, RX-only, missed/expired,
+inaccessible or unobserved payloads remain outside this rule. The suspect-PID trigger,
+scan/cooldown intervals and Kernel-File read coverage still limit detection. Legitimate
+manual-mapping software accessing credentials needs Windows false-positive validation.
+
+Host-wide upload spikes are compared with the previous baseline before learning the
+current sample. Spikes do not train the baseline. These observations remain Tier2,
+have no process attribution, and cannot authorize a response. Warmup and quiet
+low-volume HTTPS exfiltration remain limitations.
