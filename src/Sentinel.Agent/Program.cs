@@ -369,6 +369,13 @@ namespace Sentinel.Agent
                     services.AddHostedService<CursorTakeoverMonitor>();
                     services.AddHostedService<CookieIntegrityMonitor>();
                     services.AddSingleton<IsolationResponseEngine>();
+
+                    // Embedded AntivirusLite engine (modules\AntivirusLite). Hosts the
+                    // standalone AntivirusLite.ps1 in-process via the WinPS 5.1 runtime
+                    // so no visible powershell.exe appears in Task Manager. Deliberately
+                    // decoupled from the response-policy pipeline (like modules\NanoAV)
+                    // so it can be removed by deleting this one line + the module folder.
+                    services.AddHostedService<AntivirusLiteHost>();
                 });
     }
 }

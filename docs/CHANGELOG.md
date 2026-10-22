@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.1.7] - 2026-10-22
+
+### Added
+- Embed the standalone `AntivirusLite.ps1` engine as an in-process module hosted by `Sentinel.Agent` (`modules/AntivirusLite/`, `AntivirusLiteHost.cs`). The Windows PowerShell 5.1 runtime (`System.Management.Automation`, resolved from the GAC - nothing extra is shipped) runs the script on a background thread inside `Sentinel.Agent.exe`, so no `powershell.exe` child process is ever visible in Task Manager. The host uses a minimal `InitialSessionState.CreateDefault2()` session to avoid the WSMan snap-in load failure that affects the full default session in a hosted context.
+- Launch the script with `-Embedded`, which disables its two `Start-Job`-based scanners (memory scanner and deep scanner, the only paths that would spawn a child `powershell.exe`) and its scheduled-task auto-start. The in-process monitors (file watcher, WMI exec monitor, scored C2 engine, reverse-shell killer) are unaffected. The module is deliberately decoupled from Sentinel's response-policy pipeline (same spirit as the NanoAV module) so it can be removed by deleting one hosted-service registration plus the module folder.
+
+### Fixed
+- Stop the embedded AntivirusLite engine from quarantining `Sentinel.Service.exe` and deleting `Sentinel.Agent.exe` - it was treating its own host's binaries as known-bad and killing the processes, taking the agent down. The agent now passes its install directory to the script via `-SentinelDir`; the script treats that directory (and the `Sentinel.Agent`/`Sentinel.Service`/`SentinelAutoRotate`/`SentinelGuard` process names) as off-limits for every destructive action - file quarantine/delete, C2 kill, reverse-shell kill, behavioral kill, and the WMI execution-block path. This self-exclusion does not change how the engine treats anything outside the Sentinel install directory; it remains kill-first on all other threats.
+- Fix the Command Prompt `installer\build` entry point: `build.bat` omitted the `SentinelAutoRotate` publish step that `setup.iss` requires, so the Inno Setup compile aborted with "Source file ... SentinelAutoRotate.exe does not exist." `build.bat` now publishes the AutoRotate tool to `publish\autorotate\` before compiling.
+
+### Validation and limits
+- Agent and full solution build clean (0 warnings, 0 errors). The embedded script parses with 0 errors and ships inside the agent payload and the installer (`SentinelSetup-3.1.7.exe`). In-process hosting was exercised directly: the script's scan loop ran inside a hosted runspace with `-Embedded` and spawned no child `powershell.exe` and no background jobs.
+- The self-exclusion path logic and the build fix are verified by build output and script inspection. The end-to-end effect on the installed service - a full scan cycle on the target machine with no `QUARANTINED ... Sentinel.Service.exe` / `HARD DELETING ... Sentinel.Agent.exe` lines in `C:\ProgramData\Antivirus\av.log` - remains a post-install Windows validation step.
+
 ## [3.3.8] - 2026-10-21
 
 ### Added

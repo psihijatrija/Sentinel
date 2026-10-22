@@ -6,7 +6,7 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
-    <Version>3.1.6</Version>
+    <Version>3.1.7</Version>
     <Company>Sentinel Security</Company>
     <Product>Sentinel Endpoint Detection and Response</Product>
     <Description>Sentinel EDR User-Session Agent and Web Dashboard</Description>
@@ -26,6 +26,26 @@
          WinForms WebBrowser (IE11 emulation) when the runtime is unavailable, so a missing
          runtime degrades gracefully rather than breaking Settings. -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+
+    <!-- Compile-time types for hosting Windows PowerShell 5.1 in-process
+         (AntivirusLiteHost). These are REFERENCE assemblies only - the real
+         System.Management.Automation implementation loads from the GAC at
+         runtime (present on every supported Windows box), so nothing extra is
+         shipped. Private/ExcludeAssets keep the ref DLLs out of the output. -->
+    <PackageReference Include="Microsoft.PowerShell.5.ReferenceAssemblies" Version="1.1.0">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded AntivirusLite engine script. Copied beside Sentinel.Agent.exe
+         so AntivirusLiteHost can locate and host it in-process. Remove this
+         block (and the modules\AntivirusLite folder) to fully drop the module. -->
+    <None Include="..\..\modules\AntivirusLite\AntivirusLite.ps1"
+          Link="modules\AntivirusLite\AntivirusLite.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

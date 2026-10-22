@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.1.6
+AppVersion=3.1.7
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.1.6.0
+VersionInfoVersion=3.1.7.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.1.6.0
-VersionInfoOriginalFileName=SentinelSetup-3.1.6.exe
+VersionInfoProductVersion=3.1.7.0
+VersionInfoOriginalFileName=SentinelSetup-3.1.7.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.1.6
+OutputBaseFilename=SentinelSetup-3.1.7
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -33,6 +33,10 @@ Source: "assets\disclaimer.txt"; DestDir: "{app}"; DestName: "DISCLAIMER.txt"; F
 Source: "..\publish\service\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\autorotate\SentinelAutoRotate.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Embedded AntivirusLite engine script, hosted in-process by Sentinel.Agent.
+; (The agent publish usually carries this via CopyToOutputDirectory; this line
+; guarantees it lands beside the agent even if the publish step is bypassed.)
+Source: "..\modules\AntivirusLite\AntivirusLite.ps1"; DestDir: "{app}\modules\AntivirusLite"; Flags: ignoreversion
 
 [Tasks]
 Name: "autorotate"; Description: "Enable SentinelAutoRotate (rotates this PC local account password to a random value every 10 minutes and turns on Windows autologon). The password becomes unknown to everyone and a machine-recoverable logon credential is stored, lowering at-rest security. Leave unchecked unless you specifically want this."; Flags: unchecked
