@@ -44,7 +44,7 @@ namespace Sentinel.Tests
             ResponsePolicy.ApplyTierLaw(payload);
             ResponsePolicy.ApplyTierLaw(read);
             Assert.Equal(ResponseAction.LogOnly, read.AuthorizedResponse);
-            var engine = new BehavioralCorrelationEngine(_ => null);
+            var engine = new BehavioralCorrelationEngine(_ => null, _ => long.Parse(payload.Metadata!["ProcessCreationTime"]));
             var emitted = new List<DetectionEvent>();
             engine.Initialize(e => { emitted.Add(e); return Task.CompletedTask; });
             await engine.RegisterSignalAsync(readFirst ? read : payload);
@@ -87,7 +87,7 @@ namespace Sentinel.Tests
                 case "consultant": payload.Metadata!["ConsultantSignal"] = "true"; break;
             }
             Assert.False(BehavioralCorrelationEngine.HasInjectedCredentialRead(new[] { payload, read }));
-            var engine = new BehavioralCorrelationEngine(_ => null);
+            var engine = new BehavioralCorrelationEngine(_ => null, _ => long.Parse(payload.Metadata!["ProcessCreationTime"]));
             var emitted = new List<DetectionEvent>();
             engine.Initialize(e => { emitted.Add(e); return Task.CompletedTask; });
             await engine.RegisterSignalAsync(payload);

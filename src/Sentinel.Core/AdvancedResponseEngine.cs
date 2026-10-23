@@ -433,6 +433,12 @@ namespace Sentinel.Core
                 reason = "LogOnly (observe-first: weak user-activity heuristic - no confirmed attack)";
             }
 
+            // A memory-inspected victim is not proof that its backing EXE, parent,
+            // mounted image, container or VM is the malicious loader.
+            bool victimScoped = InjectedVictimResponse.AppliesTo(detection);
+            if (victimScoped && effectiveTier == DetectionTier.Tier1Behavioral && effectiveKillAuthorized)
+                effectiveResponse = ResponseAction.KillProcessTree;
+
             bool ar = _config.ActiveResponse;
             execution.EffectiveAction = effectiveTier == DetectionTier.Tier2Indicator
                 ? nameof(ResponseAction.LogOnly) : effectiveResponse.ToString();
@@ -444,7 +450,7 @@ namespace Sentinel.Core
             // authorized destructive action - it never lowers the bar. It uses non-attacker-
             // controllable anchors only (the OS-recorded process image path + mounted image path),
             // never a filename. If the ISO origin can't be confirmed, we leave the action untouched.
-            if (ar && effectiveTier == DetectionTier.Tier1Behavioral &&
+            if (!victimScoped && ar && effectiveTier == DetectionTier.Tier1Behavioral &&
                 (effectiveKillAuthorized ||
                  effectiveResponse is ResponseAction.KillProcess or ResponseAction.KillProcessTree
                      or ResponseAction.Quarantine or ResponseAction.QuarantineAndKill) &&
@@ -465,7 +471,7 @@ namespace Sentinel.Core
             // container-config observation. These run alongside the kill branch below (they do not
             // replace the process kill), so the offending process is still terminated.
             bool killGradeAuthorizedNow =
-                ar && _isolationResponse != null && effectiveTier == DetectionTier.Tier1Behavioral &&
+                !victimScoped && ar && _isolationResponse != null && effectiveTier == DetectionTier.Tier1Behavioral &&
                 (effectiveKillAuthorized ||
                  effectiveResponse is ResponseAction.KillProcess or ResponseAction.KillProcessTree
                      or ResponseAction.Quarantine or ResponseAction.QuarantineAndKill);
@@ -1046,7 +1052,12 @@ namespace Sentinel.Core
                 try { if (_incidentResponse != null) _ = _incidentResponse.CollectEvidenceAsync(detection); } catch { }
 
                 var reasonText = $"Triggered by rule: {detection.RuleName}. {reason}{isolationContainmentNote}";
-                if (_chainTracer != null)
+                if (victimScoped)
+                {
+                    execution.AddProcessTree(InjectedVictimResponse.Execute(detection, new WindowsProcessTreeOperations()));
+                    reasonText += ". Containment is limited to the verified victim lifetime and descendants; no backing-file quarantine or ancestor response.";
+                }
+                else if (_chainTracer != null)
                 {
                     var traceResult = await _chainTracer.TraceAndRespondAsync(detection);
                     foreach (var tree in traceResult.ProcessContainments) execution.AddProcessTree(tree);
@@ -1189,6 +1200,8 @@ namespace Sentinel.Core
 
         private void NotifyReinfectionCorrelator(DetectionEvent detection, ResponseExecutionResult execution)
         {
+            // Victim memory compromise is not proof that the clean backing EXE is malware.
+            if (InjectedVictimResponse.AppliesTo(detection)) return;
             try
             {
                 if (_reinfectionCorrelator == null || !execution.HasVerifiedProcessExit(detection.ProcessId)) return;

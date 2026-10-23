@@ -77,7 +77,7 @@ namespace Sentinel.Core
     /// </summary>
     public static class InjectionSuspectBoard
     {
-        private static readonly ConcurrentDictionary<int, DateTimeOffset> Pids = new();
+        private static readonly ConcurrentDictionary<int, (DateTimeOffset When, bool PayloadOnly)> Pids = new();
         private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(2);
 
         // Most recent ETW-TI captured call-stack frames per caller PID. Stashed cheaply on
@@ -85,11 +85,17 @@ namespace Sentinel.Core
         // in EtwThreatIntelMonitor (same reason the module walk lives there, not here).
         private static readonly ConcurrentDictionary<int, (DateTimeOffset When, ulong[] Frames)> StackFrames = new();
 
-        public static void Mark(int pid)
+        public static void Mark(int pid) => Mark(pid, payloadOnly: false);
+
+        internal static void Mark(int pid, bool payloadOnly)
         {
-            if (pid > 4)
-                Pids[pid] = DateTimeOffset.UtcNow;
+            if (pid <= 4) return;
+            var now = DateTimeOffset.UtcNow;
+            Pids[pid] = (now, payloadOnly);
         }
+
+        internal static bool IsPayloadOnly(int pid) =>
+            !Pids.TryGetValue(pid, out var entry) || entry.PayloadOnly;
 
         /// <summary>
         /// Stash a captured user-mode return-address chain for later off-thread analysis.
@@ -100,7 +106,7 @@ namespace Sentinel.Core
             if (pid <= 4 || frames == null || frames.Length == 0)
                 return;
             StackFrames[pid] = (DateTimeOffset.UtcNow, frames);
-            Pids[pid] = DateTimeOffset.UtcNow;
+            Mark(pid);
         }
 
         /// <summary>
@@ -121,7 +127,7 @@ namespace Sentinel.Core
             var now = DateTimeOffset.UtcNow;
             foreach (var kv in Pids)
             {
-                if (now - kv.Value > Ttl)
+                if (now - kv.Value.When > Ttl)
                     Pids.TryRemove(kv.Key, out _);
             }
             foreach (var kv in StackFrames)

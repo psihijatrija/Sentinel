@@ -3,6 +3,8 @@
 ## [3.4.0] - 2026-10-23
 
 ### Changed
+- Extend injection-candidate PE inspection to arbitrary host identities and RX code with readonly allocation headers. Validate executable PE sections with bounded read-only walks; MZ/JIT/ordinary image mappings do not provide payload proof. Browser/API suppression still queues PE-only target inspection without granting response authority.
+- Carry verified victim creation time through the PE-plus-credential-read chain to a scoped containment adapter. Reject PID reuse; preserve the victim's backing EXE and parent, skip ISO/container/VM mutation and prevent reinfection-cache poisoning from an injected clean host. Independent loader/module responses remain available. See [DLL-loader and payload scope](LOADER_PAYLOAD_COVERAGE.md).
 - Extend the existing raw-socket response rule with a bounded inline-Python signature: a connected socket supplies all three standard streams of an explicitly invoked shell. Python, Ren'Py, installer names and relay labels alone provide no response authority.
 - Reuse the PowerShell decoded-code parser in the raw-socket rule, closing a path that could mistake ordinary TCP clients or quoted payload documentation for a reverse shell.
 - Correlate a real Kernel-File credential-store read with confirmed C2 or reverse-shell evidence in the same live process lifetime. Require fresh timestamps and a matching creation time; watcher notifications, unknown/reused identities, weak network observations and consultant signals cannot complete this chain. Prevent the broader session-theft rule from bypassing these checks for raw store-access observations.
@@ -10,8 +12,8 @@
 
 ### Scope and validation
 - Keep NanoAV source and its response rules unchanged. No Ren'Py-specific blocklist or unidentified “Ome-Relay” signature is introduced; neither forum post supplied a sample or detection name. See [installer and relay coverage](INSTALLER_RELAY_COVERAGE.md).
-- Release product projects and shipping tests cross-build with 0 warnings and 0 errors. The optional Windows Desktop ML trainer was not validated on Linux. The selected portable regression suite passed 131 cases; the Windows ACL-dependent response test and native Framework runner remain unrun here. NanoAV supplied-source verification passes.
-- Tests use inert telemetry and check reverse-shell dispatch authorization, credential-chain corroboration, ordinary networking, legitimate game launches, unrelated streams, stale/reused identities and local-volume selection. Native Windows installer, ETW attribution, removable-drive lifecycle and actual containment checks remain required; portable tests do not establish coverage against either forum sample.
+- Release product projects and shipping tests cross-build with 0 warnings and 0 errors. The optional Windows Desktop ML trainer was not validated on Linux. The expanded selected portable regression suite passed 175 cases; two new Windows-only fixtures were skipped. The Windows ACL-dependent response test and native Framework runner remain unrun here. NanoAV supplied-source verification passes.
+- Tests use inert telemetry and check reverse-shell dispatch authorization, credential-chain corroboration, ordinary networking, legitimate game launches, unrelated streams, stale/reused identities and local-volume selection. Add native readonly-header/RX memory and clean Qt policy fixtures, plus fake-handle victim containment/parent-preservation tests. Native Windows installer, ETW attribution, removable-drive lifecycle and actual containment checks remain required; portable tests do not establish coverage against either forum sample.
 
 ## [3.3.9] - 2026-10-21
 

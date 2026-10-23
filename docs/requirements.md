@@ -470,3 +470,7 @@ report download must disclose account/address/application-path exposure.
 ### Installer, relay and secondary-volume coverage (3.4.0)
 
 A matched Python socket/shell command may use the existing authorized reverse-shell response. Credential-read correlation requires actual Kernel-File read provenance, fresh evidence, a verified live process creation time, and independent confirmed C2 or reverse-shell evidence. Plain relay connections, watcher changes and game/installer names alone must not authorize containment. The file scanner includes ready fixed/removable volumes and reconciles changing drive roots. File-verdict observations do not acquire kill authority. See [coverage and Windows acceptance checks](INSTALLER_RELAY_COVERAGE.md).
+
+### DLL-loader payload corroboration (3.4.0 follow-up)
+
+Private-PE inspection shall cover eligible remote-API targets without host-name restrictions, including RX code with non-executable allocation headers. It shall validate executable section layout within explicit query/read/time budgets, remain Tier2 LogOnly alone, and retain existing process-memory protections. A corroborated Kernel-File credential read shall match a verified live process creation time. The resulting response shall pin that lifetime, contain the victim/descendants only, and not quarantine a possibly clean backing EXE or mark its hash as malware. [Tests and native acceptance limits](LOADER_PAYLOAD_COVERAGE.md).

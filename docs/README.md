@@ -4,6 +4,8 @@ Current source version: **3.4.0** (`version.txt`). This package adds [automatic 
 
 ## Current guidance
 
+[DLL-loader and injected-payload coverage](LOADER_PAYLOAD_COVERAGE.md): RX/private-PE inspection, victim-only response, native fixtures and explicit remaining limits.
+
 [Installer and relay coverage](INSTALLER_RELAY_COVERAGE.md): Python socket-shell signatures, credential-read corroboration, removable-drive scanning and Windows acceptance checks.
 
 [Automatic exploit protection](../tools/Sentinel.ExploitShield/README.md):

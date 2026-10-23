@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace Sentinel.Core
 {
     /// <summary>
-    /// Thread-start and unbacked RWX injection scanner.
+    /// Thread-start and private executable PE inspection.
     /// Uses <see cref="NativeProcessMemory"/> (dynamic APIs). Skips game/anti-cheat paths only.
     ///
     /// KNOWN LIMITATION (v2.0.4 LOW-4): Process hollowing where an attacker overwrites the
@@ -24,21 +24,21 @@ namespace Sentinel.Core
     {
         public string Name => "EtwThreatIntelMonitor";
         public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(30))
-            { Scope = "Local suspect-PID scan cycles; an empty candidate board does not prove protected Threat-Intelligence provider availability. See EtwSessionGuard." };
+            { Scope = "Bounded recent-candidate scan cycles; gates and budgets can leave regions uninspected. An empty board does not prove protected Threat-Intelligence provider availability. See EtwSessionGuard." };
         public bool IsWorkerRunning => _monitorTask is { IsCompleted: false };
 
         private readonly DetectionEngine _detectionEngine;
         private readonly TelemetryFusionEngine _fusionEngine;
         private readonly ILogger<EtwThreatIntelMonitor> _logger;
         private readonly ContextBus? _contextBus;
-        private readonly DllUnloadEngine? _dllUnload;
         private CancellationTokenSource? _cts;
         private Task? _monitorTask;
 
         private readonly ConcurrentDictionary<int, DateTimeOffset> _alertedPids = new();
-        private readonly ConcurrentDictionary<int, DateTimeOffset> _payloadAlertedPids = new();
+        private readonly ConcurrentDictionary<(int Pid, long Created), DateTimeOffset> _payloadAlertedPids = new();
         private static readonly TimeSpan AlertCooldown = TimeSpan.FromMinutes(2);
-        private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan PayloadEvidenceCooldown = TimeSpan.FromSeconds(8);
+        private int _candidateCursor;
 
         public EtwThreatIntelMonitor(
             DetectionEngine detectionEngine,
@@ -51,13 +51,12 @@ namespace Sentinel.Core
             _fusionEngine = fusionEngine;
             _logger = logger;
             _contextBus = contextBus;
-            _dllUnload = dllUnloadEngine;
         }
 
         public Task StartAsync(CancellationToken ct)
         {
             _logger.LogInformation(
-                "[EtwThreatIntelMonitor] Started - thread/RWX injection scan (game paths skipped, APIs dynamic)");
+                "[EtwThreatIntelMonitor] Started - thread/private-PE injection scan (game paths skipped, APIs dynamic)");
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _monitorTask = Task.Run(() => RunScanLoopAsync(_cts.Token));
             return Task.CompletedTask;
@@ -99,19 +98,28 @@ namespace Sentinel.Core
 
         private async Task ScanSuspectPidsAsync(CancellationToken ct)
         {
-            foreach (var pid in InjectionSuspectBoard.Snapshot())
+            var candidates = InjectionSuspectBoard.Snapshot();
+            var budget = Stopwatch.StartNew();
+            for (int inspected = 0; inspected < Math.Min(candidates.Length, 16) && budget.ElapsedMilliseconds < 1000; inspected++)
             {
+                var pid = candidates[_candidateCursor % candidates.Length];
+                _candidateCursor = (_candidateCursor + 1) % candidates.Length;
                 if (ct.IsCancellationRequested) break;
                 if (pid <= 4) continue;
                 try
                 {
                     using var proc = Process.GetProcessById(pid);
-                    ScanOneProcessStack(proc);
-                    await ScanOneProcessThreadsAsync(proc, ct).ConfigureAwait(false);
-                    if (IsHighValueTarget(proc.ProcessName))
-                        await ScanOneProcessRwxAsync(proc, ct).ConfigureAwait(false);
+                    // A suppressed browser/API event supplies PE inspection only, not
+                    // new authority for legacy compact-page/thread heuristics.
+                    if (!InjectionSuspectBoard.IsPayloadOnly(pid))
+                    {
+                        ScanOneProcessStack(proc);
+                        await ScanOneProcessThreadsAsync(proc, ct).ConfigureAwait(false);
+                    }
+                    await ScanOneProcessPayloadAsync(proc, ct).ConfigureAwait(false);
                 }
-                catch { }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { _logger.LogDebug(ex, "Injection candidate PID {Pid} could not be inspected", pid); }
             }
         }
 
@@ -273,109 +281,63 @@ namespace Sentinel.Core
             }
         }
 
-        private async Task ScanOneProcessRwxAsync(Process proc, CancellationToken ct)
+        private async Task ScanOneProcessPayloadAsync(Process proc, CancellationToken ct)
         {
-            if (ct.IsCancellationRequested) return;
-            var name = proc.ProcessName;
+            ct.ThrowIfCancellationRequested();
             var imagePath = SecurityValidation.GetProcessImagePath(proc.Id);
-            if (!NativeProcessMemory.CanInspect(proc.Id, imagePath))
-                return;
-            // A stack/thread observation must not suppress the independent PE inspection
-            // needed to corroborate credential theft in the same scan pass.
-            if (_payloadAlertedPids.TryGetValue(proc.Id, out var last) &&
-                DateTimeOffset.UtcNow - last < AlertCooldown)
-                return;
-
+            if (!NativeProcessMemory.CanInspect(proc.Id, imagePath)) return;
             uint access = NativeProcessMemory.PROCESS_QUERY_INFORMATION | NativeProcessMemory.PROCESS_VM_READ;
-            IntPtr h = NativeProcessMemory.OpenRemoteHandle(access, proc.Id);
-            if (h == IntPtr.Zero) return;
-
+            IntPtr handle = NativeProcessMemory.OpenRemoteHandle(access, proc.Id);
+            if (handle == IntPtr.Zero) return;
             try
             {
-                var rwx = FindUnbackedRwx(h, proc.Id);
-                if (rwx.Count == 0) return;
+                // Pin evidence to the handle being read, not just a recycled PID.
+                if (!NativeProcessMemory.TryGetCreationTime(handle, out long created) ||
+                    created != proc.StartTime.ToUniversalTime().ToFileTimeUtc()) return;
+                var key = (proc.Id, created);
+                if (_payloadAlertedPids.TryGetValue(key, out var last) &&
+                    DateTimeOffset.UtcNow - last < PayloadEvidenceCooldown) return;
 
-                var mzRegions = new List<(long Address, long Size)>();
-                foreach (var region in rwx)
+                var payloads = UnbackedPeScanner.Scan(address =>
                 {
-                    if (NativeProcessMemory.LooksLikeMzPe(proc.Id, new IntPtr(region.Address)))
-                        mzRegions.Add(region);
-                }
-                if (mzRegions.Count == 0)
-                    return;
-
-                if (_dllUnload != null)
-                    await _dllUnload.CheckAndUnloadAsync(proc.Id, name);
-
+                    var pointer = new IntPtr(unchecked((long)address));
+                    return NativeProcessMemory.QueryRemoteRegion(handle, pointer, out var region) == 0
+                        ? (NativeProcessMemory.MEMORY_BASIC_INFORMATION?)null : region;
+                }, address =>
+                {
+                    var header = new byte[4096];
+                    if (!NativeProcessMemory.CopyRemote(handle, new IntPtr(unchecked((long)address)), header, out int count)) return null;
+                    if (count != header.Length) Array.Resize(ref header, count);
+                    return header;
+                }, ct);
+                if (payloads.Count == 0) return;
                 if (_payloadAlertedPids.Count >= 4096) _payloadAlertedPids.Clear();
-                _payloadAlertedPids[proc.Id] = DateTimeOffset.UtcNow;
-                await _detectionEngine.EmitAsync(new DetectionEvent
-                {
-                    RuleName = "Threat Intel: Remote Memory Injection (ALLOCVM_REMOTE + PROTECTVM_REMOTE)",
-                    Evidence = $"Process '{name}' (PID {proc.Id}) has {rwx.Count} unbacked RWX region(s) with injected MZ header, " +
-                               $"total {rwx.Sum(r => r.Size):N0} bytes.",
-                    Reasoning = "Unbacked RWX with MZ header indicates remote memory injection / hollowed payload (T1055).",
-                    Confidence = 0.95,
-                    Tier = DetectionTier.Tier1Behavioral,
-                    AuthorizedResponse = ResponseAction.KillProcessTree,
-                    ProcessName = name,
-                    ProcessId = proc.Id,
-                    SignalType = SignalType.ProcessInjection,
-                    Family = TerminalFamily.Injection,
-                    Metadata = new Dictionary<string, string>
-                    {
-                        ["RwxRegionCount"] = rwx.Count.ToString(),
-                        // Only this memory-inspected path may supply this evidence marker.
-                        // JIT/RWX observations and call-stack heuristics do not qualify.
-                        ["UnbackedPePayload"] = mzRegions.Any(r => NativeProcessMemory.LooksLikePePayload(h, new IntPtr(r.Address))) ? "true" : "false",
-                        ["ProcessCreationTime"] = proc.StartTime.ToUniversalTime().ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["TotalRwxSize"] = rwx.Sum(r => r.Size).ToString(),
-                        ["ImagePath"] = imagePath ?? ""
-                    }
-                });
+                _payloadAlertedPids[key] = DateTimeOffset.UtcNow;
+                await _detectionEngine.EmitAsync(CreatePayloadObservation(proc.Id, proc.ProcessName,
+                    imagePath ?? "", created, payloads, DateTime.UtcNow)).ConfigureAwait(false);
             }
-            finally
-            {
-                NativeProcessMemory.CloseHandle(h);
-            }
+            finally { NativeProcessMemory.CloseHandle(handle); }
         }
 
-        private static List<(long Address, long Size)> FindUnbackedRwx(IntPtr hProcess, int pid)
+        internal static DetectionEvent CreatePayloadObservation(int pid, string name, string imagePath,
+            long created, IReadOnlyList<UnbackedPeScanner.Payload> payloads, DateTime timestamp) => new()
         {
-            var results = new List<(long, long)>();
-            var ranges = MappedModuleCache.Get(pid);
-            if (ranges.Count == 0)
+            RuleName = "Memory Payload: Unbacked Executable PE",
+            ProcessId = pid, ProcessName = name, Timestamp = timestamp,
+            Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
+            SignalType = SignalType.Generic, Confidence = 0.95,
+            Evidence = $"Read-only inspection found {payloads.Count} private executable PE allocation(s) in PID {pid}; allocation addresses are in metadata.",
+            Reasoning = "PE structure was found at the allocation base of private executable code, including RX pages. " +
+                "This alone does not prove a malicious loader or authorize response. An independent, lifetime-matched credential-store read is required by the dedicated theft chain.",
+            Metadata = new Dictionary<string, string>
             {
-                NativeProcessMemory.EnumModules(pid);
-                ranges = MappedModuleCache.Get(pid);
+                ["UnbackedPePayload"] = "true", ["PayloadEvidenceSource"] = "PrivateExecutableAllocation",
+                ["ProcessCreationTime"] = created.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["ImagePath"] = imagePath,
+                ["PayloadAllocations"] = string.Join(",", payloads.Select(p => $"0x{p.Allocation:X}")),
+                ["ExecutablePages"] = string.Join(",", payloads.Select(p => $"0x{p.ExecutablePage:X}:0x{p.Protection:X}"))
             }
-
-            IntPtr address = IntPtr.Zero;
-            int scanned = 0;
-            while (scanned < 10000)
-            {
-                scanned++;
-                if (NativeProcessMemory.QueryRemoteRegion(hProcess, address, out var mbi) == 0) break;
-
-                if (mbi.State == NativeProcessMemory.MEM_COMMIT &&
-                    mbi.Type != NativeProcessMemory.MEM_IMAGE &&
-                    (mbi.Protect == NativeProcessMemory.PAGE_EXECUTE_READWRITE ||
-                     mbi.Protect == NativeProcessMemory.PAGE_EXECUTE_WRITECOPY))
-                {
-                    ulong baseAddr = (ulong)mbi.BaseAddress;
-                    long size = (long)mbi.RegionSize;
-                    bool inside = ranges.Any(r => baseAddr >= r.Base && baseAddr < r.End);
-                    if (!inside && size > 0 && size < 100_000_000)
-                        results.Add(((long)baseAddr, size));
-                }
-
-                ulong next = (ulong)mbi.BaseAddress + (ulong)mbi.RegionSize;
-                if (next <= (ulong)address) break;
-                address = (IntPtr)next;
-            }
-
-            return results;
-        }
+        };
 
         /// <summary>
         /// True for a compact private executable page (classic shellcode).
@@ -407,18 +369,5 @@ namespace Sentinel.Core
             }
         }
 
-        private static bool IsHighValueTarget(string processName)
-        {
-            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "svchost", "explorer", "RuntimeBroker", "dllhost",
-                "spoolsv", "searchindexer", "taskhostw", "sihost",
-                "lsass", "csrss", "winlogon", "wininit", "services",
-                "conhost", "wmiprvse", "smartscreen", "backgroundTaskHost",
-                "ceprkac", "msedgewebview2", "msedge", "chrome", "firefox",
-                "brave", "discord"
-            };
-            return targets.Contains(processName);
-        }
     }
 }

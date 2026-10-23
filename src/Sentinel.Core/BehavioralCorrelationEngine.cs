@@ -227,12 +227,13 @@ namespace Sentinel.Core
             // Credential access by a process containing a memory-inspected PE payload is
             // independently corroborated theft evidence, even before any recognizable C2.
             // Do not accept generic RWX/JIT observations or watcher write/create heuristics.
-            if (HasInjectedCredentialRead(currentSignals))
+            if (TryGetInjectedCredentialRead(currentSignals, _creationTimeResolver, out long victimCreated))
             {
                 await EmitCompositeAsync(pid, "Credential Theft: Unbacked PE + Store Read", 0.95,
                     "An unbacked executable PE payload and a Kernel-File credential-store read were observed on the same PID within 15 seconds.",
                     "Memory inspection confirmed a PE payload in unbacked executable memory, independently corroborated by a credential/session-store read. " +
-                    "Containment does not require an upload-volume threshold or recognized C2. This is theft-risk evidence, not proof of successful exfiltration.");
+                    "Containment does not require an upload-volume threshold or recognized C2. This is theft-risk evidence, not proof of successful exfiltration.",
+                    victimCreationTime: victimCreated);
                 return;
             }
 
@@ -778,8 +779,13 @@ namespace Sentinel.Core
             return false;
         }
 
-        internal static bool HasInjectedCredentialRead(IReadOnlyList<DetectionEvent> signals)
+        internal static bool HasInjectedCredentialRead(IReadOnlyList<DetectionEvent> signals, Func<int, long>? liveCreation = null)
+            => TryGetInjectedCredentialRead(signals, liveCreation, out _);
+
+        private static bool TryGetInjectedCredentialRead(IReadOnlyList<DetectionEvent> signals,
+            Func<int, long>? liveCreation, out long victimCreated)
         {
+            victimCreated = 0;
             var now = DateTime.UtcNow;
             bool Marker(DetectionEvent s, string key, string value) =>
                 s.Metadata != null && s.Metadata.TryGetValue(key, out var actual) &&
@@ -791,19 +797,30 @@ namespace Sentinel.Core
                 !ResponsePolicy.IsWeakObserveSeed(s);
 
             foreach (var payload in signals.Where(s => Eligible(s) &&
-                s.RuleName == "Threat Intel: Remote Memory Injection (ALLOCVM_REMOTE + PROTECTVM_REMOTE)" &&
-                s.SignalType == SignalType.ProcessInjection && s.Confidence >= 0.95 &&
+                ((s.RuleName == "Threat Intel: Remote Memory Injection (ALLOCVM_REMOTE + PROTECTVM_REMOTE)" &&
+                  s.SignalType == SignalType.ProcessInjection) ||
+                 (s.RuleName == "Memory Payload: Unbacked Executable PE" && s.SignalType == SignalType.Generic &&
+                  Marker(s, "PayloadEvidenceSource", "PrivateExecutableAllocation"))) && s.Confidence >= 0.95 &&
                 Marker(s, "UnbackedPePayload", "true")))
             {
                 if (payload.Metadata == null || !payload.Metadata.TryGetValue("ProcessCreationTime", out var birth) ||
                     !long.TryParse(birth, out var ticks) || ticks <= 0 || ticks > payload.Timestamp.ToFileTimeUtc())
                     continue;
+                if (liveCreation != null)
+                {
+                    try { if (liveCreation(payload.ProcessId) != ticks) continue; }
+                    catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception || ex is DllNotFoundException)
+                    { continue; } // Identity unavailable: observation cannot authorize containment.
+                }
                 if (signals.Any(read => Eligible(read) && read.ProcessId == payload.ProcessId &&
                     read.RuleName == "Sensitive File Access: ETW Credential Store Read" &&
                     Marker(read, "SensitiveFileAccess", "true") && Marker(read, "AccessSource", "KernelFileRead") &&
                     Marker(read, "ProcessCreationTime", birth) && ticks <= read.Timestamp.ToFileTimeUtc() &&
                     Math.Abs((read.Timestamp - payload.Timestamp).TotalSeconds) <= 15))
+                {
+                    victimCreated = ticks;
                     return true;
+                }
             }
             return false;
         }
@@ -814,7 +831,8 @@ namespace Sentinel.Core
             double confidence,
             string evidence,
             string reasoning,
-            bool tagCoercionToolkit = false)
+            bool tagCoercionToolkit = false,
+            long victimCreationTime = 0)
         {
             string name = "unknown";
             if (_signalBuffers.TryGetValue(pid, out var buffer))
@@ -848,6 +866,12 @@ namespace Sentinel.Core
                     [ResponsePolicy.TerminalOutcomeKey] = "Composite",
                 }
             };
+
+            if (victimCreationTime > 0)
+            {
+                compositeEvent.Metadata["ProcessCreationTime"] = victimCreationTime.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                compositeEvent.Metadata["ContainmentScope"] = "InjectedVictim";
+            }
 
             if (tagCoercionToolkit)
                 CoercionAbusePolicy.TagAsCoercionToolkit(compositeEvent);

@@ -10,6 +10,11 @@ namespace Sentinel.Core
     {
         public string Name => "ThreatIntelInjectionRule";
 
+        private readonly Action<int, bool> _queueCandidate;
+        public ThreatIntelInjectionRule() : this(InjectionSuspectBoard.Mark) { }
+        internal ThreatIntelInjectionRule(Action<int, bool> queueCandidate)
+            => _queueCandidate = queueCandidate ?? throw new ArgumentNullException(nameof(queueCandidate));
+
         // Browsers legitimately use cross-process memory APIs for their sandbox model
         // (broker process allocates memory in renderer/tab processes). Skip to avoid FP kills.
         private static readonly HashSet<string> KnownBrowserProcesses = new(StringComparer.OrdinalIgnoreCase)
@@ -26,8 +31,16 @@ namespace Sentinel.Core
             if (!ThreatIntelMap.IsRemoteInjection(tit.ApiName))
                 return null;
 
+            // Suppressing a noisy API observation is not trust for its target.
+            // Memory inspection stays off the ETW callback and retains CanInspect gates.
+            _queueCandidate(tit.ProcessId, true);
+            if (tit.TargetProcessId > 4) _queueCandidate(tit.TargetProcessId, true);
+
             // Browser sandbox: chrome->chrome is normal. chrome->lsass is not.
-            if (KnownBrowserProcesses.Contains(tit.ProcessName) &&
+            var callerName = tit.ProcessName ?? "";
+            if (callerName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                callerName = callerName.Substring(0, callerName.Length - 4);
+            if (KnownBrowserProcesses.Contains(callerName) &&
                 tit.TargetProcessId != 4 &&
                 !IsSensitiveTargetName(tit.TargetProcessId))
                 return null;
@@ -36,15 +49,14 @@ namespace Sentinel.Core
             if (SecurityValidation.IsGameOrAntiCheatPath(imagePath))
                 return null;
 
-            InjectionSuspectBoard.Mark(tit.ProcessId);
-            if (tit.TargetProcessId > 4)
-                InjectionSuspectBoard.Mark(tit.TargetProcessId);
+            _queueCandidate(tit.ProcessId, false);
+            if (tit.TargetProcessId > 4) _queueCandidate(tit.TargetProcessId, false);
 
             var label = ThreatIntelMap.Describe(tit.ApiName);
             return new DetectionEvent
             {
                 RuleName = Name,
-                ProcessName = tit.ProcessName,
+                ProcessName = tit.ProcessName ?? "",
                 ProcessId = tit.ProcessId,
                 SignalType = SignalType.ProcessInjection,
                 Family = TerminalFamily.Injection,

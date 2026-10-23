@@ -74,3 +74,7 @@ Before treating installed protection as verified, use an isolated Windows VM:
    files generate analysis. Check an already-populated volume is walked too.
 5. Review failed/unreadable paths and telemetry degradation explicitly; do not
    equate absence of alerts with a clean drive or a successful containment test.
+
+## DLL-loader follow-up in the same 3.4.0 version
+
+The [injected-payload changes](LOADER_PAYLOAD_COVERAGE.md) address a separate native/DLL-loader stage: arbitrary eligible target hosts, private RX sections with readonly PE headers, and lifetime-pinned victim response. They do not depend on the Python signature or identify a specific malicious adjacent DLL. Existing process-tree and native memory fixtures distinguish portable policy verification from Windows runtime checks.

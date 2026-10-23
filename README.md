@@ -22,7 +22,7 @@ Sentinel Core/Service/Agent operate offline: their online reputation, live intel
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
 **Version:** 3.4.0 (single source of truth: `version.txt`)
 
-3.4.0 strengthens socket-shell and credential-theft correlation and extends local file scanning to removable drives. See [installer and relay coverage, limits and Windows checks](docs/INSTALLER_RELAY_COVERAGE.md).
+3.4.0 strengthens socket-shell and credential-theft correlation, extends local file scanning to removable drives, and adds bounded RX/private-PE inspection with lifetime-pinned victim containment. See [installer and relay coverage, limits and Windows checks](docs/INSTALLER_RELAY_COVERAGE.md). See also [DLL-loader and injected-payload coverage](docs/LOADER_PAYLOAD_COVERAGE.md).
 
 For collection status, known telemetry limits, and the Windows verification probe, see [monitor health](docs/monitor-health.md).
 

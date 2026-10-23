@@ -15,6 +15,7 @@ namespace Sentinel.Core
         public const uint AccessVmRead = 0x0010;
         public const uint StateCommit = 0x1000;
         public const uint TypeImage = 0x1000000;
+        public const uint TypePrivate = 0x20000;
         public const uint ProtX = 0x10;
         public const uint ProtRX = 0x20;
         public const uint ProtRWX = 0x40;
@@ -48,6 +49,12 @@ namespace Sentinel.Core
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+        internal static bool TryGetCreationTime(IntPtr process, out long creation)
+            => GetProcessTimes(process, out creation, out _, out _, out _) && creation > 0;
 
         public static bool CanInspect(int pid, string? imagePath = null)
         {
