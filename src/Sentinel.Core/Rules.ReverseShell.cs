@@ -485,25 +485,16 @@ namespace Sentinel.Core
             // combined with StreamReader/Writer and Invoke/GetStream plumbing
             if (matchReason == null && (name.Contains("powershell") || name.Contains("pwsh")))
             {
-                bool hasTcpClient =
-                    cmd.Contains("tcpclient") ||
-                    cmd.Contains("net.sockets") ||
-                    cmd.Contains("system.net.sockets");
-                bool hasStreamPlumbing =
-                    cmd.Contains("streamreader") ||
-                    cmd.Contains("streamwriter") ||
-                    cmd.Contains("getstream") ||
-                    cmd.Contains("networkstream");
-                bool hasExec =
-                    cmd.Contains("invoke-expression") || cmd.Contains("iex") ||
-                    cmd.Contains("cmd.exe") || cmd.Contains("/bin/sh") ||
-                    cmd.Contains("bash") || cmd.Contains("powershell");
-
-                if (hasTcpClient && (hasStreamPlumbing || hasExec))
-                {
-                    matchReason = "PowerShell raw TcpClient reverse shell cradle (socket + stream plumbing)";
-                }
+                // Reuse the decoded-code parser: literals/comments and ordinary
+                // TcpClient traffic cannot supply command-execution proof.
+                if (ReverseShellRule.ContainsReverseShell(pt.CommandLine ?? ""))
+                    matchReason = "PowerShell socket stream read/write with command execution";
             }
+
+            // Python inline payloads used by fake installers can wire cmd.exe directly
+            // to a socket without a known C2 domain or netcat executable.
+            if (matchReason == null && PythonSocketShellHeuristics.IsSocketShell(pt.ProcessName, pt.CommandLine))
+                matchReason = "Python inline socket connected to shell stdin/stdout/stderr";
 
             // 5. cmd.exe with piped redirects to/from a named handle that looks like a socket
             // Covers: cmd /c "ncat -lp 4444 -e cmd.exe" or indirect pipe chains
@@ -525,6 +516,7 @@ namespace Sentinel.Core
             return new DetectionEvent
             {
                 RuleName = "Reverse Shell: Raw Socket I/O Redirect",
+                Timestamp = pt.Timestamp,
                 ProcessName = pt.ProcessName ?? "",
                 ProcessId = pt.ProcessId,
                 SignalType = SignalType.ReverseShell,

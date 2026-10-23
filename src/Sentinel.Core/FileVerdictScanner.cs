@@ -104,6 +104,21 @@ namespace Sentinel.Core
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try { await RunVolumeCoverageAsync(stoppingToken).ConfigureAwait(false); }
+                catch (VolumeCoverageChangedException)
+                {
+                    _logger.LogInformation("[FileVerdictScanner] Mounted local volumes changed; rebuilding watchers and reconciling scan coverage.");
+                    await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private sealed class VolumeCoverageChangedException : InvalidOperationException { }
+
+        private async Task RunVolumeCoverageAsync(CancellationToken stoppingToken)
+        {
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             stoppingToken = lifetime.Token;
             ReleaseWatchers(); // a group restart must not accumulate duplicate subscriptions
@@ -111,7 +126,7 @@ namespace Sentinel.Core
             string? startupError = null;
 
             // Start drive watchers for all scannable file types - PRIORITY: new files scanned immediately
-            var drives = DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady);
+            var drives = DriveInfo.GetDrives().Where(d => IsScannableDrive(d.DriveType, d.IsReady));
             foreach (var drive in drives)
             {
                 try
@@ -146,6 +161,15 @@ namespace Sentinel.Core
                 Progress.Succeeded();
                 await SuperviseWatchersAsync(walk, () =>
                 {
+                    // A newly mounted drive needs a watcher AND an initial walk. Restart
+                    // locally to reconcile both without consuming the failure restart budget.
+                    var currentRoots = new HashSet<string>(DriveInfo.GetDrives()
+                        .Where(d => IsScannableDrive(d.DriveType, d.IsReady))
+                        .Select(d => d.RootDirectory.FullName), StringComparer.OrdinalIgnoreCase);
+                    if (!currentRoots.SetEquals(_watchers.Select(w => w.Path)))
+                    {
+                        throw new VolumeCoverageChangedException();
+                    }
                     var error = Progress.Snapshot().Error;
                     if (error != null) throw new InvalidOperationException(error);
                     if (_watchers.Count == 0 || _watchers.Any(w => !w.EnableRaisingEvents))
@@ -194,6 +218,9 @@ namespace Sentinel.Core
             Progress.Failed("File watcher lost coverage: " + error.Message);
             _logger.LogWarning(error, "File watcher overflow/failure; file coverage requires reconciliation");
         }
+
+        internal static bool IsScannableDrive(DriveType type, bool ready) =>
+            ready && (type == DriveType.Fixed || type == DriveType.Removable);
 
         private static bool IsScannable(string filePath)
         {
@@ -601,7 +628,7 @@ namespace Sentinel.Core
             // Wait a bit after startup to let higher-priority monitors initialize
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
 
-            var drives = DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady);
+            var drives = DriveInfo.GetDrives().Where(d => IsScannableDrive(d.DriveType, d.IsReady));
             foreach (var drive in drives)
             {
                 if (ct.IsCancellationRequested) break;

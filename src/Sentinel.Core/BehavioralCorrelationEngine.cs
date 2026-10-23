@@ -11,13 +11,15 @@ namespace Sentinel.Core
         private readonly ConcurrentDictionary<int, List<DetectionEvent>> _signalBuffers = new();
         private Func<DetectionEvent, Task>? _emitCallback;
         private readonly Func<int, string?> _imagePathResolver;
+        private readonly Func<int, long> _creationTimeResolver;
         private DateTime _lastPruneTime = DateTime.UtcNow;
 
         public BehavioralCorrelationEngine() : this(ResolveImagePath) { }
 
-        internal BehavioralCorrelationEngine(Func<int, string?> imagePathResolver)
+        internal BehavioralCorrelationEngine(Func<int, string?> imagePathResolver, Func<int, long>? creationTimeResolver = null)
         {
             _imagePathResolver = imagePathResolver ?? throw new ArgumentNullException(nameof(imagePathResolver));
+            _creationTimeResolver = creationTimeResolver ?? WindowsProcessTreeOperations.GetCreationTime;
         }
 
         private static readonly HashSet<string> ElectronAndJitApps = new(StringComparer.OrdinalIgnoreCase)
@@ -256,20 +258,13 @@ namespace Sentinel.Core
             // connection. This is the LSASS-free cousin of "Credential Dump + Exfiltration" -
             // modern stealers never touch LSASS. The raw file-read leg is Tier2/observe on its own
             // (SensitiveFileAccessMonitor); it becomes kill-grade only here, correlated with C2.
-            var hasSensitiveFileAccess = currentSignals.Any(s =>
-                s.RuleName.Contains("Sensitive File Access") ||
-                (s.Metadata != null && s.Metadata.ContainsKey("SensitiveFileAccess")));
-            bool hasConfirmedC2 = currentSignals.Any(s => s.SignalType == SignalType.NetworkC2 &&
-                s.Tier == DetectionTier.Tier1Behavioral &&
-                s.Confidence >= ResponsePolicy.DefaultMinTier1Confidence &&
-                !ResponsePolicy.IsWeakObserveSeed(s));
-            if (hasSensitiveFileAccess && hasConfirmedC2)
+            if (HasCredentialReadWithRemoteControl(currentSignals))
             {
                 await EmitCompositeAsync(pid, "Infostealer: Credential Access + Outbound", 0.95,
-                    "Credential/session store access and independent C2 evidence were observed on the same process.",
+                    "A Kernel-File credential/session store read and confirmed C2 or reverse-shell evidence were observed in the same process lifetime.",
                     "Infostealer kill chain: the process accessed credential material (browser Login Data / " +
                     "Cookies / Local State, Discord sessions, or .ssh / .aws / cloud tokens), with independent " +
-                    "C2 evidence on the same PID. A read alone or an ordinary connection cannot complete this chain. " +
+                    "C2 or reverse-shell evidence in the same process lifetime. A watcher notification, read alone, or ordinary connection cannot complete this chain. " +
                     "This chain does not require LSASS access.",
                     tagCoercionToolkit: true);
                 return;
@@ -717,7 +712,12 @@ namespace Sentinel.Core
                 return;
             }
 
-            var hasSessionTheft = currentSignals.Any(CoercionAbusePolicy.IsSessionTheftRule);
+            // Raw store-access events are handled exclusively by the lifetime-pinned
+            // chain above; a broad rule-name match must not bypass its evidence gates.
+            var hasSessionTheft = currentSignals.Any(s =>
+                !s.RuleName.StartsWith("Sensitive File Access:", StringComparison.Ordinal) &&
+                !(s.Metadata != null && s.Metadata.ContainsKey("SensitiveFileAccess")) &&
+                CoercionAbusePolicy.IsSessionTheftRule(s));
             if (hasSessionTheft &&
                 (types.Contains(SignalType.NetworkC2) || types.Contains(SignalType.ReverseShell) ||
                  currentSignals.Any(s => s.RuleName.Contains("Exfil") || s.RuleName.Contains("Upload"))))
@@ -745,6 +745,37 @@ namespace Sentinel.Core
                     tagCoercionToolkit: true);
                 return;
             }
+        }
+
+        private bool HasCredentialReadWithRemoteControl(IReadOnlyList<DetectionEvent> signals)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var read in signals.Where(s => s.ProcessId > 4 &&
+                s.RuleName == "Sensitive File Access: ETW Credential Store Read" &&
+                s.Metadata != null && s.Metadata.TryGetValue("AccessSource", out var source) && source == "KernelFileRead" &&
+                s.Timestamp <= now && now - s.Timestamp <= CorrelationWindow &&
+                !ResponsePolicy.IsWeakObserveSeed(s) && !ResponsePolicy.IsNonCorrelatingObserveNoise(s) &&
+                !(s.Metadata.TryGetValue("ConsultantSignal", out var consultant) && consultant == "true")))
+            {
+                if (read.Metadata == null || !read.Metadata.TryGetValue("ProcessCreationTime", out var birth) ||
+                    !long.TryParse(birth, out var created) || created <= 0 || created > read.Timestamp.ToFileTimeUtc()) continue;
+                // Current lifetime must still match the ETW read; PID reuse cannot bridge a chain.
+                long live;
+                try { live = _creationTimeResolver(read.ProcessId); }
+                catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception || ex is DllNotFoundException)
+                { continue; } // Identity unavailable: no new containment authority.
+                if (live != created) continue;
+                if (signals.Any(remote => remote.ProcessId == read.ProcessId &&
+                    (remote.SignalType == SignalType.NetworkC2 || remote.SignalType == SignalType.ReverseShell) &&
+                    remote.Tier == DetectionTier.Tier1Behavioral &&
+                    remote.Confidence >= ResponsePolicy.DefaultMinTier1Confidence &&
+                    remote.Timestamp <= now && now - remote.Timestamp <= CorrelationWindow &&
+                    remote.Timestamp.ToFileTimeUtc() >= created &&
+                    !ResponsePolicy.IsWeakObserveSeed(remote) && !ResponsePolicy.IsNonCorrelatingObserveNoise(remote) &&
+                    !(remote.Metadata != null && remote.Metadata.TryGetValue("ConsultantSignal", out var consultant) && consultant == "true")))
+                    return true;
+            }
+            return false;
         }
 
         internal static bool HasInjectedCredentialRead(IReadOnlyList<DetectionEvent> signals)

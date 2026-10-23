@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 3.3.8**
+**Version: 3.4.0**
 
 ### Independent NanoAV (3.3.8)
 
@@ -466,3 +466,7 @@ runtime snapshots must be distinguished; missing or partial telemetry cannot pro
 a clean-system verdict. Audit collection must not mutate configuration, terminate
 processes, fetch external intelligence or emit containment-authorizing signals. Local
 report download must disclose account/address/application-path exposure.
+
+### Installer, relay and secondary-volume coverage (3.4.0)
+
+A matched Python socket/shell command may use the existing authorized reverse-shell response. Credential-read correlation requires actual Kernel-File read provenance, fresh evidence, a verified live process creation time, and independent confirmed C2 or reverse-shell evidence. Plain relay connections, watcher changes and game/installer names alone must not authorize containment. The file scanner includes ready fixed/removable volumes and reconciles changing drive roots. File-verdict observations do not acquire kill authority. See [coverage and Windows acceptance checks](INSTALLER_RELAY_COVERAGE.md).

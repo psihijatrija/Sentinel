@@ -1,8 +1,10 @@
 # Sentinel documentation
 
-Current source version: **3.3.9** (`version.txt`). This package adds [automatic exploit maintenance](../tools/Sentinel.ExploitShield/README.md) alongside the independent NanoAV. Their online scope is separate from Core/Service/Agent. See the [changelog](CHANGELOG.md), [privacy review](PRIVACY_REVIEW_2026-10-21.md) and [engineering gates](ENGINEERING_GATES.md). Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
+Current source version: **3.4.0** (`version.txt`). This package adds [automatic exploit maintenance](../tools/Sentinel.ExploitShield/README.md) alongside the independent NanoAV. Their online scope is separate from Core/Service/Agent. See the [changelog](CHANGELOG.md), [privacy review](PRIVACY_REVIEW_2026-10-21.md) and [engineering gates](ENGINEERING_GATES.md). Historical release/review sections apply only to their stated versions; a source version does not establish installer publication or native Windows validation.
 
 ## Current guidance
+
+[Installer and relay coverage](INSTALLER_RELAY_COVERAGE.md): Python socket-shell signatures, credential-read corroboration, removable-drive scanning and Windows acceptance checks.
 
 [Automatic exploit protection](../tools/Sentinel.ExploitShield/README.md):
 online CVE/PoC collection, Windows Update applicability and automatic vendor fixes;

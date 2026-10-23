@@ -1111,3 +1111,7 @@ Host-wide upload spikes are compared with the previous baseline before learning 
 current sample. Spikes do not train the baseline. These observations remain Tier2,
 have no process attribution, and cannot authorize a response. Warmup and quiet
 low-volume HTTPS exfiltration remain limitations.
+
+## Installer and relay chains (3.4.0)
+
+`RawSocketRedirectRule` reuses the PowerShell decoded-code checks and adds `PythonSocketShellHeuristics` for a narrow inline socket-to-shell pattern. `BehavioralCorrelationEngine` accepts actual ETW credential-store reads plus confirmed C2/reverse-shell evidence only when the read creation time still identifies the live PID. Raw store-read observations cannot fall through to the broader session-theft chain. `FileVerdictScanner` covers ready fixed/removable roots, checks root membership every five seconds and rebuilds subscriptions/walks locally when roots change. No new monitor, content capture or online transport is added. [Limits and native acceptance](INSTALLER_RELAY_COVERAGE.md).

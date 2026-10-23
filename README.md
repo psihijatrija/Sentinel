@@ -20,7 +20,9 @@ Sentinel Core/Service/Agent operate offline: their online reputation, live intel
 **3.3.8 online exception:** the separately packaged [NanoAV module](docs/NANOAV.md) retains the supplied program's own online feeds, persistence and response engine. Its only source changes protect Sentinel; it does not follow Sentinel's response rules. Read its retained runtime limitations before relying on it.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.3.9 (single source of truth: `version.txt`)
+**Version:** 3.4.0 (single source of truth: `version.txt`)
+
+3.4.0 strengthens socket-shell and credential-theft correlation and extends local file scanning to removable drives. See [installer and relay coverage, limits and Windows checks](docs/INSTALLER_RELAY_COVERAGE.md).
 
 For collection status, known telemetry limits, and the Windows verification probe, see [monitor health](docs/monitor-health.md).
 
