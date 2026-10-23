@@ -871,6 +871,7 @@ namespace Sentinel.Core
             {
                 compositeEvent.Metadata["ProcessCreationTime"] = victimCreationTime.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 compositeEvent.Metadata["ContainmentScope"] = "InjectedVictim";
+                compositeEvent.AuthorizedResponse = ResponseAction.KillProcessTree;
             }
 
             if (tagCoercionToolkit)

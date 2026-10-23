@@ -7,8 +7,11 @@ using Xunit;
 
 namespace Sentinel.Tests
 {
+    [Collection("ResponsePolicy")]
     public sealed class CredentialReadTelemetryTests
     {
+        public CredentialReadTelemetryTests() => ResponsePolicy.ResetForTests();
+
         private const string Store = @"\Device\HarddiskVolume3\Users\alice\AppData\Local\Google\Chrome\User Data\Default\Login Data";
         private static readonly DateTime Now = new(2026, 10, 18, 12, 0, 0, DateTimeKind.Utc);
 
@@ -92,13 +95,17 @@ namespace Sentinel.Tests
         public void StoreScope_IncludesSessionsAndSecretsWithoutBroadCacheMatching(string path, bool expected)
             => Assert.Equal(expected, CredentialReadTracker.IsSensitivePath(path));
 
-        [Fact]
-        public async Task ActualReadRule_RequiresIndependentC2BeforeComposite()
+        [Theory]
+        [InlineData(true, true)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        public async Task ActualReadRule_RequiresIndependentC2BeforeComposite(bool identityAvailable, bool sameLifetime)
         {
             var tracker = new CredentialReadTracker();
             WithEvent(NamePayload(8, Store), 10, 0, 8, tracker.Observe);
             var path = WithEvent(ReadPayload(8, 1), 15, 1, 8, tracker.Observe);
-            var detection = new SensitiveStoreReadRule().Evaluate(new FusedTelemetryContext
+            var birth = DateTime.UtcNow.AddMinutes(-1).ToFileTimeUtc();
+            var detection = new SensitiveStoreReadRule(_ => identityAvailable ? birth : 0).Evaluate(new FusedTelemetryContext
             {
                 TriggeringEvent = new FileActivityTelemetry
                 {
@@ -111,7 +118,7 @@ namespace Sentinel.Tests
             Assert.Equal(DetectionTier.Tier2Indicator, detection!.Tier);
             Assert.Equal(ResponseAction.LogOnly, detection.AuthorizedResponse);
             Assert.Null(detection.Family);
-            var engine = new BehavioralCorrelationEngine();
+            var engine = new BehavioralCorrelationEngine(_ => null, _ => sameLifetime ? birth : birth + 1);
             DetectionEvent? composite = null;
             engine.Initialize(d => { composite = d; return Task.CompletedTask; });
             await engine.RegisterSignalAsync(detection);
@@ -135,8 +142,12 @@ namespace Sentinel.Tests
                 SignalType = SignalType.NetworkC2, Tier = DetectionTier.Tier1Behavioral,
                 Confidence = 0.95
             });
-            Assert.NotNull(composite);
-            Assert.True(composite!.KillAuthorized);
+            if (identityAvailable && sameLifetime)
+            {
+                Assert.NotNull(composite);
+                Assert.True(composite!.KillAuthorized);
+            }
+            else Assert.Null(composite);
         }
 
         private static byte[] ScriptPayload(string text, int number = 1, int total = 1)

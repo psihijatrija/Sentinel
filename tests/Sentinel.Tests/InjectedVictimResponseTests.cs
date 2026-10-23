@@ -35,7 +35,7 @@ namespace Sentinel.Tests
             RuleName = "Credential Theft: Unbacked PE + Store Read", ProcessId = 4242,
             Evidence = "[COMPOSITE] memory-inspected PE and lifetime-matched store read",
             Tier = DetectionTier.Tier1Behavioral, Confidence = 0.95,
-            AuthorizedResponse = ResponseAction.QuarantineAndKill, SignalType = SignalType.CredentialTheft,
+            AuthorizedResponse = ResponseAction.KillProcessTree, SignalType = SignalType.CredentialTheft,
             Metadata = new Dictionary<string, string>
             {
                 [ResponsePolicy.ChainConfirmedKey] = "true", [ResponsePolicy.TerminalOutcomeKey] = "Composite",

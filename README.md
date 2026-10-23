@@ -24,6 +24,11 @@ Sentinel Core/Service/Agent operate offline: their online reputation, live intel
 
 3.4.0 strengthens socket-shell and credential-theft correlation, extends local file scanning to removable drives, and adds bounded RX/private-PE inspection with lifetime-pinned victim containment. See [installer and relay coverage, limits and Windows checks](docs/INSTALLER_RELAY_COVERAGE.md). See also [DLL-loader and injected-payload coverage](docs/LOADER_PAYLOAD_COVERAGE.md).
 
+Sentinel targets standalone userland endpoint protection; another antivirus is optional.
+Current standalone antivirus gaps, implemented mechanisms and validation limits are listed
+in the [capability matrix](docs/CAPABILITY_MATRIX.md). This release does not establish full
+Defender or commercial-product parity.
+
 For collection status, known telemetry limits, and the Windows verification probe, see [monitor health](docs/monitor-health.md).
 
 Public PoC metadata and actively exploited vulnerability triage:

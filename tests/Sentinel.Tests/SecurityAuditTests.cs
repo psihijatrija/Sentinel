@@ -38,7 +38,7 @@ namespace Sentinel.Tests
         public void MissingSources_RemainUnknownInConsolidatedReport()
         {
             var report = new SecurityAuditService(new MissingSource()).Collect(DateTime.UtcNow, CancellationToken.None);
-            Assert.Equal(7, report.Hardening.Count);
+            Assert.Equal(10, report.Hardening.Count);
             Assert.All(report.Hardening, c => Assert.Equal("Unknown", c.State));
             Assert.Equal(4, report.History.Count);
             Assert.All(report.History, s => Assert.Equal("Unknown", s.State));

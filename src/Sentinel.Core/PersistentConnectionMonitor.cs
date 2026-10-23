@@ -30,21 +30,26 @@ namespace Sentinel.Core
     /// Note: this monitor is the general post-drop behavioral correlator for any long-lived
     /// endpoint (no domain is hardcoded; the retired forum.hr hosts block was removed in v2.7.6).
     /// </summary>
-    public sealed class PersistentConnectionMonitor : BackgroundService
+    public sealed class PersistentConnectionMonitor : BackgroundService, ISensorProgressSource
     {
+        public SensorProgress Progress { get; } = new(TimeSpan.FromMinutes(2))
+            { Scope = "IPv4/IPv6 TCP-table collection cycles with queryable process lifetimes; no packet/TLS inspection or relay-malware verdict." };
+
         private readonly DetectionEngine _detectionEngine;
         private readonly ILogger<PersistentConnectionMonitor> _logger;
         private readonly SignerTrustService? _signerTrust;
         private readonly ProcessAncestryCache? _ancestryCache;
+        private readonly Func<int, long> _readCreation;
+        private readonly Func<DateTime> _utcNow;
 
-        // Tracks established connections: key = "pid:remoteIp:remotePort", value = first-seen time
+        // Tracks established connections by PID, creation time and remote endpoint.
         private readonly ConcurrentDictionary<string, ConnectionState> _trackedConnections = new();
 
         // When a long-lived connection drops, record it here for post-drop behavior analysis
         private readonly ConcurrentDictionary<string, DroppedConnection> _droppedConnections = new();
 
         // Post-drop behavior: DNS bursts per process
-        private readonly ConcurrentDictionary<int, DnsBurstTracker> _dnsBursts = new();
+        private readonly ConcurrentDictionary<(int Pid, long Created), DnsBurstTracker> _dnsBursts = new();
 
         // Post-drop behavior: new connections per process after drop
         private readonly ConcurrentDictionary<int, int> _postDropNewConnections = new();
@@ -83,11 +88,26 @@ namespace Sentinel.Core
             uint ulAf, TCP_TABLE_CLASS tableClass, uint reserved);
 
         public PersistentConnectionMonitor(DetectionEngine de, ILogger<PersistentConnectionMonitor> l, SignerTrustService? signerTrust = null, ProcessAncestryCache? ancestryCache = null)
+            : this(de, l, WindowsProcessTreeOperations.GetCreationTime, signerTrust, ancestryCache) { }
+
+        internal PersistentConnectionMonitor(DetectionEngine de, ILogger<PersistentConnectionMonitor> l,
+            Func<int, long> readCreation, SignerTrustService? signerTrust = null, ProcessAncestryCache? ancestryCache = null,
+            Func<DateTime>? utcNow = null)
         {
             _detectionEngine = de;
             _logger = l;
             _signerTrust = signerTrust;
             _ancestryCache = ancestryCache;
+            _readCreation = readCreation;
+            _utcNow = utcNow ?? (() => DateTime.UtcNow);
+        }
+
+        private long CurrentCreation(int pid)
+        {
+            try { return _readCreation(pid); }
+            catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException ||
+                ex is System.ComponentModel.Win32Exception || ex is DllNotFoundException)
+            { _logger.LogDebug(ex, "[PersistentConnectionMonitor] Identity unavailable for PID {Pid}", pid); return 0; }
         }
 
         protected override async Task ExecuteAsync(CancellationToken ct)
@@ -103,10 +123,12 @@ namespace Sentinel.Core
                 {
                     ScanAndCorrelate();
                     PruneStaleEntries();
+                    Progress.Succeeded();
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
+                    Progress.Failed("TCP collection unavailable: " + ex.GetType().Name);
                     _logger.LogDebug(ex, "[PersistentConnectionMonitor] Scan error");
                 }
 
@@ -116,12 +138,17 @@ namespace Sentinel.Core
 
         private void ScanAndCorrelate()
         {
-            var currentConnections = GetEstablishedConnections();
+            TrackConnections(GetEstablishedConnections(), _utcNow());
+        }
+
+        internal void TrackConnections(List<ActiveConnection> currentConnections, DateTime now)
+        {
             var currentKeys = new HashSet<string>();
 
             foreach (var conn in currentConnections)
             {
-                var key = $"{conn.Pid}:{conn.RemoteIp}:{conn.RemotePort}";
+                if (conn.Pid <= 4 || conn.Created <= 0 || conn.Created > now.ToFileTimeUtc()) continue;
+                var key = $"{conn.Pid}:{conn.Created}:{conn.RemoteIp}:{conn.RemotePort}";
                 currentKeys.Add(key);
 
                 // Track new connections
@@ -129,17 +156,17 @@ namespace Sentinel.Core
                 {
                     _trackedConnections[key] = new ConnectionState
                     {
-                        Pid = conn.Pid,
+                        Pid = conn.Pid, Created = conn.Created,
                         ProcessName = conn.ProcessName,
                         RemoteIp = conn.RemoteIp,
                         RemotePort = conn.RemotePort,
-                        FirstSeen = DateTime.UtcNow,
-                        LastSeen = DateTime.UtcNow
+                        FirstSeen = now,
+                        LastSeen = now
                     };
                 }
                 else
                 {
-                    _trackedConnections[key] = _trackedConnections[key] with { LastSeen = DateTime.UtcNow };
+                    _trackedConnections[key] = _trackedConnections[key] with { LastSeen = now };
                 }
             }
 
@@ -156,7 +183,7 @@ namespace Sentinel.Core
                         _droppedConnections[key] = new DroppedConnection
                         {
                             State = state,
-                            DroppedAt = DateTime.UtcNow,
+                            DroppedAt = now,
                             Duration = duration
                         };
 
@@ -173,12 +200,13 @@ namespace Sentinel.Core
 
         private void CheckPostDropBehavior(List<ActiveConnection> currentConnections)
         {
-            var now = DateTime.UtcNow;
+            var now = _utcNow();
             var expiredDrops = new List<string>();
 
             foreach (var (key, drop) in _droppedConnections)
             {
-                if (now - drop.DroppedAt > PostDropWindow)
+                if (now < drop.DroppedAt || now - drop.DroppedAt > PostDropWindow ||
+                    drop.State.Created <= 0 || CurrentCreation(drop.State.Pid) != drop.State.Created)
                 {
                     expiredDrops.Add(key);
                     continue;
@@ -186,13 +214,13 @@ namespace Sentinel.Core
 
                 // Check if the same process is now rapidly connecting to new endpoints
                 var newConnFromSamePid = currentConnections
-                    .Where(c => c.Pid == drop.State.Pid &&
+                    .Where(c => c.Pid == drop.State.Pid && c.Created == drop.State.Created &&
                                 $"{c.RemoteIp}:{c.RemotePort}" != $"{drop.State.RemoteIp}:{drop.State.RemotePort}")
                     .ToList();
 
                 if (newConnFromSamePid.Count >= 3)
                 {
-                    var dedupKey = $"failover:{drop.State.Pid}:{drop.State.RemoteIp}";
+                    var dedupKey = $"failover:{drop.State.Pid}:{drop.State.Created}:{drop.State.RemoteIp}";
                     if (!_alertDedup.ContainsKey(dedupKey))
                     {
                         _alertDedup[dedupKey] = now;
@@ -224,7 +252,8 @@ namespace Sentinel.Core
                             SignalType = SignalType.NetworkC2,
                             Metadata = new Dictionary<string, string>
                             {
-                                { "OriginalTarget", $"{drop.State.RemoteIp}:{drop.State.RemotePort}" },
+                                { "ProcessCreationTime", drop.State.Created.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                            { "OriginalTarget", $"{drop.State.RemoteIp}:{drop.State.RemotePort}" },
                                 { "ConnectionDuration", $"{drop.Duration.TotalSeconds:F0}s" },
                                 { "FailoverTargets", targets },
                                 { "FailoverCount", newConnFromSamePid.Count.ToString() }
@@ -299,7 +328,8 @@ namespace Sentinel.Core
                                 Metadata = new Dictionary<string, string>
                                 {
                                     { "WeakObserveSeed", "true" },
-                                    { "OriginalTarget", $"{drop.State.RemoteIp}:{drop.State.RemotePort}" },
+                                    { "ProcessCreationTime", drop.State.Created.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                            { "OriginalTarget", $"{drop.State.RemoteIp}:{drop.State.RemotePort}" },
                                     { "ConnectionDuration", $"{drop.Duration.TotalSeconds:F0}s" },
                                     { "SpawnedChildren", childNames }
                                 }
@@ -326,18 +356,16 @@ namespace Sentinel.Core
         {
             // Check if this PID has a recently dropped connection
             var relevantDrop = _droppedConnections.Values
-                .Where(d => d.State.Pid == pid &&
-                            DateTime.UtcNow - d.DroppedAt < PostDropWindow)
+                .Where(d => d.State.Pid == pid && d.State.Created > 0 &&
+                            CurrentCreation(pid) == d.State.Created && _utcNow() >= d.DroppedAt &&
+                            _utcNow() - d.DroppedAt < PostDropWindow)
                 .Select(d => (DroppedConnection?)d)
                 .FirstOrDefault();
 
             if (relevantDrop == null) return;
             var drop = relevantDrop.Value;
 
-            if (!_dnsBursts.ContainsKey(pid))
-                _dnsBursts[pid] = new DnsBurstTracker();
-
-            var tracker = _dnsBursts[pid];
+            var tracker = _dnsBursts.GetOrAdd((pid, drop.State.Created), _ => new DnsBurstTracker());
             tracker.RecordQuery(domain);
 
             // If we see 10+ queries within the post-drop window, that's a reconnect burst
@@ -347,7 +375,7 @@ namespace Sentinel.Core
                 var dedupKey = $"dnsburst:{pid}:{drop.DroppedAt.Ticks}";
                 if (!_alertDedup.ContainsKey(dedupKey))
                 {
-                    _alertDedup[dedupKey] = DateTime.UtcNow;
+                    _alertDedup[dedupKey] = _utcNow();
                     var topDomains = string.Join(", ", tracker.GetTopDomains(5));
 
                     _ = _detectionEngine.EmitAsync(new DetectionEvent
@@ -357,17 +385,18 @@ namespace Sentinel.Core
                                    $"{drop.State.RemoteIp}:{drop.State.RemotePort} and issued " +
                                    $"{tracker.QueryCount} DNS queries within {PostDropWindow.TotalSeconds}s. " +
                                    $"Top domains: {topDomains}",
-                        Reasoning = "After a long-held connection was severed, the process immediately began flooding DNS " +
-                                    "queries - attempting to re-resolve the C2 host or find alternative relay domains. " +
-                                    "Legitimate software retries gracefully with backoff. Malware hammers DNS immediately.",
-                        Confidence = _signerTrust != null ? _signerTrust.AdjustConfidence(0.88, pid) : 0.88,
-                        Tier = DetectionTier.Tier1Behavioral,
-                        AuthorizedResponse = ResponseAction.KillProcessTree,
+                        Reasoning = "A DNS burst followed a long-held connection drop. Legitimate software can also retry rapidly; " +
+                                    "this observation does not establish C2 or authorize containment.",
+                        Confidence = 0.55,
+                        Tier = DetectionTier.Tier2Indicator,
+                        AuthorizedResponse = ResponseAction.LogOnly,
                         ProcessName = drop.State.ProcessName,
                         ProcessId = pid,
                         SignalType = SignalType.SecurityEvasion,
                         Metadata = new Dictionary<string, string>
                         {
+                            { "WeakObserveSeed", "true" },
+                            { "ProcessCreationTime", drop.State.Created.ToString(System.Globalization.CultureInfo.InvariantCulture) },
                             { "OriginalTarget", $"{drop.State.RemoteIp}:{drop.State.RemotePort}" },
                             { "ConnectionDuration", $"{drop.Duration.TotalSeconds:F0}s" },
                             { "DnsQueryCount", tracker.QueryCount.ToString() },
@@ -385,7 +414,8 @@ namespace Sentinel.Core
         public bool HasRecentDrop(int pid)
         {
             return _droppedConnections.Values.Any(d =>
-                d.State.Pid == pid && DateTime.UtcNow - d.DroppedAt < PostDropWindow);
+                d.State.Pid == pid && d.State.Created > 0 && CurrentCreation(pid) == d.State.Created &&
+                _utcNow() >= d.DroppedAt && _utcNow() - d.DroppedAt < PostDropWindow);
         }
 
         private List<ActiveConnection> GetEstablishedConnections()
@@ -394,16 +424,18 @@ namespace Sentinel.Core
 
             int size = 0;
             uint ret = GetExtendedTcpTable(IntPtr.Zero, ref size, true, 2, TCP_TABLE_CLASS.OWNER_PID_ALL, 0);
-            if (ret != 122) return results;
+            if (ret != 122 || size < 4 || size > 16 * 1024 * 1024)
+                throw new System.IO.IOException("IPv4 TCP table sizing unavailable or outside collection bounds.");
 
             IntPtr buffer = Marshal.AllocHGlobal(size);
             try
             {
                 ret = GetExtendedTcpTable(buffer, ref size, true, 2, TCP_TABLE_CLASS.OWNER_PID_ALL, 0);
-                if (ret != 0) return results;
+                if (ret != 0) throw new System.ComponentModel.Win32Exception((int)ret);
 
                 int numEntries = Marshal.ReadInt32(buffer);
                 int structSize = Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
+                if (numEntries < 0 || numEntries > (size - 4) / structSize) throw new System.IO.IOException("Invalid IPv4 TCP table row count.");
                 int myPid = System.Net48Environment.ProcessId;
 
                 for (int i = 0; i < numEntries; i++)
@@ -428,9 +460,11 @@ namespace Sentinel.Core
                     }
                     catch { }
 
+                    long created = CurrentCreation((int)row.owningPid);
+                    if (created <= 0) continue;
                     results.Add(new ActiveConnection
                     {
-                        Pid = (int)row.owningPid,
+                        Pid = (int)row.owningPid, Created = created,
                         ProcessName = processName,
                         RemoteIp = remoteIp,
                         RemotePort = remotePort
@@ -465,14 +499,16 @@ namespace Sentinel.Core
         {
             int size = 0;
             uint ret = GetExtendedTcpTable(IntPtr.Zero, ref size, true, 23, TCP_TABLE_CLASS.OWNER_PID_ALL, 0);
-            if (ret != 122 || size <= 0) return;
+            if (ret != 122) throw new System.ComponentModel.Win32Exception((int)ret);
+            if (size < 4 || size > 16 * 1024 * 1024) throw new System.IO.IOException("Invalid IPv6 TCP table size.");
             IntPtr buffer = Marshal.AllocHGlobal(size);
             try
             {
                 ret = GetExtendedTcpTable(buffer, ref size, true, 23, TCP_TABLE_CLASS.OWNER_PID_ALL, 0);
-                if (ret != 0) return;
+                if (ret != 0) throw new System.ComponentModel.Win32Exception((int)ret);
                 int numEntries = Marshal.ReadInt32(buffer);
                 int structSize = Marshal.SizeOf<MIB_TCP6ROW_OWNER_PID>();
+                if (numEntries < 0 || numEntries > (size - 4) / structSize) throw new System.IO.IOException("Invalid IPv6 TCP table row count.");
                 int myPid = System.Net48Environment.ProcessId;
                 for (int i = 0; i < numEntries; i++)
                 {
@@ -492,22 +528,23 @@ namespace Sentinel.Core
                         processName = p.ProcessName;
                     }
                     catch { }
+                    long created = CurrentCreation((int)row.owningPid);
+                    if (created <= 0) continue;
                     results.Add(new ActiveConnection
                     {
-                        Pid = (int)row.owningPid,
+                        Pid = (int)row.owningPid, Created = created,
                         ProcessName = processName,
                         RemoteIp = remoteIp,
                         RemotePort = remotePort
                     });
                 }
             }
-            catch { }
             finally { Marshal.FreeHGlobal(buffer); }
         }
 
         private void PruneStaleEntries()
         {
-            var now = DateTime.UtcNow;
+            var now = _utcNow();
 
             // Prune alert dedup cache (1 hour retention)
             var staleAlerts = _alertDedup.Where(kv => now - kv.Value > TimeSpan.FromHours(1)).Select(kv => kv.Key).ToList();
@@ -527,6 +564,7 @@ namespace Sentinel.Core
         private record struct ConnectionState
         {
             public int Pid;
+            public long Created;
             public string ProcessName;
             public string RemoteIp;
             public int RemotePort;
@@ -541,9 +579,10 @@ namespace Sentinel.Core
             public TimeSpan Duration;
         }
 
-        private struct ActiveConnection
+        internal struct ActiveConnection
         {
             public int Pid;
+            public long Created;
             public string ProcessName;
             public string RemoteIp;
             public int RemotePort;

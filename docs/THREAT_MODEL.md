@@ -273,7 +273,7 @@ Composites: `LPE Campaign Scaffold`, `Initial Access Execution Chain`, `Persiste
 ### Audience (v2.0.8+)
 
 - **Gamers / creators:** Always-on hardening; game and anti-cheat paths are not reputation-kill fuel; memory handles skipped on known game trees. Real terminal chains (C2/exfil/token/cred-dump/BYOVD) still authorize response.
-- **High-profile targets:** Dual audit trail + sealed incident packs. Userland limits still apply: local admin / novel kernel implants can win. Pair with Defender, Secure Boot, HVCI and operator-controlled independent/offline evidence copies; no endpoint proxy connection remains.
+- **High-profile targets:** Dual audit trail + sealed incident packs. Userland limits still apply: local admin / novel kernel implants can win. Use supported OS hardening (Secure Boot/HVCI) and operator-controlled independent/offline evidence copies; another antivirus is optional; no endpoint proxy connection remains.
 - **Honest battle stance:** Sentinel is meant to fight real operators on real desktops - not to market "unhackable."
 
 ---
@@ -831,7 +831,7 @@ Hard-to-bypass detections (require kernel access to evade):
 1. **Behavioral over static** - Detect what processes DO, not what they ARE
 2. **No security theater** - If it doesn't work against a competent attacker, document limitations
 3. **Assume the attacker reads the code** - No security-by-obscurity
-4. **Layered defense** - Sentinel is ONE layer alongside Defender, not a replacement
+4. **Standalone target** - Sentinel must not assume another antivirus is present. Current EPP gaps remain explicit in [the capability matrix](CAPABILITY_MATRIX.md); standalone parity is not yet established
 5. **Kill only on corroboration** - Multiple Tier2 signals correlating produce composite kills. Single signals never kill independently (except self-protection)
 6. **Honest documentation** - State what works and what doesn't
 
@@ -920,3 +920,22 @@ Installer/game branding and relay names are attacker-controlled context, not mal
 ### DLL-loader target inspection (3.4.0 follow-up)
 
 An attacker may load a patched adjacent DLL into a legitimate host and place a PE payload into another process's private RX memory. Recent remote-API targets are now eligible for bounded PE inspection even when a browser-labelled caller's API observation is suppressed. Payload inspection remains observational until a lifetime-matched actual credential-store read corroborates it. The response preserves an injected host's backing file, parent and environment while verifying victim-tree termination against the recorded creation time. This does not prove which DLL supplied the payload, cover MEM_IMAGE patching/header erasure, or establish campaign-specific protection. [Coverage, native fixtures and limits](LOADER_PAYLOAD_COVERAGE.md).
+
+
+## Standalone scope and attribution hardening (3.4.0)
+
+Sentinel targets standalone protection within userland; Defender runtime/ASR integration
+is optional and cannot be counted as Sentinel-owned detection. Credential Guard chiefly
+protects domain secrets, not local/personal sign-in passwords or browser cookies. An
+inactive Credential Guard is contextual, not a universal consumer protection failure.
+VBS/CG/HVCI runtime states and verified-image LSASS process protection are distinct from
+configuration; vulnerable-driver blocklist configuration is not runtime enforcement proof.
+
+TCP follow-up state and DNS-burst counters are bound to PID plus creation time; unknown
+identity cannot bridge histories. Poll snapshots still cannot prove socket continuity.
+Run-key cleanup requires a direct executable match to a verified quarantined file, exact
+value/kind recheck and absence read-back. References in arguments and changed values are
+preserved. Registry deletion has a residual cross-process race: Windows exposes no atomic
+compare-and-delete here. Cleanup covers the current HKLM Run/RunOnce view, not every
+persistence mechanism. Injected-victim composites request process containment only, so
+verified exits do not require or imply quarantine of the legitimate host file.

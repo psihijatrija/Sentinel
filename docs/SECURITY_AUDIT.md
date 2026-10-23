@@ -1,4 +1,4 @@
-# Read-only security audit (3.3.1)
+# Read-only security audit (3.4.0)
 
 Run **Full Scan** in the authenticated local dashboard. The Security audit panel adds
 hardening read-back and a six-hour activity report to existing process, persistence,
@@ -16,19 +16,42 @@ cookies, delete network shortcuts or change security settings.
 - **Configured**: an explicitly readable DWORD matches the baseline. This is registry
   read-back, not proof of effective enforcement. Policy refresh/reboot, enterprise policy,
   platform support and other settings can affect actual protection.
-- **ObservedActive**: the local runtime WMI provider reported an active state at collection
+- **ObservedActive**: the local runtime provider or verified process-handle query reported an active state at collection
   time. This is a snapshot, not continuous assurance. VBS running does not establish that
   Credential Guard or every VBS feature is running.
 - **NeedsReview**: an explicit setting differs or a supported runtime snapshot reports an
   inactive state. This does not prove compromise, and no automatic repair is performed.
+- **ConfiguredNotRunning**: the feature appears in configured Device Guard services but
+  not in the running services. A reboot or hardware/policy prerequisites may apply;
+  the cause is not independently established.
+- **ContextDependent**: Credential Guard is not reported active or configured. Its
+  priority depends on domain credential use; this is not a universal consumer failure.
+- **Unsupported**: the Device Guard WMI class/namespace is not available on this Windows
+  installation. This does not establish that a security feature is enabled or disabled.
 - **Unknown**: missing settings, access failures, unavailable providers or unsupported types.
   Missing values are not interpreted as disabled: current Windows defaults can be secure.
 
 Configuration checks cover LSASS PPL, WDigest plaintext caching, PowerShell script-block
-logging, required SMB client/server signing and SMB1 server configuration. Local Defender
-service/antivirus/real-time status and VBS runtime status are queried through optional WMI
-providers with bounded enumeration timeouts. Missing providers remain Unknown, including
-on custom Windows installations. There are no remote queries or outbound probes.
+logging, required SMB client/server signing, SMB1 server configuration, Credential Guard,
+Memory Integrity and the vulnerable-driver blocklist. Blocklist configuration does not
+prove that any particular driver load will be prevented.
+
+Runtime Device Guard checks inspect VBS status and individual configured/running service
+IDs. VBS running does not imply CG or HVCI is running; malformed or contradictory provider
+values remain Unknown. LSASS runtime protection uses a query-only handle, verifies the
+system image path, and reads process protection status without reading LSASS memory.
+An unavailable process handle remains Unknown; registry RunAsPPL is separate configuration.
+
+Credential Guard chiefly protects domain authentication secrets. It does **not** protect
+local-account/personal Microsoft-account sign-in passwords, browser cookies or saved
+browser passwords. Inactive CG is contextual rather than a generic missing consumer
+protection alert. Memory Integrity and LSASS runtime gaps remain separate observations.
+
+Defender service/antivirus/real-time status is queried only as optional integration context.
+Sentinel targets standalone operation; Defender's ASR and antivirus capabilities are not
+credited to Sentinel itself. Missing providers remain explicit, including on custom Windows
+installations. Runtime WMI queries have bounded enumeration timeouts. There are no remote
+queries or outbound probes in this audit.
 
 ## History coverage
 
@@ -64,9 +87,10 @@ for Windows sharing/lock violations. A Windows-only regression holds an exclusiv
 before releasing it. Parent/child/grandchild termination and unrelated-process survival assertions
 are preserved. Live Windows execution must confirm the reported CI failure is resolved.
 
-Local release checks: full .NET SDK 10.0.402 Release cross-build passed with zero
-warnings/errors. A temporary .NET 10 host ran 59 production-assembly regressions,
-including 23 new audit cases; all passed without skips. Dashboard checks: 22 passed.
-Standalone Worker checks: 8 passed. Windows Framework execution, live WMI/Event Log/
-registry collection and the new exclusive-writer/process-tree fixtures were not run
-on this Linux host and require Windows CI.
+3.4.0 adds pure tests for individual feature states, strict provider types, contextual
+Credential Guard scope, and matching dashboard labels. Native CI exercises the real WMI
+and process-query providers without requiring them to report active protection: unavailable
+or unsupported is a valid, disclosed state, not a passing protection claim. Linux cross-build
+and portable test results are listed in [the changelog](CHANGELOG.md); native results require
+Windows CI. The native endpoint fixture also checks real owned-process containment and
+temporary Run-value cleanup independently of the read-only audit.

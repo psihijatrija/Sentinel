@@ -1005,12 +1005,12 @@ function renderSecurityAudit(report) {{
     var history = report.History || report.history || [];
     var html = '<p>' + esc(report.Scope || report.scope || 'Read-only observations; coverage may be incomplete.') + '</p>';
     html += '<p>Window: ' + esc(report.WindowStartUtc || report.windowStartUtc || 'Unknown') + ' to ' + esc(report.WindowEndUtc || report.windowEndUtc || 'Unknown') + '</p>';
-    html += '<h4>Hardening configuration</h4>';
+    html += '<h4>Hardening configuration and runtime</h4>';
     if (!checks.length) html += '<p>Unknown: no hardening checks returned.</p>';
     for (var i = 0; i < checks.length; i++) {{
         var check = checks[i];
         var state = check.State || check.state || 'Unknown';
-        var label = state === 'Configured' ? 'Configuration matches baseline' : state === 'ObservedActive' ? 'Active at collection time' : state === 'NeedsReview' ? 'Needs review' : 'Unknown';
+        var label = state === 'Configured' ? 'Configuration matches baseline' : state === 'ObservedActive' ? 'Active at collection time' : state === 'NeedsReview' ? 'Needs review' : state === 'ContextDependent' ? 'Depends on domain credential use' : state === 'ConfiguredNotRunning' ? 'Configured, not running' : state === 'Unsupported' ? 'Not supported by this Windows provider' : 'Unknown';
         html += '<div class=""finding""><div class=""finding-body""><div class=""finding-title"">' + esc(check.Name || check.name) + ': ' + esc(label) + '</div><div class=""finding-desc"">' + esc(check.Detail || check.detail) + '</div></div></div>';
     }}
     html += '<h4>Recent activity</h4>';

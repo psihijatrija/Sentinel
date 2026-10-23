@@ -305,3 +305,19 @@ test('late status replies cannot erase a newer collector failure', () => {
   pending[0].callback(active);
   assert.equal(elements['ov-status'].textContent, 'Needs attention');
 });
+
+
+test('audit distinguishes contextual, configured-inactive and unsupported protection', () => {
+  const { context, elements } = auditContext();
+  context.renderSecurityAudit({ Hardening: [
+    { Name: 'Credential Guard', State: 'ContextDependent', Detail: 'Domain secrets; excludes browser cookies.' },
+    { Name: 'Memory Integrity', State: 'ConfiguredNotRunning', Detail: 'Not active.' },
+    { Name: 'Provider', State: 'Unsupported', Detail: 'Unavailable.' }
+  ] });
+  const html = elements['security-audit'].innerHTML;
+  assert.match(html, /Credential Guard: Depends on domain credential use/);
+  assert.match(html, /Memory Integrity: Configured, not running/);
+  assert.match(html, /Provider: Not supported by this Windows provider/);
+  assert.match(html, /excludes browser cookies/);
+  assert.doesNotMatch(html, /Active at collection time/);
+});

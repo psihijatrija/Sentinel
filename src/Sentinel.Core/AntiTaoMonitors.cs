@@ -25,6 +25,7 @@ namespace Sentinel.Core
         private readonly DetectionEngine _detectionEngine;
         private readonly SentinelConfig _config;
         private readonly ILogger<HardwareSecurityGuard> _logger;
+        private readonly ISecurityAuditSource? _auditSource;
 
         // State-change dedup: these are static posture facts (BitLocker, Secure Boot, etc.) that
         // change rarely. Re-emitting them every 60s bloats the event log with thousands of
@@ -35,9 +36,10 @@ namespace Sentinel.Core
         // false/absent = currently good (or not yet observed)
         private readonly System.Collections.Generic.Dictionary<string, bool> _lastBadState = new();
 
-        public HardwareSecurityGuard(DetectionEngine de, SentinelConfig config, ILogger<HardwareSecurityGuard> l)
+        public HardwareSecurityGuard(DetectionEngine de, SentinelConfig config, ILogger<HardwareSecurityGuard> l,
+            ISecurityAuditSource? auditSource = null)
         {
-            _detectionEngine = de; _config = config; _logger = l;
+            _detectionEngine = de; _config = config; _logger = l; _auditSource = auditSource;
         }
 
         /// <summary>
@@ -74,7 +76,7 @@ namespace Sentinel.Core
                     await CheckIommuAsync(ct);
                     await CheckSecureBootAsync();
                     await CheckBitLockerAsync(ct);
-                    await CheckCredentialGuardAsync();
+                    await CheckProtectionPostureAsync(ct);
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex) { _logger.LogDebug(ex, "[HardwareSecurityGuard] Error"); }
@@ -98,7 +100,7 @@ namespace Sentinel.Core
                 bool hypervisorAuto = false;
                 try
                 {
-                    var psi = new ProcessStartInfo("bcdedit.exe", "/enum")
+                    var psi = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "bcdedit.exe"), "/enum")
                     {
                         CreateNoWindow = true, UseShellExecute = false,
                         RedirectStandardOutput = true
@@ -118,11 +120,10 @@ namespace Sentinel.Core
                 {
                     await _detectionEngine.EmitAsync(new DetectionEvent
                     {
-                        RuleName = "Hardware Security: IOMMU/VT-d Disabled",
+                        RuleName = "Hardware Security: Virtualization Configuration Needs Review",
                         Evidence = $"VBS registry={vbsEnabled}, hypervisorlaunchtype Auto={hypervisorAuto}",
-                        Reasoning = "Both VBS (Virtualization-Based Security) and Hyper-V hypervisor are disabled. " +
-                                    "IOMMU/VT-d protection is inactive, leaving the system vulnerable to DMA attacks " +
-                                    "via Thunderbolt/PCIe and firmware-level memory manipulation.",
+                        Reasoning = "These configuration observations do not establish runtime VBS, IOMMU/VT-d, DMA or firmware protection. " +
+                                    "Missing or unreadable settings may reflect defaults or unavailable data; review actual Windows security status.",
                         Confidence = 0.70, Tier = DetectionTier.Tier2Indicator,
                         AuthorizedResponse = ResponseAction.LogOnly,
                         ProcessName = "SYSTEM", ProcessId = 0
@@ -218,48 +219,33 @@ namespace Sentinel.Core
             catch (Exception ex) { _logger.LogDebug(ex, "[HardwareSecurityGuard] BitLocker check error"); }
         }
 
-        private async Task CheckCredentialGuardAsync()
+        private async Task CheckProtectionPostureAsync(CancellationToken ct)
         {
-            try
+            ct.ThrowIfCancellationRequested();
+            if (_auditSource == null)
             {
-                bool credGuardActive = false;
-
-                // Check if LsaIso.exe is running (Credential Guard's isolated LSA process)
-                var lsaIso = Process.GetProcessesByName("LsaIso");
-                credGuardActive = lsaIso.Length > 0;
-                foreach (var p in lsaIso) p.Dispose();
-
-                if (!credGuardActive)
-                {
-                    // Check registry for VBS Credential Guard configuration
-                    try
-                    {
-                        using var key = Registry.LocalMachine.OpenSubKey(
-                            @"SYSTEM\CurrentControlSet\Control\Lsa");
-                        var val = key?.GetValue("LsaCfgFlags");
-                        if (val is int flags && flags > 0) credGuardActive = true;
-                    }
-                    catch { }
-                }
-
-                if (ShouldEmit("CredentialGuard", !credGuardActive))
-                {
-                    await _detectionEngine.EmitAsync(new DetectionEvent
-                    {
-                        RuleName = "Hardware Security: Credential Guard Not Active",
-                        Evidence = "LsaIso.exe not running and LsaCfgFlags not set. " +
-                                   "Credential Guard (VBS-based LSA isolation) is not protecting credentials.",
-                        Reasoning = "Without Credential Guard, NTLM hashes, Kerberos tickets, and domain credentials " +
-                                    "reside in standard LSASS memory and can be extracted by tools like Mimikatz. " +
-                                    "Enabling Credential Guard isolates them in a VBS secure enclave.",
-                        Confidence = 0.45, Tier = DetectionTier.Tier2Indicator,
-                        AuthorizedResponse = ResponseAction.LogOnly,
-                        ProcessName = "SYSTEM", ProcessId = 0
-                    });
-                }
+                _logger.LogDebug("[HardwareSecurityGuard] Runtime protection source unavailable; enforcement is unknown");
+                return;
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "[HardwareSecurityGuard] CredentialGuard check error"); }
+            foreach (var check in _auditSource.ReadRuntimeChecks(ct).Where(c =>
+                c.Name == ProtectionPosture.MemoryIntegrity ||
+                c.Name == ProtectionPosture.LsassProtection))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!ShouldEmit(check.Name, check.State != "ObservedActive")) continue;
+                await _detectionEngine.EmitAsync(new DetectionEvent
+                {
+                    RuleName = "Hardware Security: " + check.Name + " " + check.State,
+                    Evidence = check.Observed,
+                    Reasoning = check.Detail + " Read-only posture observation; no response authority.",
+                    Confidence = 0.45, Tier = DetectionTier.Tier2Indicator,
+                    AuthorizedResponse = ResponseAction.LogOnly, SignalType = SignalType.Generic,
+                    ProcessName = "SYSTEM", ProcessId = 0,
+                    Metadata = new Dictionary<string, string> { ["WeakObserveSeed"] = "true", ["ProtectionState"] = check.State }
+                }).ConfigureAwait(false);
+            }
         }
+
     }
 
     // 

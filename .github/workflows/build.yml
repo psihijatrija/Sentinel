@@ -151,3 +151,31 @@ jobs:
     - name: Exercise native WUA access and protected SYSTEM task lifecycle
       shell: powershell
       run: ./tools/validation/WindowsExploitShieldSmoke.ps1
+
+  endpoint-protection-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Build endpoint containment and attribution fixtures
+      run: dotnet build tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release -warnaserror
+    - name: Verify native containment, registry attribution and runtime providers
+      shell: pwsh
+      run: |
+        dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~EndpointProtectionWindowsTests|FullyQualifiedName~LoaderPayloadWindowsTests' --logger 'trx;LogFileName=endpoint-native.trx' --results-directory TestResults
+        if ($LASTEXITCODE -ne 0) { throw 'Native endpoint protection tests failed' }
+        [xml]$results = Get-Content TestResults/endpoint-native.trx
+        $counters = $results.TestRun.ResultSummary.Counters
+        if ([int]$counters.executed -ne 5 -or [int]$counters.passed -ne 5 -or [int]$counters.failed -ne 0 -or [int]$counters.notExecuted -ne 0) {
+          throw 'All five native endpoint fixtures must execute and pass; skips are not validation'
+        }
+    - name: Upload endpoint validation results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: endpoint-native-results
+        path: TestResults/*.trx
+        if-no-files-found: ignore

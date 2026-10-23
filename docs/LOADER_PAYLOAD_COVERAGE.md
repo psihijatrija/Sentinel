@@ -72,8 +72,11 @@ unchanged. No new desktop-content collection or outbound reporting is added.
 
 Linux cross-builds and portable tests do not execute the Windows fixtures or
 prove installed ETW availability, cross-process read permissions, or real attack
-containment. Native Framework tests and the existing isolated process-termination
-fixture remain required on Windows before deployment.
+containment. Native Framework execution remains required before deployment. The dedicated endpoint
+CI gate additionally runs `EndpointProtectionWindowsTests`: synthetic inert evidence
+passes through the production correlator and response engine to terminate an owned
+harmless sleeper, verify its exit receipt, and preserve an unrelated process. This tests
+response plumbing, not live credential theft or a malware sample.
 
 ## Remaining limits
 
@@ -86,7 +89,7 @@ Normal application-directory DLL policy is unchanged. A legitimate private PE
 loader combined with a credential-store read can resemble the chain; the evidence
 does not infer operator intent or prove successful theft.
 
-There is no new persistence remover, universal loader detector, account/session
+There is no universal persistence remover, loader detector, account/session
 revocation, or guarantee that first execution/theft is prevented. The target's
 caller/parent is not automatically blamed. Persistence cleanup still requires
 separate attributed evidence and its existing action-specific authorization.

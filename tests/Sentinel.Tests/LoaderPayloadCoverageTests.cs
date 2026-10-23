@@ -149,6 +149,7 @@ namespace Sentinel.Tests
             var result = Assert.Single(results);
             ResponsePolicy.EnforceDispatchPolicy(result);
             Assert.True(result.KillAuthorized);
+            Assert.Equal(ResponseAction.KillProcessTree, result.AuthorizedResponse);
             Assert.Equal(4242, result.ProcessId);
             Assert.Equal(created.ToString(), result.Metadata!["ProcessCreationTime"]);
             Assert.Equal("InjectedVictim", result.Metadata["ContainmentScope"]);

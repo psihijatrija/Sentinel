@@ -45,8 +45,9 @@ namespace Sentinel.Core
         public string ValueName { get; }
         public int Expected { get; }
         public bool AcceptTwo { get; }
-        public AuditPolicy(string name, string key, string value, int expected, bool acceptTwo = false)
-        { Name = name; Key = key; ValueName = value; Expected = expected; AcceptTwo = acceptTwo; }
+        public string Scope { get; }
+        public AuditPolicy(string name, string key, string value, int expected, bool acceptTwo = false, string scope = "")
+        { Name = name; Key = key; ValueName = value; Expected = expected; AcceptTwo = acceptTwo; Scope = scope; }
     }
 
     public sealed class AuditRegistryReading
@@ -105,26 +106,38 @@ namespace Sentinel.Core
         internal static HardeningAuditCheck Evaluate(AuditPolicy policy, AuditRegistryReading reading)
         {
             var check = new HardeningAuditCheck { Name = policy.Name, Detail = reading.Detail };
+            HardeningAuditCheck Finish()
+            {
+                if (!string.IsNullOrEmpty(policy.Scope))
+                {
+                    check.Detail += " " + policy.Scope;
+                    if (check.State == "NeedsReview") check.State = "ContextDependent";
+                }
+                return check;
+            }
             if (!reading.Available || reading.Value == null)
             {
                 check.Detail = string.IsNullOrEmpty(reading.Detail) ? "No readable explicit setting; defaults and effective enforcement are unknown." : reading.Detail;
-                return check;
+                return Finish();
             }
             // Do not coerce strings, QWORDs or malformed registry types into DWORD policy.
             if (reading.Value is not int value)
-            { check.Detail = "Unexpected registry value type; configuration is unknown."; return check; }
+            { check.Detail = "Unexpected registry value type; configuration is unknown."; return Finish(); }
             check.Observed = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
             bool matches = value == policy.Expected || (policy.AcceptTwo && value == 2);
             check.State = matches ? "Configured" : "NeedsReview";
             check.Detail = matches
                 ? "Explicit registry configuration matches the baseline. Runtime enforcement is not verified; restart or policy refresh may be required."
                 : "Explicit registry configuration differs from the baseline; review OS defaults and enterprise policy before changing it.";
-            return check;
+            return Finish();
         }
 
         private static IEnumerable<AuditPolicy> Policies()
         {
             yield return new AuditPolicy("LSASS protected-process configuration", @"SYSTEM\CurrentControlSet\Control\Lsa", "RunAsPPL", 1, true);
+            yield return new AuditPolicy("Credential Guard configuration", @"SYSTEM\CurrentControlSet\Control\Lsa", "LsaCfgFlags", 1, true, ProtectionPosture.CredentialScope);
+            yield return new AuditPolicy("Memory Integrity configuration", @"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity", "Enabled", 1);
+            yield return new AuditPolicy("Vulnerable-driver blocklist configuration", @"SYSTEM\CurrentControlSet\Control\CI\Config", "VulnerableDriverBlocklistEnable", 1);
             yield return new AuditPolicy("WDigest plaintext credential caching disabled", @"SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0);
             yield return new AuditPolicy("PowerShell script-block logging", @"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging", "EnableScriptBlockLogging", 1);
             yield return new AuditPolicy("SMB client signing required", @"SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters", "RequireSecuritySignature", 1);

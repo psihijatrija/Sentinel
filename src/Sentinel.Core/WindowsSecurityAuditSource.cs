@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
 using System.IO;
@@ -25,9 +28,82 @@ namespace Sentinel.Core
             var results = new List<HardeningAuditCheck>();
             ReadRuntimeProvider(results, @"root\Microsoft\Windows\Defender", "MSFT_MpComputerStatus",
                 new[] { "AMServiceEnabled", "AntivirusEnabled", "RealTimeProtectionEnabled" }, ct);
-            ReadRuntimeProvider(results, @"root\Microsoft\Windows\DeviceGuard", "Win32_DeviceGuard",
-                new[] { "VirtualizationBasedSecurityStatus" }, ct);
+            results.AddRange(ReadDeviceGuardChecks(ct));
+            results.Add(ReadLsassProtection(ct));
             return results;
+        }
+
+        internal IReadOnlyList<HardeningAuditCheck> ReadDeviceGuardChecks(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                using var query = new ManagementObjectSearcher(@"root\Microsoft\Windows\DeviceGuard",
+                    "SELECT VirtualizationBasedSecurityStatus,SecurityServicesConfigured,SecurityServicesRunning FROM Win32_DeviceGuard");
+                query.Options.Timeout = TimeSpan.FromSeconds(3);
+                using var values = query.Get();
+                foreach (ManagementObject instance in values)
+                {
+                    using (instance)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        return ProtectionPosture.DeviceGuard(instance["VirtualizationBasedSecurityStatus"],
+                            instance["SecurityServicesConfigured"], instance["SecurityServicesRunning"]);
+                    }
+                }
+                return DeviceGuardUnavailable("Runtime provider returned no instance.", false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[SecurityAudit] Device Guard runtime provider unavailable");
+                bool unsupported = ex is ManagementException failure &&
+                    (failure.ErrorCode == ManagementStatus.InvalidClass || failure.ErrorCode == ManagementStatus.InvalidNamespace);
+                return DeviceGuardUnavailable("Runtime provider unavailable: " + ex.GetType().Name, unsupported);
+            }
+        }
+
+        private static IReadOnlyList<HardeningAuditCheck> DeviceGuardUnavailable(string reason, bool unsupported)
+            => new[] { "Virtualization-based security", ProtectionPosture.CredentialGuard, ProtectionPosture.MemoryIntegrity }
+                .Select(name => new HardeningAuditCheck { Name = name, State = unsupported ? "Unsupported" : "Unknown", Detail = name == ProtectionPosture.CredentialGuard ? reason + " " + ProtectionPosture.CredentialScope : reason }).ToArray();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetProcessInformation(IntPtr handle, int infoClass, out uint protection, uint size);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool QueryFullProcessImageName(IntPtr handle, uint flags, StringBuilder name, ref uint size);
+
+        private HardeningAuditCheck ReadLsassProtection(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Process[] processes = Array.Empty<Process>();
+            try
+            {
+                processes = Process.GetProcessesByName("lsass");
+                string expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"System32\lsass.exe");
+                foreach (var process in processes)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    IntPtr handle = NativeResolver.OpenProcess(NativeProcessMemory.AccessQueryLimited, false, process.Id);
+                    if (handle == IntPtr.Zero) continue;
+                    try
+                    {
+                        var image = new StringBuilder(32768); uint count = (uint)image.Capacity;
+                        if (!QueryFullProcessImageName(handle, 0, image, ref count) ||
+                            !string.Equals(Path.GetFullPath(image.ToString()), expected, StringComparison.OrdinalIgnoreCase)) continue;
+                        // ProcessProtectionLevelInfo, read from this pinned, query-only handle.
+                        if (GetProcessInformation(handle, 7, out uint level, 4)) return ProtectionPosture.Lsass(level);
+                    }
+                    finally { NativeProcessMemory.CloseHandle(handle); }
+                }
+                return ProtectionPosture.Lsass(null);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[SecurityAudit] LSASS runtime protection query unavailable");
+                return ProtectionPosture.Lsass(null);
+            }
+            finally { foreach (var process in processes) process.Dispose(); }
         }
 
         private void ReadRuntimeProvider(List<HardeningAuditCheck> results, string scope, string className, string[] properties, CancellationToken ct)

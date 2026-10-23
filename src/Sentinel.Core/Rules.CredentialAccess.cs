@@ -9,6 +9,12 @@ namespace Sentinel.Core
     public sealed class SensitiveStoreReadRule : IDetectionRule
     {
         public string Name => "SensitiveStoreReadRule";
+        private readonly Func<int, long> _creationTime;
+
+        public SensitiveStoreReadRule() : this(WindowsProcessTreeOperations.GetCreationTime) { }
+
+        internal SensitiveStoreReadRule(Func<int, long> creationTime)
+            => _creationTime = creationTime ?? throw new ArgumentNullException(nameof(creationTime));
 
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
         {
@@ -21,7 +27,7 @@ namespace Sentinel.Core
             string creationTime = "";
             try
             {
-                long created = WindowsProcessTreeOperations.GetCreationTime(file.ProcessId);
+                long created = _creationTime(file.ProcessId);
                 if (created > 0 && DateTime.FromFileTimeUtc(created) <= file.Timestamp)
                     creationTime = created.ToString(System.Globalization.CultureInfo.InvariantCulture);
             }

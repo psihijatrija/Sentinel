@@ -474,3 +474,20 @@ A matched Python socket/shell command may use the existing authorized reverse-sh
 ### DLL-loader payload corroboration (3.4.0 follow-up)
 
 Private-PE inspection shall cover eligible remote-API targets without host-name restrictions, including RX code with non-executable allocation headers. It shall validate executable section layout within explicit query/read/time budgets, remain Tier2 LogOnly alone, and retain existing process-memory protections. A corroborated Kernel-File credential read shall match a verified live process creation time. The resulting response shall pin that lifetime, contain the victim/descendants only, and not quarantine a possibly clean backing EXE or mark its hash as malware. [Tests and native acceptance limits](LOADER_PAYLOAD_COVERAGE.md).
+
+
+### Standalone product target and 3.4.0 hardening
+
+- Sentinel shall target standalone userland protection without assuming Defender or
+  another antivirus supplies missing detection. Maintain the [capability matrix](CAPABILITY_MATRIX.md)
+  with actual implementation, gaps and validation; do not claim universal product parity.
+- Runtime VBS, Credential Guard, Memory Integrity and LSASS protection shall be distinguished
+  from registry configuration and unavailable provider state. Credential Guard shall explain
+  domain-account scope and exclusions for local/personal passwords and browser sessions.
+- Persistent TCP/drop/DNS history shall not cross process lifetimes or unknown identity.
+- Run-key removal shall require verified file quarantine, exact direct-launch attribution,
+  unchanged typed value and absence read-back; argument substrings shall not authorize it.
+- Injected-victim responses shall request only scoped process containment and accurately
+  report verified exits without claiming backing-file quarantine.
+- Native CI shall exercise owned-process response and unrelated-process survival, temporary
+  registry attribution and explicit runtime-provider degradation, in addition to pure tests.

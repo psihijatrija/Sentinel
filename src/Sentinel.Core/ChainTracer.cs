@@ -17,7 +17,7 @@ namespace Sentinel.Core
     /// non-system / non-browser host process), and performs chain-level response:
     ///   1. Kill processes in the chain (except system hosts and legitimate browsers)
     ///   2. Quarantine non-system, unsigned binaries (signed hosts preserved)
-    ///   3. Remove persistence (Run keys, scheduled tasks)
+    ///   3. Remove directly attributed HKLM Run/RunOnce values after verified file quarantine
     ///   4. Log complete chain evidence
     /// Only invoked for Tier1 detections with KillAuthorized when ActiveResponse is enabled.
     ///
@@ -356,7 +356,7 @@ namespace Sentinel.Core
                     }
 
                     // 5. Remove persistence
-                    await RemovePersistenceAsync(chain, result, ct);
+                    await RemovePersistenceAsync(result, ct);
                 }
 
                 // 6. Log chain evidence
@@ -409,14 +409,12 @@ namespace Sentinel.Core
             return chain;
         }
 
-        private async Task RemovePersistenceAsync(List<ProcessNode> chain, ChainTraceResult result, CancellationToken ct)
+        private async Task RemovePersistenceAsync(ChainTraceResult result, CancellationToken ct)
         {
-            var imagePaths = chain
-                .Where(n => !string.IsNullOrEmpty(n.ImagePath))
-                .Select(n => n.ImagePath!.ToLowerInvariant())
-                .ToHashSet();
+            var confirmedPaths = RunKeyCleanup.ConfirmedTargets(result);
+            if (confirmedPaths.Count == 0) return;
 
-            // Check Run keys
+            // Exact direct-launch attribution only; references inside arguments do not authorize deletion.
             var runKeyPaths = new[]
             {
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
@@ -431,21 +429,26 @@ namespace Sentinel.Core
                     if (key == null) continue;
                     foreach (var name in key.GetValueNames())
                     {
-                        var val = key.GetValue(name)?.ToString()?.ToLowerInvariant() ?? "";
-                        if (imagePaths.Any(p => val.Contains(p)))
+                        ct.ThrowIfCancellationRequested();
+                        var store = new RegistryRunValueStore(key);
+                        var snapshot = store.Read(name);
+                        if (snapshot == null || !RunKeyCleanup.Matches(snapshot, confirmedPaths)) continue;
+                        await _eventLogger.LogEventAsync("persistence_cleanup_attempt", new
                         {
-                            key.DeleteValue(name);
-                            bool absent = !key.GetValueNames().Contains(name, StringComparer.OrdinalIgnoreCase);
-                            result.AdditionalEffects.Add(new ResponseEffect { Action = "RegistryRemoval", Target = $"HKLM\\{keyPath}\\{name}",
-                                Status = absent ? ResponseExecutionStatus.Verified : ResponseExecutionStatus.Failed,
-                                Detail = absent ? "Run value absent on read-back." : "Run value remains after deletion." });
-                            if (absent) result.PersistenceRemoved.Add(new PersistenceInfo
+                            Action = "RegistryRemoval", Target = $"HKLM\\{keyPath}\\{name}",
+                            Reason = "Exact direct launch of a verified quarantined payload; recheck required before removal."
+                        }).ConfigureAwait(false);
+                        var effect = RunKeyCleanup.Remove(store, name, snapshot, confirmedPaths, $"HKLM\\{keyPath}\\{name}");
+                        result.AdditionalEffects.Add(effect);
+                        if (effect.Status == ResponseExecutionStatus.Verified)
+                            result.PersistenceRemoved.Add(new PersistenceInfo
                             {
-                                Type = "RunKey", Location = $"HKLM\\{keyPath}", Name = name, Value = val, Removed = true
+                                Type = "RunKey", Location = $"HKLM\\{keyPath}", Name = name,
+                                Value = snapshot.Value as string ?? "", Removed = true
                             });
-                        }
                     }
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     result.AdditionalEffects.Add(new ResponseEffect { Action = "RegistryPersistenceInspection", Target = $"HKLM\\{keyPath}",

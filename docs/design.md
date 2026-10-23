@@ -1119,3 +1119,17 @@ low-volume HTTPS exfiltration remain limitations.
 ### Private PE targets and scoped response (3.4.0 follow-up)
 
 Recent remote-API callers/targets enter bounded off-thread inspection regardless of host name. Suppressed browser observations queue PE-only inspection, preserving legacy thread/stack authority boundaries. `UnbackedPeScanner` inspects private executable regions and their allocation headers/section tables; its generic Tier2 observation cannot authorize response alone. The credential-read composite verifies the current victim lifetime and carries it to `InjectedVictimResponse`, which uses the existing verified tree terminator with an expected creation time. This route bypasses ancestor tracing, file quarantine, environment upgrades and victim-hash reinfection registration. [Architecture, budgets and limits](LOADER_PAYLOAD_COVERAGE.md).
+
+
+### Standalone scope, posture and attributed cleanup (3.4.0)
+
+The product target is standalone userland endpoint protection; optional Defender
+integration does not supply an assumed detection dependency. Implementation gaps and
+validation boundaries live in [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md).
+`ProtectionPosture` interprets provider values separately from registry configuration.
+`WindowsSecurityAuditSource` queries VBS/individual running services and query-only,
+verified-image LSASS protection; Credential Guard carries domain applicability context.
+`PersistentConnectionMonitor` keys histories by PID plus birth time and exposes collector
+progress/failure. `RunKeyCleanup` limits deletion to typed, unchanged direct-launch values
+for verified quarantine targets, with read-back and explicit residual registry race limits.
+Victim composites request process-only response, matching actual containment receipts.
