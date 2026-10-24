@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace Sentinel.Core
@@ -28,6 +29,7 @@ namespace Sentinel.Core
         internal static PortBlockInspection Inspect(IEnumerable<PortBlockSpec> expected, bool apply)
         {
             object? policyObject = null, rulesObject = null;
+            string stage = "open firewall provider";
             try
             {
                 var policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
@@ -43,9 +45,8 @@ namespace Sentinel.Core
                     object? ruleObject = null;
                     try
                     {
-                        try { ruleObject = rules.Item(spec.Name); }
-                        catch (COMException ex) when ((uint)ex.HResult == 0x80070002)
-                        { Debug.WriteLine("[PortHardening] Owned rule absent: " + spec.Name); }
+                        stage = "look up owned rule " + spec.Name;
+                        ruleObject = ReadExistingRule(() => (object?)rules.Item(spec.Name));
                         bool existed = ruleObject != null;
                         if (apply && ruleObject != null)
                         {
@@ -57,10 +58,13 @@ namespace Sentinel.Core
                                 UnscopedInterfaces(current.Interfaces))) continue;
                             // Recreate only a mismatched owned rule so hidden interface scope
                             // cannot survive a property-only update.
-                            rules.Remove(spec.Name); Release(ruleObject); ruleObject = null; existed = false;
+                            stage = "replace mismatched owned rule " + spec.Name;
+                            rules.Remove(spec.Name);
+                            var old = ruleObject; ruleObject = null; Release(old); existed = false;
                         }
                         if (apply)
                         {
+                            stage = "configure owned rule " + spec.Name;
                             if (ruleObject == null)
                             {
                                 var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule");
@@ -73,16 +77,21 @@ namespace Sentinel.Core
                             rule.Grouping = "Sentinel Port Hardening";
                             rule.Enabled = false; rule.Protocol = spec.Protocol;
                             rule.Direction = spec.Direction; rule.Action = 0; rule.Profiles = 7;
-                            rule.ApplicationName = ""; rule.ServiceName = "";
+                            // Fresh COM rule defaults apply to all applications/services.
+                            // Do not depend on setters accepting empty BSTRs; verify defaults below.
                             rule.LocalAddresses = "*"; rule.RemoteAddresses = "*";
                             rule.InterfaceTypes = "All"; rule.EdgeTraversal = false;
                             rule.LocalPorts = spec.Direction == 1 ? spec.Port.ToString() : "*";
                             rule.RemotePorts = spec.Direction == 2 ? spec.Port.ToString() : "*";
                             rule.Enabled = true;
+                            stage = "install owned rule " + spec.Name;
                             if (!existed) rules.Add(rule);
-                            Release(ruleObject); ruleObject = rules.Item(spec.Name); // fresh read-back
+                            var installed = ruleObject; ruleObject = null; Release(installed);
+                            stage = "read back owned rule " + spec.Name;
+                            ruleObject = rules.Item(spec.Name); // mandatory fresh read-back; missing is a failure here
                         }
                         if (ruleObject == null) { missing++; continue; }
+                        stage = "verify owned rule " + spec.Name;
                         dynamic observed = ruleObject;
                         if (!Matches(spec, (bool)observed.Enabled, (int)observed.Action, (int)observed.Protocol,
                             (int)observed.Direction, (int)observed.Profiles, (string)observed.LocalPorts,
@@ -92,8 +101,10 @@ namespace Sentinel.Core
                     }
                     finally { Release(ruleObject); }
                 }
-                bool enabled = policy.FirewallEnabled[1] && policy.FirewallEnabled[2] && policy.FirewallEnabled[4];
-                int modifyState = policy.LocalPolicyModifyState;
+                stage = "read firewall profile and policy state";
+                bool enabled = true;
+                foreach (int profile in new[] { 1, 2, 4 }) enabled &= (bool)policy.FirewallEnabled[profile];
+                int modifyState = (int)policy.LocalPolicyModifyState;
                 return new PortBlockInspection
                 {
                     Verified = missing == 0 && enabled && modifyState == 0,
@@ -105,9 +116,19 @@ namespace Sentinel.Core
             {
                 Debug.WriteLine("[PortHardening] " + ex);
                 return new PortBlockInspection { Detail = "Windows Firewall port policy unavailable: " + ex.GetType().Name +
-                    " (0x" + ex.HResult.ToString("X8") + "). No enforcement claim." };
+                    " (0x" + ex.HResult.ToString("X8") + ") during " + stage + ": " + ex.Message + ". No enforcement claim." };
             }
             finally { Release(rulesObject); Release(policyObject); }
+        }
+
+        internal static object? ReadExistingRule(Func<object?> read)
+        {
+            try { return read(); }
+            // COM interop maps HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) to
+            // FileNotFoundException on Framework. Only genuine absence permits creation.
+            catch (Exception ex) when ((ex is COMException || ex is FileNotFoundException) &&
+                ((uint)ex.HResult == 0x80070002 || (uint)ex.HResult == 0x80070490))
+            { Debug.WriteLine("[PortHardening] Owned rule absent: " + ex.Message); return null; }
         }
 
         internal static bool Matches(PortBlockSpec spec, bool enabled, int action, int protocol, int direction,

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.Runtime.InteropServices;
 using Sentinel.Core;
 using Xunit;
 
@@ -9,6 +11,36 @@ namespace Sentinel.Tests
     [Collection("ResponsePolicy")]
     public class LogRegression341Tests
     {
+        [Theory]
+        [InlineData(0x80070002U)]
+        [InlineData(0x80070490U)]
+        public void NativeMissingRuleAllowsCreation(uint hresult)
+            => Assert.Null(WindowsPortBlockPolicy.ReadExistingRule(() => throw new COMException("Missing owned rule", unchecked((int)hresult))));
+
+        [Fact]
+        public void FrameworkMappedFileNotFoundAlsoAllowsRuleCreation()
+        {
+            var mapped = Marshal.GetExceptionForHR(unchecked((int)0x80070002))!;
+            Assert.IsType<FileNotFoundException>(mapped);
+            Assert.Null(WindowsPortBlockPolicy.ReadExistingRule(() => throw mapped));
+        }
+
+        [Fact]
+        public void RuleLookupAccessDenialAndProviderFailureDoNotBecomeAbsence()
+        {
+            Assert.Throws<COMException>(() => WindowsPortBlockPolicy.ReadExistingRule(() =>
+                throw new COMException("Access denied", unchecked((int)0x80070005))));
+            Assert.Throws<InvalidOperationException>(() => WindowsPortBlockPolicy.ReadExistingRule(() =>
+                throw new InvalidOperationException("Provider failed")));
+        }
+
+        [Fact]
+        public void ExistingOwnedRuleIsReturnedWithoutReplacement()
+        {
+            var rule = new object();
+            Assert.Same(rule, WindowsPortBlockPolicy.ReadExistingRule(() => rule));
+        }
+
         [Theory]
         [InlineData("CVE Class: Kernel Exploit Loader", "Sentinel.ExploitShield")]
         [InlineData("CVE Class: Kernel Exploit Loader", "AfdEoP")]

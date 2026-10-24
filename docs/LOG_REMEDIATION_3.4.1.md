@@ -26,7 +26,7 @@ component, external probe or reputation query is introduced.
 
 The product projects and shipping tests cross-build with warnings treated as errors.
 A temporary .NET 10 host exercises the compiled Core assembly and selected exact test
-sources: 390 passed, seven native Windows fixtures skipped. Windows ACL/ADS/path-dependent
+sources: 395 passed, seven native Windows fixtures skipped. Windows ACL/ADS/path-dependent
 cases are excluded from that portable host and remain in the shipping Framework suite.
 All 26 dashboard tests and NanoAV source-preservation verification pass. The optional
 Windows Desktop ML trainer is outside this Linux cross-build.
@@ -38,3 +38,13 @@ installer, reboot, effective port blocking, sustained load and real watcher-over
 recovery still require Windows execution. A clean cross-build is not evidence that the
 user's installed environment has recovered. Inspect new runtime health after upgrading;
 keep cumulative loss counters and historical gaps visible even after collection recovers.
+
+The first Windows run reported an unavailable-policy failure in the port fixture.
+The follow-up handles missing-rule HRESULTs translated by Framework into
+`FileNotFoundException`, avoids empty application/service BSTR setters on fresh COM
+rules, and tests mapped absence versus access/provider failure. Fresh COM defaults
+must still pass mandatory scope read-back. The native fixture now exercises first
+creation, repeat application and independent inspection, and emits full stage/error
+details instead of a truncated substring assertion. The supplied failure omitted
+the exception type/HRESULT; successful native execution is still required to confirm
+the reported Windows failure is resolved.

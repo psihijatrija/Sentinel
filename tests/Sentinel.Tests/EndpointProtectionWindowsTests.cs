@@ -121,10 +121,13 @@ namespace Sentinel.Tests
             var spec = new PortBlockSpec(65001, 6, 1);
             try
             {
+                HardeningModule.RemoveFirewallRuleByName(spec.Name); // exercise genuine first-install absence
                 var applied = WindowsPortBlockPolicy.Inspect(new[] { spec }, apply: true);
-                Assert.Contains("Owned port-rule mismatches=0", applied.Detail);
+                Assert.True(applied.Detail.Contains("Owned port-rule mismatches=0;"), applied.Detail);
+                var reapplied = WindowsPortBlockPolicy.Inspect(new[] { spec }, apply: true);
+                Assert.True(reapplied.Detail.Contains("Owned port-rule mismatches=0;"), reapplied.Detail);
                 var read = WindowsPortBlockPolicy.Inspect(new[] { spec }, apply: false);
-                Assert.Contains("Owned port-rule mismatches=0", read.Detail);
+                Assert.True(read.Detail.Contains("Owned port-rule mismatches=0;"), read.Detail);
                 // Firewall profile/GPO state is disclosed; this is not a packet-drop test.
             }
             finally { HardeningModule.RemoveFirewallRuleByName(spec.Name); }

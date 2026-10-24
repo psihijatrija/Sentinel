@@ -6,12 +6,13 @@
 - Remove filename/command and port-only kill authority throughout dispatch and correlation. Fix the ExploitShield self-kill regression without trusting a matching executable name. Keep concrete behavioral response paths active.
 - Stop mistaking local ephemeral ports for inbound malware traffic; throttle remote endpoint observations and label TCP initiation direction unknown.
 - Replace failing legacy IPSec packet-block commands and English output parsing with idempotent, owned Windows Firewall port rules for the same compiled set. Read back rule scope/action/profiles and report unavailable or overridden configuration without alleging tampering. Remove owned modern rules during uninstall.
+- Handle Framework-mapped missing-rule exceptions during first installation, retain fail-closed handling for access/provider errors, and avoid unnecessary empty-string COM setters. Exercise first creation and idempotent reapplication in the native fixture; print the full failing stage, exception and HRESULT when it fails. Windows rerun remains required.
 - Filter native ETW subscriptions to consumed event IDs, retain credential-read attribution, increase bounded buffering and disclose unsupported-filter fallback. Report protected-provider access denial and independent loss together; new loss refreshes reconciliation even during existing degradation.
 - Recover file watcher overflow locally with a larger buffer and less unused notification traffic. Keep reconciliation visibly incomplete until the walk finishes, bypass the scan-index shortcut after overflow, and disclose enumeration failures.
 - Honor process-only response scope in chain tracing; unrequested quarantine attempts no longer make a verified kill appear partially completed. Correct Smart App Control/certificate wording and remove unsupported campaign attribution from SAC posture.
 
 ### Validation and limits
-- Product projects and shipping tests cross-build: 0 warnings, 0 errors. Selected portable regressions: 390 passed, 0 failed; seven Windows fixtures skipped. Windows ACL/ADS/path-dependent cases and full Framework execution remain for Windows CI. Dashboard: 26 passed. NanoAV source scope verified unchanged.
+- Product projects and shipping tests cross-build: 0 warnings, 0 errors. Selected portable regressions: 395 passed, 0 failed; seven Windows fixtures skipped. Windows ACL/ADS/path-dependent cases and full Framework execution remain for Windows CI. Dashboard: 26 passed. NanoAV source scope verified unchanged.
 - Add Windows fixtures for owned port-rule apply/read-back/removal and filtered ETW process-event delivery. The dedicated gate requires all seven endpoint cases to run without skips. Protected Threat Intelligence provider access, historical event loss, effective packet blocking and inaccessible file content cannot be declared repaired from Linux. See [runtime-log remediation and validation](LOG_REMEDIATION_3.4.1.md).
 
 ## [3.4.0] - 2026-10-23
