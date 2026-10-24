@@ -1,4 +1,4 @@
-# Standalone protection scope — 3.4.0
+# Standalone protection scope — 3.4.1
 
 Sentinel's product target is standalone Windows endpoint protection within userland.
 Another antivirus is optional, not an assumed source of detection or containment.
@@ -14,7 +14,7 @@ malware and false-positive testing is still required before claiming product par
 | Injection / fileless payloads | Module identity checks, injection candidates and bounded private executable PE inspection, including RX sections with readonly headers | PE-free shellcode, erased headers, inaccessible/protected processes and inspection budgets limit coverage. Candidate inspection is not universal memory inspection. See [loader scope](LOADER_PAYLOAD_COVERAGE.md). |
 | Credentials / session theft | Kernel-File credential-store read attribution plus independent high-confidence remote-control or inspected-payload corroboration | A read alone is LogOnly. Missing/reused process identity cannot authorize the chain. No retrieval or revocation of sessions already stolen, and no remote identity-provider monitoring. |
 | Process response | Authorized Tier1 process/tree termination with pinned lifetime, descendant rescan and verified exit receipts | Permissions and races can prevent containment. Injected-victim response preserves backing files and ancestors. No kernel enforcement against an administrator or malicious driver. |
-| Network / C2 | DNS, socket/TCP observations, behavioral correlation; local/eligible local-GPO firewall management and verified response effects | TCP polling is not packet capture, TLS decryption, universal MitM prevention or relay identification. Endpoint reuse and events between polls limit attribution. No network-appliance or router cleanup. |
+| Network / C2 | DNS, socket/TCP observations, behavioral correlation; local/eligible local-GPO firewall management, owned modern port-block filters and verified response effects | TCP polling is not packet capture, TLS decryption, universal MitM prevention or relay identification. Endpoint reuse and events between polls limit attribution. No network-appliance or router cleanup. |
 | Persistence | Specific startup/service/task observations; cleanup of exact HKLM Run/RunOnce direct launches of a verified quarantined payload | No blanket service/task/WMI/browser reset. Wrappers, environment-expanded targets, HKCU and alternate registry views are not covered by this cleanup. Recheck/read-back reduces races but registry compare-and-delete is not atomic. |
 | Ransomware | Behavioral signals and authorized containment | No universal pre-write protection, decryption or restoration of already encrypted data. Recovery needs independent backups. |
 | Credential/driver hardening | Registry configuration checks; runtime VBS, individual Credential Guard/HVCI states, query-only LSASS process protection; vulnerable-driver blocklist configuration | Windows supplies these OS controls. Configuration does not prove enforcement; provider/access failures are explicit. No userland kernel-driver exploit prevention guarantee. Credential Guard primarily concerns domain authentication, not local passwords or browser sessions. |
@@ -51,10 +51,15 @@ but must not be advertised as Sentinel-owned implementations.
 ## Validation evidence
 
 Portable tests cover rule boundaries, PID reuse, exact persistence attribution and runtime
-status interpretation. Windows CI additionally requires five native fixtures: readonly/RX
+status interpretation. Windows CI additionally requires seven native fixtures: readonly/RX
 memory inspection, clean Qt-module policy, owned-process containment with unrelated-process
-survival, temporary registry-value cleanup and runtime-provider reporting. The process
+survival, temporary registry-value cleanup, runtime-provider reporting, owned modern port-rule read-back and filtered ETW process-start delivery. The process
 fixture uses synthetic evidence and a harmless sleeper; it does not prove live ETW
 credential attribution or protection against a real malware sample. A passing fixture is
 not comparative antivirus certification. Native results must be read from CI artifacts;
 Linux cross-builds cannot establish Windows execution success.
+
+
+3.4.1 log-derived fixes and native acceptance limits are recorded in
+[LOG_REMEDIATION_3.4.1.md](LOG_REMEDIATION_3.4.1.md). Native ETW filtering or extra
+buffers cannot grant protected-provider access or guarantee loss-free collection.

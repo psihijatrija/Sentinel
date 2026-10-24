@@ -91,19 +91,13 @@ namespace Sentinel.Core
             _lastDispatchDrops = health.DispatchDrops;
             bool inactive = !_etwSession.IsActive;
             bool stalled = health.QuerySucceeded && !health.ConsumerAlive;
-            bool providersAvailable = health.ProviderStatus.Count == 10 &&
-                System.Linq.Enumerable.All(health.ProviderStatus.Values, code => code == 0);
+            string? degraded = EtwCollectionPolicy.Degradation(health, lossIncreased);
             if (!inactive && !stalled)
             {
-                if (!health.QuerySucceeded || !providersAvailable || lossIncreased)
+                if (degraded != null)
                 {
-                    string degraded = !health.QuerySucceeded ? "ETW session query unavailable" :
-                        !providersAvailable ? "ETW provider coverage incomplete (" + health.ProviderStatus.Count + "/10 statuses): " + string.Join("; ",
-                            System.Linq.Enumerable.Select(System.Linq.Enumerable.OrderBy(System.Linq.Enumerable.Where(health.ProviderStatus, p => p.Value != 0), p => p.Key),
-                                p => p.Key + ": Win32 " + p.Value + " (" + new System.ComponentModel.Win32Exception((int)p.Value).Message + ")"))
-                        : "ETW events/buffers were lost";
                     Progress.Failed(degraded);
-                    if (!_coverageDegraded) _gaps?.Report("ETW", degraded);
+                    if (!_coverageDegraded || lossIncreased) _gaps?.Report("ETW", degraded);
                     if (_alerts.Observe(degraded, DateTimeOffset.UtcNow))
                     {
                         await _detectionEngine.EmitAsync(new DetectionEvent

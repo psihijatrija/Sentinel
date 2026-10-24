@@ -13,7 +13,7 @@ namespace Sentinel.Core
     public class FileVerdictScanner : BackgroundService, ISensorProgressSource
     {
         public SensorProgress Progress { get; } = new(TimeSpan.FromSeconds(30))
-            { Scope = "File watcher subscription checks; does not prove every file was delivered/scanned. Overflow faults the supervised worker for restart and reconciliation." };
+            { Scope = "File watcher subscription checks; does not prove every file was delivered/scanned. Overflow starts local watcher recovery and a fresh content walk; healthy subscriptions do not establish recovery until enumeration completes." };
         private readonly HashReputationService _reputationService;
         private readonly FileVerdictAds _verdictAds;
         private readonly FileReputationEngine _reputationEngine;
@@ -21,6 +21,9 @@ namespace Sentinel.Core
         private readonly FileScanIndex _scanIndex;
         private readonly ILogger<FileVerdictScanner> _logger;
         private readonly List<FileSystemWatcher> _watchers = new();
+        private long _watcherFaultGeneration;
+        private int _walkDirectoryErrors;
+        private bool _requiresFreshWalk;
 
         // All scannable extensions - matches Antivirus.ps1 coverage
         private static readonly HashSet<string> ScanExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -107,6 +110,12 @@ namespace Sentinel.Core
             while (!stoppingToken.IsCancellationRequested)
             {
                 try { await RunVolumeCoverageAsync(stoppingToken).ConfigureAwait(false); }
+                catch (WatcherCoverageLostException)
+                {
+                    _requiresFreshWalk = true;
+                    _logger.LogWarning("[FileVerdictScanner] Rebuilding failed subscriptions and reconciling missed file content; coverage remains degraded during the walk.");
+                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
+                }
                 catch (VolumeCoverageChangedException)
                 {
                     _logger.LogInformation("[FileVerdictScanner] Mounted local volumes changed; rebuilding watchers and reconciling scan coverage.");
@@ -115,12 +124,17 @@ namespace Sentinel.Core
             }
         }
 
+        private sealed class WatcherCoverageLostException : InvalidOperationException
+        { internal WatcherCoverageLostException(string? message = null) : base(message) { } }
+
         private sealed class VolumeCoverageChangedException : InvalidOperationException { }
 
         private async Task RunVolumeCoverageAsync(CancellationToken stoppingToken)
         {
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             stoppingToken = lifetime.Token;
+            long generation = Interlocked.Read(ref _watcherFaultGeneration);
+            Interlocked.Exchange(ref _walkDirectoryErrors, 0);
             ReleaseWatchers(); // a group restart must not accumulate duplicate subscriptions
             _logger.LogInformation("[FileVerdictScanner] Starting lazy verdict scan and file watchers...");
             string? startupError = null;
@@ -137,7 +151,8 @@ namespace Sentinel.Core
                     {
                         IncludeSubdirectories = true,
                         Filter = "*.*",
-                        NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite
+                        InternalBufferSize = 64 * 1024,
+                        NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
                     };
                     watcher.Created += OnFileCreated;
                     watcher.Renamed += OnFileRenamed;
@@ -154,11 +169,12 @@ namespace Sentinel.Core
             }
 
             // Lazy background walk - scans every file on every NTFS volume, skipping those already marked
-            var walk = Task.Run(() => WalkDrivesAsync(stoppingToken), stoppingToken);
+            bool freshWalk = _requiresFreshWalk;
+            Progress.Failed("File enumeration reconciliation in progress; watcher subscriptions alone do not establish coverage.");
+            var walk = Task.Run(() => WalkDrivesAsync(stoppingToken, freshWalk), stoppingToken);
             try
             {
-                if (startupError != null) throw new InvalidOperationException(startupError);
-                Progress.Succeeded();
+                if (startupError != null) throw new WatcherCoverageLostException(startupError);
                 await SuperviseWatchersAsync(walk, () =>
                 {
                     // A newly mounted drive needs a watcher AND an initial walk. Restart
@@ -170,14 +186,14 @@ namespace Sentinel.Core
                     {
                         throw new VolumeCoverageChangedException();
                     }
-                    var error = Progress.Snapshot().Error;
-                    if (error != null) throw new InvalidOperationException(error);
+                    if (generation != Interlocked.Read(ref _watcherFaultGeneration)) throw new WatcherCoverageLostException();
                     if (_watchers.Count == 0 || _watchers.Any(w => !w.EnableRaisingEvents))
                     {
                         Progress.Failed("No complete set of active file watcher subscriptions.");
-                        throw new InvalidOperationException(Progress.Snapshot().Error);
+                        throw new WatcherCoverageLostException(Progress.Snapshot().Error);
                     }
-                    Progress.Succeeded();
+                    UpdateCoverageProgress(Progress, walk.IsCompleted, Volatile.Read(ref _walkDirectoryErrors));
+                    if (walk.IsCompleted && Volatile.Read(ref _walkDirectoryErrors) == 0) _requiresFreshWalk = false;
                 }, stoppingToken).ConfigureAwait(false);
             }
             finally
@@ -187,6 +203,13 @@ namespace Sentinel.Core
                 try { await walk.ConfigureAwait(false); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { /* normal worker cancellation */ }
             }
+        }
+
+        internal static void UpdateCoverageProgress(SensorProgress progress, bool walkCompleted, int directoryErrors)
+        {
+            if (!walkCompleted) progress.Failed("File enumeration reconciliation is still in progress; missed events are not yet reconciled.");
+            else if (directoryErrors > 0) progress.Failed("File enumeration incomplete: " + directoryErrors + " directories/volumes unavailable. Subscription health does not close this gap.");
+            else progress.Succeeded();
         }
 
         internal static async Task SuperviseWatchersAsync(Task initialWalk, Action verifySubscriptions, CancellationToken ct)
@@ -215,6 +238,7 @@ namespace Sentinel.Core
         private void OnWatcherError(object sender, ErrorEventArgs e)
         {
             var error = e.GetException();
+            Interlocked.Increment(ref _watcherFaultGeneration);
             Progress.Failed("File watcher lost coverage: " + error.Message);
             _logger.LogWarning(error, "File watcher overflow/failure; file coverage requires reconciliation");
         }
@@ -623,7 +647,7 @@ namespace Sentinel.Core
             }
         }
 
-        private async Task WalkDrivesAsync(CancellationToken ct)
+        private async Task WalkDrivesAsync(CancellationToken ct, bool freshWalk)
         {
             // Wait a bit after startup to let higher-priority monitors initialize
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
@@ -635,17 +659,19 @@ namespace Sentinel.Core
                 _logger.LogInformation("[FileVerdictScanner] Starting lazy walk of {Drive}", drive.Name);
                 try
                 {
-                    await TraverseDirectoryAsync(drive.RootDirectory.FullName, ct);
+                    await TraverseDirectoryAsync(drive.RootDirectory.FullName, ct, freshWalk);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    Interlocked.Increment(ref _walkDirectoryErrors);
                     _logger.LogDebug(ex, "Error initiating drive walk for {Drive}", drive.Name);
                 }
             }
             _logger.LogInformation("[FileVerdictScanner] Lazy walk complete on all volumes.");
         }
 
-        private async Task TraverseDirectoryAsync(string rootDir, CancellationToken ct)
+        private async Task TraverseDirectoryAsync(string rootDir, CancellationToken ct, bool freshWalk)
         {
             var queue = new Queue<string>();
             queue.Enqueue(rootDir);
@@ -675,7 +701,7 @@ namespace Sentinel.Core
                         // This is what stops the walk from re-hashing every executable on every pass
                         // (the sustained-MB/s HDD firehose). Any content change bumps size/mtime and
                         // invalidates the entry, forcing a fresh scan.
-                        if (_scanIndex.IsUnchangedSinceScan(file))
+                        if (!freshWalk && _scanIndex.IsUnchangedSinceScan(file))
                             continue;
 
                         await ScanFileWithBackoffAsync(file);
@@ -693,10 +719,10 @@ namespace Sentinel.Core
                         queue.Enqueue(subDir);
                     }
                 }
-                catch (UnauthorizedAccessException) { }
-                catch (DirectoryNotFoundException) { }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    Interlocked.Increment(ref _walkDirectoryErrors);
                     _logger.LogDebug(ex, "Error traversing directory: {Directory}", currentDir);
                 }
             }

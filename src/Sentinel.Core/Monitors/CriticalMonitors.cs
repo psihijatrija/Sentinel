@@ -410,9 +410,9 @@ namespace Sentinel.Core
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
             // v2.5.5: Hardening is always-on - no config sync needed.
-            _logger.LogInformation("[IPSecIntegrityGuard] Started - IPSec profile=always-on hardening (v2.5.5+)");
+            _logger.LogInformation("[IPSecIntegrityGuard] Started - compiled Windows Firewall port-block reconciliation");
 
-            // Rebuild GSecurity on startup.
+            // Reconcile owned modern port filters on startup; retain the legacy class name for health continuity.
             if (!_cleanedObserveMode)
             {
                 HardeningModule.ReapplyIPSecPolicy();
@@ -425,11 +425,12 @@ namespace Sentinel.Core
             {
                 try
                 {
-                    if (HardeningModule.IsIPSecPolicyActive())
+                    var observed = HardeningModule.InspectPortHardening();
+                    if (observed.Verified)
                     {
                         if (_consecutiveFailures > 0)
                             _logger.LogInformation(
-                                "[IPSecIntegrityGuard] IPSec policy GSecurity active again after {Count} failure(s)",
+                                "[IPSecIntegrityGuard] Port-block configuration verified after {Count} failure(s)",
                                 _consecutiveFailures);
                         _consecutiveFailures = 0;
                         _nextAttemptUtc = DateTimeOffset.MinValue;
@@ -438,7 +439,7 @@ namespace Sentinel.Core
                     {
                         _consecutiveFailures++;
                         _logger.LogWarning(
-                            "[IPSecIntegrityGuard] Restrictive IPSec GSecurity missing - re-applying (failure #{Count})",
+                            "[IPSecIntegrityGuard] Port-block configuration unverified - reconciling (failure #{Count})",
                             _consecutiveFailures);
 
                         bool skipReapply = _consecutiveFailures > HardFailThreshold;
@@ -447,11 +448,13 @@ namespace Sentinel.Core
                         {
                             HardeningModule.ReapplyIPSecPolicy();
                             await Task.Delay(2000, ct);
-                            reapplied = HardeningModule.IsIPSecPolicyActive();
+                            observed = HardeningModule.InspectPortHardening();
+                            reapplied = observed.Verified;
                         }
                         else
                         {
-                            reapplied = HardeningModule.IsIPSecPolicyActive();
+                            observed = HardeningModule.InspectPortHardening();
+                            reapplied = observed.Verified;
                         }
 
                         bool shouldEmit = !reapplied
@@ -464,20 +467,21 @@ namespace Sentinel.Core
                             _lastEmitUtc = DateTimeOffset.UtcNow;
                             await _detectionEngine.EmitAsync(new DetectionEvent
                             {
-                                RuleName = "Anti-Tamper: IPSec Policy Deleted and Re-Applied",
-                                Evidence = $"Restrictive GSecurity IPSec was missing/unassigned. " +
+                                RuleName = "Hardening: Port Block Configuration " + (reapplied ? "Verified" : "Unverified"),
+                                Evidence = observed.Detail + " " +
                                            $"Re-application {(skipReapply ? "SKIPPED (backoff)" : reapplied ? "SUCCEEDED" : "FAILED")}. " +
                                            $"Consecutive failures: {_consecutiveFailures}.",
-                                Reasoning = "Sentinel maintains the GSecurity IPSec profile - hardening is always-on as of v2.5.5.",
-                                Confidence = 0.95,
-                                Tier = DetectionTier.Tier1Behavioral,
+                                Reasoning = "Sentinel reconciles compiled port blocks through Windows Firewall. Missing or unavailable configuration does not prove deletion or tampering; domain policy and packet enforcement require separate validation.",
+                                Confidence = 0.50,
+                                Tier = DetectionTier.Tier2Indicator,
                                 AuthorizedResponse = ResponseAction.LogOnly,
                                 ProcessName = "SYSTEM",
                                 ProcessId = 0,
-                                SignalType = SignalType.AntiTamper,
+                                SignalType = SignalType.Generic,
                                 Metadata = new Dictionary<string, string>
                                 {
-                                    ["Reapplied"] = reapplied.ToString(),
+                                    ["ConfigurationVerified"] = reapplied.ToString(),
+                                    ["WeakObserveSeed"] = "true",
                                     ["ConsecutiveFailures"] = _consecutiveFailures.ToString(),
                                     ["Restrictive"] = "true",
                                     ["BackedOff"] = skipReapply.ToString()

@@ -496,96 +496,43 @@ namespace Sentinel.Core
         {
             try
             {
-                var psi = new ProcessStartInfo("netsh.exe", args)
+                var psi = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "netsh.exe"), args)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false
                 };
                 using var proc = Process.Start(psi);
-                proc?.WaitForExit();
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// Verifies the GSecurity IPSec policy is currently assigned and active.
-        /// Returns true if the policy is confirmed active, false if missing/unassigned.
-        /// Uses 'netsh ipsec static show policy name=GSecurity' - exit code 0 + "assigned: yes"
-        /// means it's active. Anything else means it's been tampered with.
-        /// </summary>
-        public static bool IsIPSecPolicyActive()
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("netsh.exe", "ipsec static show policy name=GSecurity")
+                if (proc != null && !proc.WaitForExit(5000))
                 {
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                using var proc = Process.Start(psi);
-                if (proc == null) return false;
-                var output = proc.StandardOutput.ReadToEnd();
-                proc.WaitForExit(5000);
-                // Policy exists and is assigned if output contains "Assigned" and "Yes"
-                return proc.ExitCode == 0 &&
-                       output.Contains("Assign") &&
-                       output.Contains("Yes");
+                    proc.Kill();
+                    System.Diagnostics.Debug.WriteLine("[Hardening] Legacy netsh cleanup timed out.");
+                }
+                else if (proc != null && proc.ExitCode != 0)
+                    System.Diagnostics.Debug.WriteLine("[Hardening] Legacy netsh cleanup returned " + proc.ExitCode);
             }
-            catch
-            {
-                return false;
-            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[Hardening] Legacy netsh cleanup unavailable: " + ex); }
         }
 
-        /// <summary>
-        /// Re-applies the IPSec policy from scratch.
-        /// v2.5.5: Hardening is always-on - always rebuilds the full restrictive policy.
-        /// </summary>
+        internal static IReadOnlyList<PortBlockSpec> PortBlockSpecifications()
+        {
+            var rules = new List<PortBlockSpec>();
+            foreach (var port in GetActivePortDefinitions())
+                foreach (int protocol in port.Protocol == "TCPUDP" ? new[] { 6, 17 } : new[] { port.Protocol == "TCP" ? 6 : 17 })
+                    foreach (int direction in new[] { 1, 2 }) rules.Add(new PortBlockSpec(port.Port, protocol, direction));
+            return rules;
+        }
+
+        internal static PortBlockInspection InspectPortHardening(bool apply = false)
+            => WindowsPortBlockPolicy.Inspect(PortBlockSpecifications(), apply);
+
+        // Compatibility names for existing startup/uninstall callers. Modern firewall
+        // block filters replace legacy IPSec packet-block commands; no IPsec tunnel is claimed.
+        public static bool IsIPSecPolicyActive() => InspectPortHardening().Verified;
         public static void ReapplyIPSecPolicy()
         {
-            try
-            {
-                var ports = GetActivePortDefinitions();
-                const string mode = "always-on hardening (v2.5.5+)";
-
-                // Delete and recreate - handles partial corruption and profile changes
-                RunNetsh("ipsec static delete policy name=GSecurity");
-                RunNetsh($"ipsec static add policy name=GSecurity description=\"Sentinel IPSec: {mode}.\" assign=yes");
-                RunNetsh("ipsec static add filteraction name=BlockAction action=block description=\"Block traffic\"");
-
-                foreach (var def in ports)
-                {
-                    var protocols = new List<string>();
-                    if (def.Protocol == "TCPUDP")
-                    {
-                        protocols.Add("TCP");
-                        protocols.Add("UDP");
-                    }
-                    else
-                    {
-                        protocols.Add(def.Protocol);
-                    }
-
-                    foreach (var proto in protocols)
-                    {
-                        foreach (var direction in new[] { "Inbound", "Outbound" })
-                        {
-                            var filterListName = $"{direction}_{def.Name}_{proto}";
-                            var ruleName = $"Block_{direction}_{def.Name}_{proto}";
-                            string src = (direction == "Inbound") ? "Any" : "Me";
-                            string dst = (direction == "Inbound") ? "Me" : "Any";
-                            RunNetsh($"ipsec static add filterlist name={filterListName} description=\"{direction} {def.Name} port {def.Port} ({proto})\"");
-                            RunNetsh($"ipsec static add filter filterlist={filterListName} srcaddr={src} dstaddr={dst} protocol={proto} dstport={def.Port} mirrored=no");
-                            RunNetsh($"ipsec static add rule name={ruleName} policy=GSecurity filterlist={filterListName} filteraction=BlockAction");
-                        }
-                    }
-                }
-
-                RunNetsh("ipsec static set policy name=GSecurity assign=yes");
-            }
-            catch { }
+            var result = InspectPortHardening(apply: true);
+            System.Diagnostics.Debug.WriteLine("[PortHardening] " + result.Detail);
+            if (result.Verified) RunNetsh("ipsec static delete policy name=GSecurity");
         }
 
         /// <summary>
@@ -696,6 +643,7 @@ namespace Sentinel.Core
         {
             try
             {
+                foreach (var rule in PortBlockSpecifications()) RemoveFirewallRuleByName(rule.Name);
                 RunNetsh("ipsec static delete policy name=GSecurity");
             }
             catch

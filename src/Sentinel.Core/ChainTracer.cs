@@ -298,7 +298,7 @@ namespace Sentinel.Core
 
                     // 4. Quarantine non-system binaries - never browsers, never signed Authenticode hosts.
                     //    Matches AdvancedResponseEngine v1.5.9: signed injectors are killed but preserved on disk.
-                    foreach (var node in chain.Where(n => !string.IsNullOrEmpty(n.ImagePath) && !IsSystemBinary(n.ImagePath, n.ProcessName)))
+                    foreach (var node in chain.Where(n => RequestsFileQuarantine(detection.AuthorizedResponse) && !string.IsNullOrEmpty(n.ImagePath) && !IsSystemBinary(n.ImagePath, n.ProcessName)))
                     {
                         try
                         {
@@ -408,6 +408,9 @@ namespace Sentinel.Core
 
             return chain;
         }
+
+        internal static bool RequestsFileQuarantine(ResponseAction action)
+            => action == ResponseAction.Quarantine || action == ResponseAction.QuarantineAndKill;
 
         private async Task RemovePersistenceAsync(ChainTraceResult result, CancellationToken ct)
         {

@@ -939,3 +939,16 @@ preserved. Registry deletion has a residual cross-process race: Windows exposes 
 compare-and-delete here. Cleanup covers the current HKLM Run/RunOnce view, not every
 persistence mechanism. Injected-victim composites request process containment only, so
 verified exits do not require or imply quarantine of the legitimate host file.
+
+
+### Runtime-log remediation (3.4.1)
+
+Filename/command-based kernel-loader indicators and classic port observations are
+context-only at emission, classification, correlation and dispatch, including legacy
+family/chain fields. TCP snapshots cannot identify initiation direction. Port hardening
+uses owned modern Windows Firewall filters and explicit configuration read-back, replacing
+legacy English IPSec output parsing; domain policy and packet enforcement remain distinct.
+ETW subscriptions filter consumed IDs without dropping credential name/read events;
+protected-provider denial and new event loss are reported independently. Watcher overflow
+recovery requires a fresh content walk, with inaccessible enumeration kept degraded.
+Process-only chain responses do not request quarantine. See [validation details](LOG_REMEDIATION_3.4.1.md).

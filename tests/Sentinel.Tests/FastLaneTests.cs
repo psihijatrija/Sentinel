@@ -131,16 +131,16 @@ namespace Sentinel.Tests
         [Fact]
         public void ShouldFastLane_Tier1TerminalClass_ReturnsTrue()
         {
-            // Test B: a terminal-class rule name (kernel exploit loader), pid > 4.
+            // Test B: a terminal-class rule name (unmapped thread), pid > 4.
             // ResponsePolicy.IsAttackClassTerminal must be true, so the context fast-lanes.
-            var context = ContextForType("CVE Class: Kernel Exploit Loader", pid: 4242, processName: "AfdEoP");
+            var context = ContextForType("Evasion: Unmapped Thread Start Address", pid: 4242, processName: "payload");
 
             // Sanity: the derived candidate is attack-class terminal.
             var candidate = new DetectionEvent
             {
-                RuleName = "CVE Class: Kernel Exploit Loader",
+                RuleName = "Evasion: Unmapped Thread Start Address",
                 ProcessId = 4242,
-                ProcessName = "AfdEoP",
+                ProcessName = "payload",
                 Confidence = 1.0,
             };
             Assert.True(ResponsePolicy.IsAttackClassTerminal(candidate));

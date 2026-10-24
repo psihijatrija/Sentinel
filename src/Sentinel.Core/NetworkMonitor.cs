@@ -40,6 +40,8 @@ namespace Sentinel.Core
 
         private static readonly TimeSpan ScanInterval = TimeSpan.FromMilliseconds(200);
 
+        internal static bool IsRemotePortIndicator(int remotePort) => KnownMaliciousPorts.Contains(remotePort);
+
         private static readonly HashSet<string> ShellProcesses = new(StringComparer.OrdinalIgnoreCase)
         {
             "cmd", "powershell", "pwsh", "mshta", "wscript", "cscript", "rundll32", "regsvr32", "bash", "sh"
@@ -415,37 +417,23 @@ namespace Sentinel.Core
 
                         // Port observations cover every process, including browsers and games.
                         // A port number is weak context and never sufficient response authority.
-                        if (KnownMaliciousPorts.Contains(remotePort) || KnownMaliciousPorts.Contains(localPort))
+                        if (IsRemotePortIndicator(remotePort) &&
+                            ShouldEmitThrottled("RemotePort:" + owningPid + ":" + remoteIp + ":" + remotePort, processName, imagePath))
                         {
-                            int suspiciousPort = KnownMaliciousPorts.Contains(remotePort) ? remotePort : localPort;
-                            bool isOutbound = KnownMaliciousPorts.Contains(remotePort);
-                            string direction = isOutbound ? "outbound to" : "inbound from";
-                            string targetAddr = isOutbound ? remoteIp : localIp;
-
                             _ = _detectionEngine.EmitAsync(new DetectionEvent
                             {
                                 RuleName = "Network Indicator: Classic Malware Port",
-                                Evidence = $"Process '{processName}' (PID {owningPid}) has {direction} {targetAddr}:{suspiciousPort}. " +
-                                           $"Full connection: {localIp}:{localPort} -> {remoteIp}:{remotePort}",
-                                Reasoning = $"Port {suspiciousPort} ({GetPortDescription(suspiciousPort)}) is in the suspicious-port " +
-                                            "indicator set (legacy shells / classic RAT ports). Port choice alone cannot prove an exploit; " +
-                                            "all application identities are monitored without kill authority.",
-                                Confidence = 0.40,
-                                Tier = DetectionTier.Tier2Indicator,
-                                AuthorizedResponse = ResponseAction.LogOnly,
-                                ProcessName = processName,
-                                ProcessId = owningPid,
-                                SignalType = SignalType.NetworkC2,
+                                Evidence = $"Process '{processName}' (PID {owningPid}) has a TCP connection with remote endpoint {remoteIp}:{remotePort}. " +
+                                           $"Local endpoint: {localIp}:{localPort}; initiation direction is unknown from this snapshot.",
+                                Reasoning = "The remote port appears in a legacy indicator set. A port number is context only and does not identify malware or a connection initiator.",
+                                Confidence = 0.40, Tier = DetectionTier.Tier2Indicator,
+                                AuthorizedResponse = ResponseAction.LogOnly, ProcessName = processName,
+                                ProcessId = owningPid, SignalType = SignalType.Generic,
                                 Metadata = new Dictionary<string, string>
                                 {
-                                    { "WeakObserveSeed", "true" },
-                                    { "RemoteAddress", remoteIp },
-                                    { "RemotePort", remotePort.ToString() },
-                                    { "LocalAddress", localIp },
-                                    { "LocalPort", localPort.ToString() },
-                                    { "SuspiciousPort", suspiciousPort.ToString() },
-                                    { "Direction", isOutbound ? "Outbound" : "Inbound" },
-                                    { "TargetIP", isOutbound ? remoteIp : localIp }
+                                    ["WeakObserveSeed"] = "true", ["RemoteAddress"] = remoteIp,
+                                    ["RemotePort"] = remotePort.ToString(), ["LocalAddress"] = localIp,
+                                    ["LocalPort"] = localPort.ToString(), ["Direction"] = "Unknown"
                                 }
                             });
                         }

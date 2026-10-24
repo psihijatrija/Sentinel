@@ -44,6 +44,7 @@ namespace Sentinel.Core
         public long NativeEventsLost { get; set; }
         public long NativeBuffersLost { get; set; }
         public string? Error { get; set; }
+        public System.Collections.Generic.Dictionary<string, uint> ProviderFilterStatus { get; set; } = new();
         public System.Collections.Generic.Dictionary<string, uint> ProviderStatus { get; set; } = new();
     }
 }

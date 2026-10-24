@@ -124,12 +124,10 @@ namespace Sentinel.Core
                                 await EmitAsync(
                                     "CVE Class: Kernel Exploit Loader",
                                     $"Process '{name}' (PID {pid}) matches kernel-EoP loader shape path='{path ?? "?"}' cmd='{Truncate(cmd, 160)}'",
-                                    "Userland loader for kernel elevation-of-privilege (AFD/WinSock, isolation FS, HTTP.sys-class). " +
-                                    "Does not patch the kernel race - stops the exploit host. Kill-grade. " +
-                                    $"Covers {CveCoverageHeuristics.CveAfdAlt1}/{CveCoverageHeuristics.CveAfdAlt2} class, not just named campaigns.",
-                                    staging ? 0.90 : 0.86, name, pid, path, parentName, parentPid,
-                                    SignalType.SecurityEvasion, killGrade: true,
-                                    family: TerminalFamily.TokenTheft).ConfigureAwait(false);
+                                    "Filename, path and command-text indicators are attacker-controlled context, not proof of kernel exploitation. " +
+                                    "This observation never authorizes containment; independent behavioral evidence is required.",
+                                    0.50, name, pid, path, parentName, parentPid,
+                                    SignalType.Generic, killGrade: false).ConfigureAwait(false);
                             }
                         }
 

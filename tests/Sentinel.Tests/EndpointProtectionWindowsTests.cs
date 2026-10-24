@@ -12,6 +12,18 @@ using Xunit;
 
 namespace Sentinel.Tests
 {
+    public sealed class EndpointWindowsAdminFactAttribute : FactAttribute
+    {
+        public EndpointWindowsAdminFactAttribute()
+        {
+            if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+            { Skip = "Requires a disposable elevated Windows integration runner."; return; }
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            if (!new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+                Skip = "Requires an elevated disposable Windows runner; never elevates the test host.";
+        }
+    }
+
     [Collection("ResponsePolicy")]
     public class EndpointProtectionWindowsTests
     {
@@ -19,7 +31,7 @@ namespace Sentinel.Tests
         {
             FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
                 @"WindowsPowerShell\v1.0\powershell.exe"),
-            Arguments = "-NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 120\"",
+            Arguments = "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("Start-Sleep -Seconds 120")),
             UseShellExecute = false, CreateNoWindow = true
         })!;
 
@@ -101,6 +113,52 @@ namespace Sentinel.Tests
                 Assert.NotNull(store.Read("unrelated"));
             }
             finally { Registry.CurrentUser.DeleteSubKeyTree(path, false); }
+        }
+
+        [EndpointWindowsAdminFact]
+        public void NativePortBlockPolicyCreatesReadsAndPreservesOwnedRule()
+        {
+            var spec = new PortBlockSpec(65001, 6, 1);
+            try
+            {
+                var applied = WindowsPortBlockPolicy.Inspect(new[] { spec }, apply: true);
+                Assert.Contains("Owned port-rule mismatches=0", applied.Detail);
+                var read = WindowsPortBlockPolicy.Inspect(new[] { spec }, apply: false);
+                Assert.Contains("Owned port-rule mismatches=0", read.Detail);
+                // Firewall profile/GPO state is disclosed; this is not a packet-drop test.
+            }
+            finally { HardeningModule.RemoveFirewallRuleByName(spec.Name); }
+        }
+
+        [EndpointWindowsAdminFact]
+        public async Task NativeEtwFiltersRetainProcessStartsAndDiscloseProviderAccess()
+        {
+            using var session = new UnifiedEtwSession(NullLogger<UnifiedEtwSession>.Instance);
+            int starts = 0;
+            session.RegisterHandler(UnifiedEtwSession.Providers.KernelProcess, evt =>
+            { if (evt.EventId == 1) Interlocked.Increment(ref starts); });
+            try
+            {
+                await session.StartAsync(CancellationToken.None);
+                Assert.True(session.IsActive);
+                using var child = Process.Start(new ProcessStartInfo
+                {
+                    FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "whoami.exe"),
+                    UseShellExecute = false, CreateNoWindow = true
+                })!;
+                Assert.True(child.WaitForExit(5000));
+                for (int i = 0; i < 20 && Volatile.Read(ref starts) == 0; i++) await Task.Delay(250);
+                Assert.True(Volatile.Read(ref starts) > 0, "Filtered process-start delivery was not observed.");
+                var health = session.QueryHealth();
+                Assert.True(health.QuerySucceeded);
+                foreach (var provider in new[] { UnifiedEtwSession.Providers.KernelProcess, UnifiedEtwSession.Providers.KernelFile })
+                {
+                    Assert.Equal(0U, health.ProviderStatus[provider.ToString()]);
+                    Assert.Equal(0U, health.ProviderFilterStatus[provider.ToString()]);
+                }
+                Assert.True(health.ProviderStatus.ContainsKey(UnifiedEtwSession.Providers.ThreatIntelligence.ToString()));
+            }
+            finally { await session.StopAsync(); }
         }
 
         [LoaderWindowsFact]

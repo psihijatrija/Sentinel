@@ -164,16 +164,6 @@ namespace Sentinel.Tests
                 },
                 TerminalFamily.TokenTheft);
 
-            yield return Row("CveCoverage.KernelExploitLoader",
-                () => new DetectionEvent
-                {
-                    RuleName = "CVE Class: Kernel Exploit Loader",
-                    SignalType = SignalType.SecurityEvasion,
-                    Family = TerminalFamily.TokenTheft,
-                    ProcessId = 1602, ProcessName = "AfdEoP", Confidence = 0.90,
-                    Metadata = new Dictionary<string, string> { ["CveClass"] = "true" },
-                },
-                TerminalFamily.TokenTheft);
 
             yield return Row("FileActivityMonitor.LegacyHiveReparse",
                 () => new DetectionEvent

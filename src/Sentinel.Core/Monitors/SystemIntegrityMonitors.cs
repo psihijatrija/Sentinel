@@ -967,8 +967,8 @@ namespace Sentinel.Core
                 evidence += $", Adder='{adderInfo.ProcessName}' PID={adderInfo.ProcessId} at {adderInfo.EventTimestamp:u}";
             }
 
-            var reasoning = $"A new root certificate '{cn}' was added to the machine trust store. ";
-            reasoning += "If unauthorized, this could enable TLS interception of HTTPS traffic. ";
+            var reasoning = $"Root certificate '{cn}' was observed in the machine trust store. First observation is not an installation timestamp. ";
+            reasoning += "Expiration and unrestricted root usage alone do not prove a malicious certificate or TLS interception. ";
             reasoning += $"Assessment signals: {reasonsList}.";
 
             var metadata = new Dictionary<string, string>
@@ -1006,8 +1006,7 @@ namespace Sentinel.Core
             if (removing || ProductPosture.AllowsMitmDefenseMutations(_config))
             {
                 metadata["MitmDefense"] = "true";
-                reasoning += " Part of MitM defense chain: planted root enables TLS intercept and/or " +
-                             "trust for a hollowed process that talks to a rogue Cast/fake Chromecast.";
+                reasoning += " Explicit distrust policy, rather than these certificate heuristics, is required for mutation. Actor and installation cause remain unknown.";
             }
 
             var tier = analysis.Tier;

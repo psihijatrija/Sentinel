@@ -189,7 +189,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task Composite_KernelExploitLoaderChain_Fires()
+        public async Task Composite_KernelExploitNameDoesNotSupplyBehavioralProof()
         {
             var engine = new BehavioralCorrelationEngine();
             DetectionEvent? composite = null;
@@ -217,10 +217,7 @@ namespace Sentinel.Tests
                 Timestamp = DateTime.UtcNow
             });
 
-            Assert.NotNull(composite);
-            Assert.Equal("Kernel Exploit Loader Chain", composite!.RuleName);
-            Assert.True(composite.Confidence >= 0.90);
-            Assert.Equal(DetectionTier.Tier1Behavioral, composite.Tier);
+            Assert.Null(composite);
         }
 
         [Fact]
@@ -316,7 +313,7 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void ResponsePolicy_KernelExploitLoader_IsKillGrade_CompositeIsNuke()
+        public void ResponsePolicy_KernelExploitLoader_IsContext_IndependentCompositeIsNuke()
         {
             var seed = new DetectionEvent
             {
@@ -327,9 +324,9 @@ namespace Sentinel.Tests
                 ProcessName = "eop",
                 AuthorizedResponse = ResponseAction.KillProcessTree,
             };
-            Assert.False(ResponsePolicy.IsWeakObserveSeed(seed));
-            Assert.True(ResponsePolicy.IsAttackClassTerminal(seed));
-            Assert.Equal("TokenTheft", ResponsePolicy.ClassifyTerminalOutcome(seed));
+            Assert.True(ResponsePolicy.IsWeakObserveSeed(seed));
+            Assert.False(ResponsePolicy.IsAttackClassTerminal(seed));
+            Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(seed));
             Assert.False(ResponsePolicy.IsNukeComposite(seed));
 
             var composite = new DetectionEvent

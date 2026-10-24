@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 3.4.0**
+**Version: 3.4.1**
 
 ### Independent NanoAV (3.3.8)
 
@@ -491,3 +491,16 @@ Private-PE inspection shall cover eligible remote-API targets without host-name 
   report verified exits without claiming backing-file quarantine.
 - Native CI shall exercise owned-process response and unrelated-process survival, temporary
   registry attribution and explicit runtime-provider degradation, in addition to pure tests.
+
+
+### Runtime-log remediation (3.4.1)
+
+Filename/command-based kernel-loader indicators and classic port observations are
+context-only at emission, classification, correlation and dispatch, including legacy
+family/chain fields. TCP snapshots cannot identify initiation direction. Port hardening
+uses owned modern Windows Firewall filters and explicit configuration read-back, replacing
+legacy English IPSec output parsing; domain policy and packet enforcement remain distinct.
+ETW subscriptions filter consumed IDs without dropping credential name/read events;
+protected-provider denial and new event loss are reported independently. Watcher overflow
+recovery requires a fresh content walk, with inaccessible enumeration kept degraded.
+Process-only chain responses do not request quarantine. See [validation details](LOG_REMEDIATION_3.4.1.md).

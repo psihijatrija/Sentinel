@@ -20,9 +20,11 @@ Sentinel Core/Service/Agent operate offline: their online reputation, live intel
 **3.3.8 online exception:** the separately packaged [NanoAV module](docs/NANOAV.md) retains the supplied program's own online feeds, persistence and response engine. Its only source changes protect Sentinel; it does not follow Sentinel's response rules. Read its retained runtime limitations before relying on it.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.4.0 (single source of truth: `version.txt`)
+**Version:** 3.4.1 (single source of truth: `version.txt`)
 
-3.4.0 strengthens socket-shell and credential-theft correlation, extends local file scanning to removable drives, and adds bounded RX/private-PE inspection with lifetime-pinned victim containment. See [installer and relay coverage, limits and Windows checks](docs/INSTALLER_RELAY_COVERAGE.md). See also [DLL-loader and injected-payload coverage](docs/LOADER_PAYLOAD_COVERAGE.md).
+3.4.1 fixes the ExploitShield self-kill regression, port-only warning/response authority,
+legacy port-block hardening, ETW overcollection and watcher-recovery reporting. See
+[runtime-log fixes and Windows validation limits](docs/LOG_REMEDIATION_3.4.1.md).
 
 Sentinel targets standalone userland endpoint protection; another antivirus is optional.
 Current standalone antivirus gaps, implemented mechanisms and validation limits are listed

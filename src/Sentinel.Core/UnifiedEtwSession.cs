@@ -269,8 +269,8 @@ namespace Sentinel.Core
 
                 // Write EVENT_TRACE_PROPERTIES fields
                 Marshal.WriteInt32(_propertiesBuffer, ETP_BufferSize_Offset, 256);  // 256 KB per buffer
-                Marshal.WriteInt32(_propertiesBuffer, ETP_MinimumBuffers_Offset, 64);
-                Marshal.WriteInt32(_propertiesBuffer, ETP_MaximumBuffers_Offset, 128);
+                Marshal.WriteInt32(_propertiesBuffer, ETP_MinimumBuffers_Offset, 128);
+                Marshal.WriteInt32(_propertiesBuffer, ETP_MaximumBuffers_Offset, 256);
                 Marshal.WriteInt32(_propertiesBuffer, ETP_LogFileMode_Offset, (int)EVENT_TRACE_REAL_TIME_MODE);
                 Marshal.WriteInt32(_propertiesBuffer, ETP_FlushTimer_Offset, 1); // 1 second flush
                 Marshal.WriteInt32(_propertiesBuffer, ETP_LoggerNameOffset_Offset, ETP_STRUCT_SIZE);
@@ -292,6 +292,7 @@ namespace Sentinel.Core
                 _logger.LogInformation("[UnifiedEtwSession] Session '{Name}' started (handle={Handle})", SessionName, _sessionHandle);
 
                 _providerStatus.Clear();
+                _providerFilterStatus.Clear();
                 // Enable all providers
                 EnableProvider(Providers.KernelProcess);
                 EnableProvider(Providers.KernelFile);
@@ -330,43 +331,66 @@ namespace Sentinel.Core
             return Task.CompletedTask;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct EVENT_FILTER_DESCRIPTOR
+        {
+            public ulong Ptr;
+            public uint Size;
+            public uint Type;
+        }
+
+        private readonly ConcurrentDictionary<Guid, uint> _providerFilterStatus = new();
+
         private void EnableProvider(Guid providerId, bool captureStack = false)
         {
-            IntPtr enableParams = IntPtr.Zero;
-            if (captureStack)
-            {
-                var p = new ENABLE_TRACE_PARAMETERS
-                {
-                    Version = ENABLE_TRACE_PARAMETERS_VERSION_2,
-                    EnableProperty = EVENT_ENABLE_PROPERTY_STACK_TRACE
-                };
-                enableParams = Marshal.AllocHGlobal(Marshal.SizeOf<ENABLE_TRACE_PARAMETERS>());
-                Marshal.StructureToPtr(p, enableParams, false);
-            }
-
+            IntPtr parameters = IntPtr.Zero, descriptor = IntPtr.Zero, filter = IntPtr.Zero;
+            var ids = EtwCollectionPolicy.EventIds(providerId);
             try
             {
-                uint result = EnableTraceEx2(
-                    _sessionHandle,
-                    ref providerId,
-                    EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-                    TRACE_LEVEL_VERBOSE,
-                    MATCH_ANY_KEYWORD,
-                    0, // matchAllKeyword
-                    0, // timeout
-                    enableParams);
-
-                _providerStatus[providerId] = result;
-                if (result != 0)
+                var options = new ENABLE_TRACE_PARAMETERS
                 {
-                    _logger.LogDebug("[UnifiedEtwSession] EnableTraceEx2 for {Provider} returned {Error}",
-                        providerId, result);
+                    Version = ENABLE_TRACE_PARAMETERS_VERSION_2,
+                    EnableProperty = captureStack ? EVENT_ENABLE_PROPERTY_STACK_TRACE : 0
+                };
+                if (ids.Length > 0)
+                {
+                    // EVENT_FILTER_EVENT_ID: BOOLEAN FilterIn, BYTE Reserved, USHORT Count, USHORT Events[].
+                    int bytes = 4 + ids.Length * 2;
+                    filter = Marshal.AllocHGlobal(bytes);
+                    Marshal.WriteByte(filter, 0, 1); Marshal.WriteByte(filter, 1, 0);
+                    Marshal.WriteInt16(filter, 2, (short)ids.Length);
+                    for (int i = 0; i < ids.Length; i++) Marshal.WriteInt16(filter, 4 + 2 * i, (short)ids[i]);
+                    descriptor = Marshal.AllocHGlobal(Marshal.SizeOf<EVENT_FILTER_DESCRIPTOR>());
+                    Marshal.StructureToPtr(new EVENT_FILTER_DESCRIPTOR
+                    {
+                        Ptr = IntPtr.Size == 4 ? unchecked((uint)filter.ToInt32()) : unchecked((ulong)filter.ToInt64()),
+                        Size = (uint)bytes, Type = 0x80000200
+                    }, descriptor, false);
+                    options.EnableFilterDesc = descriptor; options.FilterDescCount = 1;
                 }
+                parameters = Marshal.AllocHGlobal(Marshal.SizeOf<ENABLE_TRACE_PARAMETERS>());
+                Marshal.StructureToPtr(options, parameters, false);
+                uint result = EnableTraceEx2(_sessionHandle, ref providerId, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                    TRACE_LEVEL_VERBOSE, MATCH_ANY_KEYWORD, 0, 0, parameters);
+                if (ids.Length > 0)
+                {
+                    _providerFilterStatus[providerId] = result;
+                    if (result == 87 || result == 50) // Filter unsupported; preserve visibility but disclose fallback.
+                    {
+                        options.EnableFilterDesc = IntPtr.Zero; options.FilterDescCount = 0;
+                        Marshal.StructureToPtr(options, parameters, false);
+                        result = EnableTraceEx2(_sessionHandle, ref providerId, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                            TRACE_LEVEL_VERBOSE, MATCH_ANY_KEYWORD, 0, 0, parameters);
+                    }
+                }
+                _providerStatus[providerId] = result;
+                if (result != 0) _logger.LogWarning("[UnifiedEtwSession] Provider {Provider} unavailable: Win32 {Error}", providerId, result);
             }
             finally
             {
-                if (enableParams != IntPtr.Zero)
-                    Marshal.FreeHGlobal(enableParams);
+                if (parameters != IntPtr.Zero) Marshal.FreeHGlobal(parameters);
+                if (descriptor != IntPtr.Zero) Marshal.FreeHGlobal(descriptor);
+                if (filter != IntPtr.Zero) Marshal.FreeHGlobal(filter);
             }
         }
 
@@ -590,6 +614,7 @@ namespace Sentinel.Core
                 EventsProcessed = EventsProcessed, DispatchDrops = EventsDropped
             };
             foreach (var provider in _providerStatus) health.ProviderStatus[provider.Key.ToString()] = provider.Value;
+            foreach (var provider in _providerFilterStatus) health.ProviderFilterStatus[provider.Key.ToString()] = provider.Value;
             IntPtr buffer = IntPtr.Zero;
             try
             {

@@ -219,15 +219,15 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void Malicious_AttackClass_KernelExploitLoader_Solo_Confirms()
+        public void KernelExploitLoader_NameOnly_DoesNotConfirm()
         {
-            // The "10 murderers": attack-class terminals solo-confirm at high confidence.
+            // A tool name is not evidence of exploitation, even at high confidence.
             var scenario = new[]
             {
                 Sig("CVE Class: Kernel Exploit Loader", 30004, "AfdEoP",
                     conf: 0.92, signal: SignalType.SecurityEvasion),
             };
-            Assert.True(ScenarioAuthorizesKill(scenario));
+            Assert.False(ScenarioAuthorizesKill(scenario));
         }
 
         [Fact]
@@ -284,7 +284,7 @@ namespace Sentinel.Tests
                 }),
                 ("attack-class-solo", new[]
                 {
-                    Sig("CVE Class: Kernel Exploit Loader", 50003, "AfdEoP", 0.92, SignalType.SecurityEvasion),
+                    Sig("Reverse Shell: Raw Socket I/O Redirect", 50003, "payload", 0.92, SignalType.ReverseShell),
                 }),
             };
 

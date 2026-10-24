@@ -392,11 +392,16 @@ namespace Sentinel.Core
         /// do not promote to kill). Other DLL-unload-exempt observe plants stay observe-only.
         /// </summary>
         /// <summary>Every dispatch path, including direct monitor emission, shares this boundary.</summary>
+        internal static bool IsContextOnlyRule(DetectionEvent detection) =>
+            string.Equals(detection.RuleName, "CVE Class: Kernel Exploit Loader", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(detection.RuleName, "Network Indicator: Classic Malware Port", StringComparison.OrdinalIgnoreCase);
+
         internal static void EnforceDispatchPolicy(DetectionEvent detection)
         {
             bool consultant = detection.Metadata != null &&
                 detection.Metadata.TryGetValue("ConsultantSignal", out var marker) &&
                 string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase);
+            if (IsContextOnlyRule(detection)) { ApplyTierLaw(detection); return; }
             if (consultant || detection.Tier == DetectionTier.Tier2Indicator)
             {
                 detection.Tier = DetectionTier.Tier2Indicator;
@@ -421,6 +426,16 @@ namespace Sentinel.Core
         public static void ApplyTierLaw(DetectionEvent detection, double minConfidence = DefaultMinTier1Confidence)
         {
             if (detection == null) return;
+            if (IsContextOnlyRule(detection))
+            {
+                DemoteToObserve(detection, "ContextOnlyRule");
+                detection.AuthorizedResponse = ResponseAction.LogOnly;
+                detection.Family = null;
+                detection.Metadata!.Remove(ChainConfirmedKey);
+                detection.Metadata.Remove(TerminalOutcomeKey);
+                detection.Metadata["WeakObserveSeed"] = "true";
+                return;
+            }
 
             detection.Metadata ??= new Dictionary<string, string>();
 
@@ -511,6 +526,7 @@ namespace Sentinel.Core
         /// </summary>
         public static bool IsWeakObserveSeed(DetectionEvent? detection)
         {
+            if (detection != null && IsContextOnlyRule(detection)) return true;
             if (detection == null) return false;
 
             if (detection.Metadata != null &&
@@ -569,7 +585,7 @@ namespace Sentinel.Core
         /// </summary>
         public static string? ClassifyTerminalOutcome(DetectionEvent detection)
         {
-            if (detection == null) return null;
+            if (detection == null || IsContextOnlyRule(detection)) return null;
 
             // Installer / DirectX / GPU redistributable noise is never terminal.
             if (IsBenignInstallerNoise(detection))
@@ -750,7 +766,7 @@ namespace Sentinel.Core
         /// seeds (SeImpersonate, PPID, ...) still feed composites but not ResponsePolicy chain nukes.
         /// </summary>
         public static bool IsNonCorrelatingObserveNoise(DetectionEvent detection)
-            => detection == null || IsBenignInstallerNoise(detection) || IsPureUxObserveNoise(detection) ||
+            => detection == null || IsContextOnlyRule(detection) || IsBenignInstallerNoise(detection) || IsPureUxObserveNoise(detection) ||
                 (detection.Metadata != null && detection.Metadata.TryGetValue("EncodedPowerShellObservation", out var automation) &&
                  string.Equals(automation, "true", StringComparison.OrdinalIgnoreCase));
 
@@ -761,6 +777,7 @@ namespace Sentinel.Core
         /// </summary>
         public static bool IsCovertChannelTerminal(DetectionEvent? detection)
         {
+            if (detection != null && IsContextOnlyRule(detection)) return false;
             if (detection == null || detection.ProcessId <= 4)
                 return false;
             if (detection.Metadata != null &&
@@ -783,7 +800,7 @@ namespace Sentinel.Core
         /// </summary>
         public static bool IsAttackClassTerminal(DetectionEvent? detection)
         {
-            if (detection == null || detection.ProcessId <= 4)
+            if (detection == null || IsContextOnlyRule(detection) || detection.ProcessId <= 4)
                 return false;
             if (detection.Metadata != null &&
                 detection.Metadata.TryGetValue("WeakObserveSeed", out var flag) &&
@@ -799,10 +816,8 @@ namespace Sentinel.Core
             // solo-kill IndexOf match. StartsWith checks below are unaffected.
             var r = StripInterpolatedSegments(detection.RuleName ?? "");
             return r.StartsWith("LPE Scaffold: Privilege Escalation Tool", StringComparison.OrdinalIgnoreCase)
-                || r.StartsWith("CVE Class: Kernel Exploit Loader", StringComparison.OrdinalIgnoreCase)
                 || r.StartsWith("CVE Class: ClickFix Encoded", StringComparison.OrdinalIgnoreCase)
                 || r.IndexOf("Unmapped Thread Start Address", StringComparison.OrdinalIgnoreCase) >= 0
-                || r.IndexOf("Network Indicator: Classic Malware Port", StringComparison.OrdinalIgnoreCase) >= 0
                 || r.StartsWith("Named Pipe: Known C2", StringComparison.OrdinalIgnoreCase)
                 || r.StartsWith("Remote Access: Tunneling Tool", StringComparison.OrdinalIgnoreCase)
                 || r.IndexOf("Indirect Syscall", StringComparison.OrdinalIgnoreCase) >= 0
@@ -899,7 +914,7 @@ namespace Sentinel.Core
 
             var signalEntry = BuildSignalEntry(detection, minTerminalConf);
 
-            //  Per-PID buffer (original path) 
+            //  Per-PID buffer (original path)
             if (EvaluateBuffer(PidBuffers, pid, signalEntry, window, minSignals, minTerminalConf,
                     detection, out var pidOutcome))
             {
@@ -907,7 +922,7 @@ namespace Sentinel.Core
                 return true;
             }
 
-            //  v2.6.0: Cross-PID ancestry buffer 
+            //  v2.6.0: Cross-PID ancestry buffer
             // Catches staged attacks that spawn a fresh process per malicious action.
             // Each fresh child PID starts at zero in the per-PID buffer, but all children
             // that share a non-system root ancestor accumulate in the root buffer.
@@ -944,7 +959,7 @@ namespace Sentinel.Core
         /// </summary>
         public static bool MayPerformDestructiveResponse(DetectionEvent detection, SentinelConfig config)
         {
-            if (config == null || !config.ActiveResponse || detection == null)
+            if (config == null || !config.ActiveResponse || detection == null || IsContextOnlyRule(detection))
                 return false;
 
             // A valid destructive authorization is Tier1 and backed by one of the three

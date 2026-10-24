@@ -63,11 +63,14 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void KernelExploitLoader_Kills()
+        public void KernelExploitLoader_NameOnlyCannotKill()
         {
             ResponsePolicy.ResetForTests();
-            AssertKills(Attack("CVE Class: Kernel Exploit Loader", process: "AfdEoP"),
-                "TokenTheft");
+            var observation = Attack("CVE Class: Kernel Exploit Loader", process: "AfdEoP");
+            ResponsePolicy.ApplyTierLaw(observation);
+            Assert.Equal(DetectionTier.Tier2Indicator, observation.Tier);
+            Assert.Equal(ResponseAction.LogOnly, observation.AuthorizedResponse);
+            Assert.Null(ResponsePolicy.ClassifyTerminalOutcome(observation));
         }
 
         [Fact]
@@ -87,11 +90,13 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void ClassicMalwarePort_Kills()
+        public void ClassicMalwarePort_AloneCannotKill()
         {
             ResponsePolicy.ResetForTests();
-            AssertKills(Attack("Network Indicator: Classic Malware Port",
-                signal: SignalType.NetworkC2, process: "payload"), "C2Beacon");
+            var observation = Attack("Network Indicator: Classic Malware Port", signal: SignalType.NetworkC2, process: "payload");
+            ResponsePolicy.ApplyTierLaw(observation);
+            Assert.Equal(DetectionTier.Tier2Indicator, observation.Tier);
+            Assert.Equal(ResponseAction.LogOnly, observation.AuthorizedResponse);
         }
 
         [Fact]

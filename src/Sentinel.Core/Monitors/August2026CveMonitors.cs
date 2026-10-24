@@ -203,10 +203,9 @@ namespace Sentinel.Core
                 if (val is int i && i == 0)
                 {
                     await EmitAsync(
-                        "Dream Job: Smart App Control tamper",
-                        "VerifiedAndReputablePolicyState is 0 (Smart App Control / code integrity policy unloaded).",
-                        "FudModule 3.1 zeroes this value from a SYSTEM msiexec stub after CVE-2026-68820. " +
-                        "Users can also disable SAC - WeakObserveSeed, never a solo nuke.",
+                        "Posture: Smart App Control Not Enforcing",
+                        "VerifiedAndReputablePolicyState is 0; Smart App Control is not configured to enforce.",
+                        "Windows configuration or an administrator can produce this state. A snapshot does not establish a change, tampering or a campaign. Observe only.",
                         0.62, DetectionTier.Tier2Indicator, ResponseAction.LogOnly,
                         "SYSTEM", 0, null, SignalType.AntiTamper, weak: true).ConfigureAwait(false);
                 }
@@ -233,6 +232,11 @@ namespace Sentinel.Core
                 ["Campaign"] = "Lazarus-DreamJob",
                 ["CVE"] = August2026CveHeuristics.CveAfdSys,
             };
+            if (rule.StartsWith("Posture:", StringComparison.Ordinal))
+            {
+                meta.Remove("Campaign"); meta.Remove("CVE");
+                meta["Attribution"] = "Unknown; configuration snapshot only";
+            }
             if (!string.IsNullOrEmpty(path)) meta["ImagePath"] = path!;
             if (weak) meta["WeakObserveSeed"] = "true";
 
